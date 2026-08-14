@@ -264,25 +264,28 @@ impl ImageStore {
     }
 }
 
-/// Cheap blob identity for a `.gguf` file: `sha256(first 1 MiB || file_len)`.
+/// Full-file blob identity for a `.gguf` file: `sha256(whole file)`.
 ///
-/// Reading only the first 1 MiB (rather than the whole, potentially
-/// multi-gigabyte, weights file) keeps this fast enough to call on every
-/// boot and every profile check; mixing in the total file length catches
-/// the case where two files happen to share an identical first 1 MiB but
-/// differ afterward.
+/// Streams the entire file through sha256 in 1 MiB chunks (fixed reusable buffer,
+/// no whole-file allocation — models can be 8+ GB). This is a pinned precondition
+/// for restart-survivable images (spec 2a item 2): the digest must cover the
+/// entire model, not just a prefix. Boot-time cost is seconds per model.
 pub fn model_digest(gguf: &Path) -> std::io::Result<String> {
     use sha2::{Digest, Sha256};
     use std::io::Read;
 
-    let file_len = std::fs::metadata(gguf)?.len();
-    let file = std::fs::File::open(gguf)?;
-    let mut prefix = Vec::new();
-    file.take(1024 * 1024).read_to_end(&mut prefix)?;
-
+    let mut file = std::fs::File::open(gguf)?;
     let mut hasher = Sha256::new();
-    hasher.update(&prefix);
-    hasher.update(file_len.to_le_bytes());
+    let mut buffer = vec![0u8; 1024 * 1024]; // 1 MiB fixed buffer
+
+    loop {
+        let n = file.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+
     let digest = hasher.finalize();
     Ok(digest.iter().map(|b| format!("{b:02x}")).collect())
 }

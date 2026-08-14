@@ -38,6 +38,21 @@ fn digest_changes_with_content() {
     assert_ne!(model_digest(&p1).unwrap(), model_digest(&p2).unwrap());
 }
 
+#[test]
+fn digest_covers_the_whole_file_not_just_the_prefix() {
+    let dir = std::env::temp_dir().join("bloomery-digest-2a");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (p1, p2) = (dir.join("m1"), dir.join("m2"));
+    // Identical 2 MiB prefix, identical length, differing only in the last byte —
+    // the Phase 1 digest (first 1 MiB + length) collides on these by construction.
+    let a = vec![0xAAu8; 2 * 1024 * 1024 + 1];
+    let mut b = a.clone();
+    *b.last_mut().unwrap() = 0xBB;
+    std::fs::write(&p1, &a).unwrap();
+    std::fs::write(&p2, &b).unwrap();
+    assert_ne!(model_digest(&p1).unwrap(), model_digest(&p2).unwrap());
+}
+
 /// Binding obligation from Task 11's review: an over-long or truncated KV
 /// image must never restore as a bogus success. `spill` records the byte
 /// length alongside the digest at save time; `take` must verify the bytes it
