@@ -14,20 +14,6 @@ use bloomery_substrate::Substrate;
 
 use crate::pager::{Pager, PagerError};
 
-/// Defaults for a `POST /agents` body that omits `priority` / `budget_tokens`.
-///
-/// These mirror `config.rs`'s `default_priority` / `default_budget_tokens`
-/// (100, 200 000) but are not imported from there: `serve()` takes a bare
-/// `Pager<S>`, not a `Config`, so the HTTP layer has no config to read a
-/// caller's default from — only the request body's optional fields.
-///
-/// `pub(crate)` because Task 15's `/v1` shim (`api_v1.rs`) creates the same
-/// kind of ephemeral, default-priority/budget agent for a header-less
-/// `/v1/chat/completions` call and reuses these constants rather than
-/// retyping the numbers.
-pub(crate) const DEFAULT_PRIORITY: u8 = 100;
-pub(crate) const DEFAULT_BUDGET_TOKENS: u64 = 200_000;
-
 /// `dispatch`'s result: `None` for a body-less response (the `204`s),
 /// `Some(value)` for a JSON one.
 pub(crate) type ApiResult = (u16, Option<Value>);
@@ -118,12 +104,16 @@ fn create_agent<S: Substrate>(pager: &Mutex<Pager<S>>, body: &str) -> ApiResult 
         Ok(p) => p,
         Err(poisoned) => return poisoned,
     };
-    match p.create_agent(
-        &req.model,
-        req.priority.unwrap_or(DEFAULT_PRIORITY),
-        req.window_cap,
-        req.budget_tokens.unwrap_or(DEFAULT_BUDGET_TOKENS),
-    ) {
+    // A body that omits `priority` / `budget_tokens` lands on the *pager's*
+    // defaults, which `main.rs` wires from `config.default_priority` /
+    // `config.default_budget_tokens`. This layer deliberately owns no
+    // constants of its own: it did in Task 14, and that is exactly what made
+    // those config keys dead.
+    let priority = req.priority.unwrap_or_else(|| p.default_priority());
+    let budget_tokens = req
+        .budget_tokens
+        .unwrap_or_else(|| p.default_budget_tokens());
+    match p.create_agent(&req.model, priority, req.window_cap, budget_tokens) {
         Ok(info) => (
             201,
             Some(serde_json::to_value(info).expect("AgentInfo serializes")),

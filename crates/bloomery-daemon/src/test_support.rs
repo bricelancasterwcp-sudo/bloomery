@@ -107,8 +107,30 @@ fn build_fake_pager() -> (std::path::PathBuf, Pager<FakeSubstrate>) {
 /// ephemeral port (`serve(pager, 0)`).
 pub fn serve_fake() -> (u16, ServerHandle) {
     let (dir, pager) = build_fake_pager();
+    serve_with_cleanup(dir, pager)
+}
+
+/// [`serve_fake`] with the pager's request defaults set, standing in for a
+/// daemon booted from a config carrying `default_priority` /
+/// `default_budget_tokens` — the only way to tell a carried config value
+/// from a constant retyped in the HTTP layer.
+pub fn serve_fake_with_defaults(priority: u8, budget_tokens: u64) -> (u16, ServerHandle) {
+    let (dir, mut pager) = build_fake_pager();
+    pager.set_defaults(priority, budget_tokens);
+    serve_with_cleanup(dir, pager)
+}
+
+/// [`serve_fake`] with an operator-declared tier, standing in for
+/// `main.rs`'s `config.tier` wiring.
+pub fn serve_fake_with_tier(name: &str, emulated: bool) -> (u16, ServerHandle) {
+    let (dir, mut pager) = build_fake_pager();
+    pager.set_tier(name, emulated);
+    serve_with_cleanup(dir, pager)
+}
+
+fn serve_with_cleanup(dir: std::path::PathBuf, pager: Pager<FakeSubstrate>) -> (u16, ServerHandle) {
     let (port, mut handle) = serve(pager, 0);
-    // Without this, every `serve_fake()` call litters the OS tempdir with a
+    // Without this, every `serve_fake*()` call litters the OS tempdir with a
     // journal/image/fixture directory that nothing else ever removes — a
     // stale `bloomery-http-test-*` per test run, forever.
     handle.set_scratch_dir(dir);

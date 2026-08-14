@@ -72,17 +72,34 @@ fn main() {
     run(config, journal);
 }
 
-/// Builds a real `Pager<SendLlama>` (no models registered — see the module
-/// doc) and serves it forever.
+/// Builds a real `Pager<SendLlama>` from the operator's config, serves it,
+/// and runs POST against it.
+///
+/// **Boot order matters and is not arbitrary** (the chicken-and-egg the
+/// spec's §4.7 resolves — see `bloomery_daemon::post` for the argument):
+///
+/// 1. Wire policy the pager has no opinion about — overhead, request
+///    defaults, `allow_unprofiled`, the declared tier.
+/// 2. Register every configured model **unprofiled**. A profile can only be
+///    produced by probing a *serving* daemon, so at this point none exists.
+/// 3. Open the provisional-admission window (`posting`) *before* the socket
+///    binds, so nothing can arrive between bind and flag.
+/// 4. Serve.
+/// 5. Run POST on its own thread — assay talks to this daemon's own `/v1`
+///    surface, so the accept loop must be answering while it works — which
+///    attaches what it measures and closes the window when it finishes.
 #[cfg(feature = "llama")]
 fn run(config: Config, journal: Journal) -> ! {
     use std::process::Command;
+    use std::sync::{Arc, Mutex};
 
+    use bloomery_core::gguf::parse_gguf_meta;
     use bloomery_core::vram::free_vram_bytes;
     use bloomery_daemon::agents::ImageStore;
-    use bloomery_daemon::http::serve;
+    use bloomery_daemon::http::serve_shared;
     use bloomery_daemon::llama_send::SendLlama;
     use bloomery_daemon::pager::Pager;
+    use bloomery_daemon::post::{run_post, PostRunner};
 
     let substrate = SendLlama::new()
         .unwrap_or_else(|e| fail(format!("failed to initialize the llama backend: {e:?}")));
@@ -109,15 +126,89 @@ fn run(config: Config, journal: Journal) -> ! {
     let mut pager = Pager::new(substrate, journal, images, Box::new(move || probe));
     // Binding obligation carried from Task 13: `Pager`'s own default
     // overhead is zero, and this is the daemon's real construction path, so
-    // it must wire the operator's configured overhead itself.
+    // it must wire the operator's configured overhead itself. The same
+    // applies to every other policy default below — the pager ships
+    // permissive/zero values precisely so this one site is the only place
+    // an operator's config takes effect.
     pager.set_overhead_bytes(config.overhead_mib.saturating_mul(1024 * 1024));
+    pager.set_defaults(config.default_priority, config.default_budget_tokens);
+    pager.set_allow_unprofiled(config.allow_unprofiled);
+    pager.set_tier(&config.tier.name, config.tier.emulated);
 
-    let (bound_port, _handle) = serve(pager, config.port);
+    // Unprofiled on purpose: POST is the only source of a profile, and it
+    // cannot run until this daemon is serving.
+    for (name, path) in &config.models {
+        let meta = parse_gguf_meta(path).unwrap_or_else(|e| {
+            fail(format!(
+                "model {name}: could not read {}: {e}",
+                path.display()
+            ))
+        });
+        pager
+            .register_model(name, path, meta, None)
+            .unwrap_or_else(|e| fail(format!("model {name}: {e}")));
+    }
+
+    // Opened before the socket binds, so no request can arrive in the gap
+    // between "serving" and "provisionally admitting". `run_post` closes it.
+    if config.assay.enabled {
+        pager.set_posting(true);
+    }
+
+    let pager = Arc::new(Mutex::new(pager));
+    let (bound_port, _handle) = serve_shared(Arc::clone(&pager), config.port);
     println!(
-        "bloomery-daemon serving on 127.0.0.1:{bound_port} (data_dir={}; no models registered \
-         yet — Task 16 wires config.models)",
-        config.data_dir.display()
+        "bloomery-daemon serving on 127.0.0.1:{bound_port} (data_dir={}; models: {}; tier: {} \
+         {}; POST: {})",
+        config.data_dir.display(),
+        config.models.len(),
+        config.tier.name,
+        if config.tier.emulated {
+            "emulated"
+        } else {
+            "real-hardware"
+        },
+        if config.assay.enabled {
+            "running"
+        } else {
+            "disabled"
+        },
     );
+
+    if config.assay.enabled {
+        let profiles_dir = config.data_dir.join("profiles");
+        std::fs::create_dir_all(&profiles_dir)
+            .unwrap_or_else(|e| fail(format!("failed to create profiles dir: {e}")));
+        let models: Vec<String> = config.models.keys().cloned().collect();
+        let tier = config.tier.clone();
+        let python = config.assay.python.clone();
+        let post_pager = Arc::clone(&pager);
+        std::thread::spawn(move || {
+            let runner = PostRunner::new(python);
+            if let Err(e) = run_post(
+                &post_pager,
+                &runner,
+                &models,
+                bound_port,
+                &tier,
+                &profiles_dir,
+            ) {
+                // The individual probe outcomes are journaled by `run_post`
+                // itself; reaching here means the *journal* failed, which is
+                // the one thing that cannot be journaled.
+                eprintln!("bloomery-daemon: POST could not record its result: {e}");
+            }
+        });
+    } else {
+        // Not silence: a daemon booting with POST off is a daemon whose
+        // models will never be profiled, and law 5 refuses every one of them
+        // unless the operator also set `allow_unprofiled`.
+        let mut p = pager
+            .lock()
+            .unwrap_or_else(|_| fail("pager poisoned before boot completed"));
+        p.journal_degraded("POST disabled by config".to_string())
+            .unwrap_or_else(|e| fail(format!("failed to journal degraded boot: {e}")));
+    }
     // `_handle`'s workers do the actual serving; the main thread just needs
     // to stay alive for the process to keep running. `park()` can wake
     // spuriously, hence the loop.

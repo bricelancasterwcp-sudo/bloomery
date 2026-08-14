@@ -33,9 +33,10 @@
 //! already exists (created via the native `POST /agents`, Task 14) — this
 //! shim never invents its own session-id namespace on top of the pager's
 //! own agent ids, so there is exactly one id space to reason about. A
-//! request without the header gets an ephemeral agent at
-//! [`crate::api_native::DEFAULT_PRIORITY`] /
-//! [`crate::api_native::DEFAULT_BUDGET_TOKENS`], created, used once, and
+//! request without the header gets an ephemeral agent at the pager's
+//! configured defaults ([`Pager::default_priority`] /
+//! [`Pager::default_budget_tokens`], wired from config by `main.rs`),
+//! created, used once, and
 //! removed via [`Pager::remove_agent`] before the response is returned —
 //! Phase 1 has no session GC, so an anonymous call must never leave an
 //! agent behind. If that removal itself fails (a real double-fault: the
@@ -59,7 +60,7 @@ use serde_json::{json, Value};
 
 use bloomery_substrate::Substrate;
 
-use crate::api_native::{lock_pager, DEFAULT_BUDGET_TOKENS, DEFAULT_PRIORITY};
+use crate::api_native::lock_pager;
 use crate::pager::{Pager, PagerError};
 
 /// `max_tokens` a request omits entirely. Chosen as a small, safe default
@@ -222,13 +223,19 @@ fn chat_completions<S: Substrate>(
     // (see the module doc's "Session binding" note).
     let (agent_id, ephemeral) = match agent_header {
         Some(id) => (id.to_string(), false),
-        None => match p.create_agent(&req.model, DEFAULT_PRIORITY, None, DEFAULT_BUDGET_TOKENS) {
-            Ok(info) => (info.id, true),
-            Err(e) => {
-                let (status, value) = map_error(&e, None);
-                return V1Result::json(status, value);
+        None => {
+            // Read the defaults out before the `&mut` borrow `create_agent`
+            // needs; they are the pager's (config-wired), never this
+            // layer's own constants.
+            let (priority, budget) = (p.default_priority(), p.default_budget_tokens());
+            match p.create_agent(&req.model, priority, None, budget) {
+                Ok(info) => (info.id, true),
+                Err(e) => {
+                    let (status, value) = map_error(&e, None);
+                    return V1Result::json(status, value);
+                }
             }
-        },
+        }
     };
 
     // Honest refusal, not a silent-echo: a header-bound agent's model is

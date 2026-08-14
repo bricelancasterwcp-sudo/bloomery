@@ -485,3 +485,51 @@ fn a_panicking_request_poisons_the_pager_and_subsequent_requests_get_a_named_500
     assert!(v["detail"].as_str().unwrap().contains("poisoned"), "{body}");
     handle.shutdown();
 }
+
+/// Task 14 left `config.default_priority` / `config.default_budget_tokens`
+/// dead: this layer hardcoded 100 / 200 000 and an operator's configured
+/// defaults reached nothing. The values now live on the `Pager` (wired from
+/// config by `main.rs`), and a body that omits `priority` / `budget_tokens`
+/// must land on *those*, not on a constant retyped here.
+#[test]
+fn an_agent_created_without_priority_or_budget_lands_on_the_pagers_defaults() {
+    let (port, handle) = bloomery_daemon::test_support::serve_fake_with_defaults(7, 5000);
+    let addr = format!("127.0.0.1:{port}");
+    let (st, body) = http(&addr, "POST", "/agents", r#"{"model":"qwen"}"#);
+    assert_eq!(st, 201, "{body}");
+    let id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (st, body) = http(&addr, "GET", "/status", "");
+    assert_eq!(st, 200, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let agent = v["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == serde_json::json!(id))
+        .expect("the created agent is in status");
+    assert_eq!(agent["priority"], 7, "configured default_priority carried");
+    assert_eq!(
+        agent["budget_granted"], 5000,
+        "configured default_budget_tokens carried"
+    );
+    handle.shutdown();
+}
+
+/// The tier an operator declared is what every profile in this daemon is
+/// marked with, so `/status` has to say which one it is — `null` when the
+/// daemon was never told, never an invented name.
+#[test]
+fn status_reports_the_declared_tier() {
+    let (port, handle) =
+        bloomery_daemon::test_support::serve_fake_with_tier("mid-gamer-12gb", true);
+    let (st, body) = http(&format!("127.0.0.1:{port}"), "GET", "/status", "");
+    assert_eq!(st, 200, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["tier"]["name"], "mid-gamer-12gb");
+    assert_eq!(v["tier"]["emulated"], true);
+    handle.shutdown();
+}

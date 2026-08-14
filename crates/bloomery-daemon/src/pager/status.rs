@@ -27,8 +27,24 @@ pub struct StatusReport {
     pub free_vram_bytes: Option<u64>,
     /// Sum of the KV footprints the pager believes are currently resident.
     pub resident_kv_bytes: u64,
+    /// The operator-declared hardware tier every profile here is marked
+    /// with. `None` = the daemon was never told one, never a guessed name.
+    pub tier: Option<TierStatus>,
+    /// True while the boot-time POST is still probing: unprofiled models
+    /// are provisionally admitted for exactly this long, and an operator
+    /// reading `/status` deserves to know which regime is in force.
+    pub posting: bool,
     pub agents: Vec<AgentStatus>,
     pub models: Vec<ModelStatus>,
+}
+
+/// The operator-declared tier, exactly as assay marks its profiles: a name
+/// plus whether the hardware was emulated. The mark is not decoration — an
+/// unmarked emulated number could masquerade as real hardware.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TierStatus {
+    pub name: String,
+    pub emulated: bool,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -53,6 +69,11 @@ pub struct ModelStatus {
     pub digest: String,
     /// Whether the substrate currently holds weights for this model.
     pub loaded: bool,
+    /// Whether a measured capability profile is attached. `false` means
+    /// every request for it is refused unless the daemon is still `posting`
+    /// or the operator set `allow_unprofiled` — so this is the field that
+    /// explains a `422`.
+    pub profiled: bool,
     pub kv_per_token: u64,
     pub training_ctx: u32,
 }

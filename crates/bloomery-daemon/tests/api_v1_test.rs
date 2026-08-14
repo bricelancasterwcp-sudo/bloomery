@@ -470,3 +470,37 @@ fn pager_with_missing_stats_reply(
     pager.register_model("qwen", &gguf, meta, None).unwrap();
     std::sync::Mutex::new(pager)
 }
+
+/// The `/v1` half of the same obligation: an ephemeral agent (no
+/// `X-Bloomery-Agent` header) is minted at the pager's configured defaults,
+/// so a `max_tokens` above a 5000-token configured budget is refused with
+/// that budget's own arithmetic — proof the number came from config and not
+/// from the 200 000 this layer used to hardcode.
+#[test]
+fn an_ephemeral_agent_is_minted_at_the_pagers_configured_budget() {
+    let (dir, pager) = bloomery_daemon::test_support::fake_pager_for_v1();
+    pager.lock().unwrap().set_defaults(7, 5000);
+
+    let (st, body) = bloomery_daemon::test_support::dispatch_v1_fake(
+        &pager,
+        "POST",
+        "/v1/chat/completions",
+        r#"{"model":"qwen","messages":[{"role":"user","content":"hi"}],"max_tokens":5001}"#,
+        None,
+    );
+    assert_eq!(st, 429, "{body}");
+    assert!(body.contains("budget_exhausted"), "{body}");
+    assert!(body.contains("5000 remaining"), "{body}");
+
+    // The same call under the stock 200 000 default would have passed the
+    // budget gate — the refusal is the config's, not this layer's.
+    let (st, body) = bloomery_daemon::test_support::dispatch_v1_fake(
+        &pager,
+        "POST",
+        "/v1/chat/completions",
+        r#"{"model":"qwen","messages":[{"role":"user","content":"hi"}],"max_tokens":16}"#,
+        None,
+    );
+    assert_eq!(st, 200, "{body}");
+    let _ = std::fs::remove_dir_all(dir);
+}

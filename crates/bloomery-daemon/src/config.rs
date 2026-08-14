@@ -31,7 +31,10 @@ fn default_budget_tokens() -> u64 {
     200_000
 }
 
-fn default_python() -> String {
+/// `pub(crate)` so `post.rs` builds its test runner against the same
+/// spelling this config defaults to, rather than a second literal that
+/// could drift from it.
+pub(crate) fn default_python() -> String {
     "python3".to_string()
 }
 

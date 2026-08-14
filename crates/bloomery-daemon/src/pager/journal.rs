@@ -180,3 +180,22 @@ pub(crate) fn model_unloaded(j: &mut Journal, model: &str) -> Result<(), PagerEr
 pub(crate) fn degraded(j: &mut Journal, reason: String) -> Result<(), PagerError> {
     append(j, &Event::Degraded { reason })
 }
+
+/// One POST outcome. `profile_path` is `Some` only when a profile was
+/// actually written and attached — a failed probe records `None` rather
+/// than the path assay was *asked* to write, which may not exist.
+pub(crate) fn post(
+    j: &mut Journal,
+    model: &str,
+    outcome: &str,
+    profile_path: Option<String>,
+) -> Result<(), PagerError> {
+    append(
+        j,
+        &Event::Post {
+            model: model.to_string(),
+            outcome: outcome.to_string(),
+            profile_path,
+        },
+    )
+}

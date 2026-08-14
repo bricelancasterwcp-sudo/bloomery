@@ -100,6 +100,21 @@ impl ServerHandle {
 /// anything but loopback, that stall becomes a real remote DoS and needs a
 /// real fix (a read deadline on the underlying stream).
 pub fn serve<S: Substrate + Send + 'static>(pager: Pager<S>, port: u16) -> (u16, ServerHandle) {
+    serve_shared(Arc::new(Mutex::new(pager)), port)
+}
+
+/// [`serve`] for a caller that needs to keep its own handle on the pager.
+///
+/// The boot-time POST (Task 16) is the reason this exists: assay probes the
+/// daemon *through the socket* while the boot thread attaches the profiles
+/// that come back and finally clears the `posting` flag, so both sides must
+/// hold the same `Arc<Mutex<Pager<S>>>`. There is still deliberately no
+/// `ServerHandle::into_pager` — the pager is shared from the start or not at
+/// all, never extracted back out of a running server.
+pub fn serve_shared<S: Substrate + Send + 'static>(
+    pager: Arc<Mutex<Pager<S>>>,
+    port: u16,
+) -> (u16, ServerHandle) {
     let server = tiny_http::Server::http(("127.0.0.1", port))
         .unwrap_or_else(|e| panic!("bloomery-daemon: failed to bind 127.0.0.1:{port}: {e}"));
     let bound_port = server
@@ -109,7 +124,6 @@ pub fn serve<S: Substrate + Send + 'static>(pager: Pager<S>, port: u16) -> (u16,
         .port();
 
     let server = Arc::new(server);
-    let pager = Arc::new(Mutex::new(pager));
 
     let workers = (0..WORKER_COUNT)
         .map(|_| {

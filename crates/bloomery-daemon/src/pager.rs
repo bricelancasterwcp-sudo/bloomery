@@ -44,7 +44,7 @@ use journal as jrnl;
 use status::{bound_by_str, state_str};
 
 pub use error::PagerError;
-pub use status::{AgentInfo, AgentStatus, ModelStatus, StatusReport};
+pub use status::{AgentInfo, AgentStatus, ModelStatus, StatusReport, TierStatus};
 
 /// VRAM held back from the window law for allocator and compute buffers.
 ///
@@ -60,6 +60,17 @@ const DEFAULT_N_GPU_LAYERS: u32 = u32::MAX;
 
 /// Conservative chars-per-token floor for the pre-tokenization prompt gate.
 const CHARS_PER_TOKEN: u64 = 3;
+
+/// Priority and budget an API request that names neither is created with.
+///
+/// These are the pager's **initial** values, not the daemon's policy: they
+/// mirror `config.rs`'s `default_priority` / `default_budget_tokens`, and
+/// `main.rs` overwrites both from the operator's config via
+/// [`Pager::set_defaults`]. Task 14 hardcoded these numbers in the HTTP
+/// layer instead, which made the config keys dead; they live here now so
+/// every surface reads one carried value rather than retyping a constant.
+const DEFAULT_PRIORITY: u8 = 100;
+const DEFAULT_BUDGET_TOKENS: u64 = 200_000;
 
 /// Source of bloomery's static VRAM budget — see [`Pager::new`].
 ///
@@ -77,6 +88,15 @@ struct ModelEntry {
     profile: Option<Profile>,
     kv_per_token: u64,
     handle: Option<ModelHandle>,
+    /// Whether this model's provisional (POST-window) admission and its
+    /// `allow_unprofiled` admission have already been journaled. Said once
+    /// per model per reason, not once per agent: assay alone makes ~110
+    /// calls through the POST window, and a `Degraded` per call would bury
+    /// the journal in one repeated sentence (same discipline as
+    /// `probe_free_vram`'s one-shot unmeasured-VRAM note). Re-registering a
+    /// model resets both, because it is a new entry.
+    provisional_logged: bool,
+    unprofiled_logged: bool,
 }
 
 pub struct Pager<S: Substrate> {
@@ -93,6 +113,17 @@ pub struct Pager<S: Substrate> {
     /// `plan_residency`'s behavior is unspecified for duplicate ids.
     next_agent_seq: u64,
     vram_unmeasured_logged: bool,
+    /// True only while the boot-time POST is probing this daemon — see
+    /// [`Pager::set_posting`].
+    posting: bool,
+    /// The operator's law-5 override — see [`Pager::set_allow_unprofiled`].
+    allow_unprofiled: bool,
+    default_priority: u8,
+    default_budget_tokens: u64,
+    /// The operator-declared hardware tier, for `/status`. `None` until the
+    /// daemon wires one: an undeclared tier is reported as unknown, never
+    /// invented (law 5's None-vs-zero, applied to a label).
+    tier: Option<TierStatus>,
 }
 
 impl<S: Substrate> Pager<S> {
@@ -125,6 +156,18 @@ impl<S: Substrate> Pager<S> {
             n_gpu_layers: DEFAULT_N_GPU_LAYERS,
             next_agent_seq: 0,
             vram_unmeasured_logged: false,
+            posting: false,
+            // Permissive by default, exactly like `DEFAULT_OVERHEAD_BYTES`
+            // is zero by default: the *pager* has no opinion on admission
+            // policy — `register_model` accepts `profile: None` — and the
+            // daemon is the one place that reads an operator's config. The
+            // hazard is the same one Task 13 pinned for overhead: a
+            // construction path that forgets to wire it runs permissive, so
+            // `main.rs` sets it explicitly at its single construction site.
+            allow_unprofiled: true,
+            default_priority: DEFAULT_PRIORITY,
+            default_budget_tokens: DEFAULT_BUDGET_TOKENS,
+            tier: None,
         }
     }
 
@@ -134,6 +177,90 @@ impl<S: Substrate> Pager<S> {
 
     pub fn set_n_gpu_layers(&mut self, n: u32) {
         self.n_gpu_layers = n;
+    }
+
+    /// Marks the daemon as running its boot-time POST (or done with it).
+    ///
+    /// While set, a model with no profile is still admitted: assay has to be
+    /// able to drive `/v1` before any profile can exist (see [`crate::post`]
+    /// for the whole chicken-and-egg argument). Every such admission is
+    /// journaled, and the flag is cleared as soon as POST finishes, on every
+    /// path — a `posting` flag left set is law 5 suspended forever.
+    pub fn set_posting(&mut self, posting: bool) {
+        self.posting = posting;
+    }
+
+    /// The operator's law-5 override: when true, an unprofiled model is
+    /// admitted anyway and the degradation is journaled by name.
+    ///
+    /// This is a *policy* input, so the daemon must always wire it from
+    /// `config.allow_unprofiled` — see the note on the field.
+    pub fn set_allow_unprofiled(&mut self, allow: bool) {
+        self.allow_unprofiled = allow;
+    }
+
+    /// Sets the priority and budget an API request that names neither is
+    /// created with (`config.default_priority` /
+    /// `config.default_budget_tokens`).
+    pub fn set_defaults(&mut self, priority: u8, budget_tokens: u64) {
+        self.default_priority = priority;
+        self.default_budget_tokens = budget_tokens;
+    }
+
+    pub fn default_priority(&self) -> u8 {
+        self.default_priority
+    }
+
+    pub fn default_budget_tokens(&self) -> u64 {
+        self.default_budget_tokens
+    }
+
+    /// Records the operator-declared hardware tier for `/status`. It is a
+    /// label, not a measurement: it is what this daemon's profiles are
+    /// marked with, so a reader can tell an enthusiast-16GB number from an
+    /// emulated one.
+    pub fn set_tier(&mut self, name: &str, emulated: bool) {
+        self.tier = Some(TierStatus {
+            name: name.to_string(),
+            emulated,
+        });
+    }
+
+    /// Attaches a measured [`Profile`] to a registered model — POST's whole
+    /// output (see [`crate::post`]).
+    ///
+    /// Agents that already exist keep the window they were quoted at
+    /// creation; the profile's ceiling binds every agent created *after*
+    /// this. Re-quoting a live agent's window would silently change a number
+    /// its caller was already told.
+    pub fn attach_profile(&mut self, name: &str, profile: Profile) -> Result<(), PagerError> {
+        let entry = self
+            .models
+            .get_mut(name)
+            .ok_or_else(|| PagerError::UnknownModel(name.to_string()))?;
+        entry.profile = Some(profile);
+        Ok(())
+    }
+
+    /// Journals one POST outcome for `model` (`"ok"`, or `"failed: …"`).
+    ///
+    /// POST runs outside the pager but must not open a second writer to the
+    /// journal the pager owns: two `BufWriter`s appending to one audit log
+    /// is exactly the kind of interleaving nobody can replay. So the boot
+    /// path records through the pager, and there stays one writer.
+    pub fn journal_post(
+        &mut self,
+        model: &str,
+        outcome: &str,
+        profile_path: Option<String>,
+    ) -> Result<(), PagerError> {
+        jrnl::post(&mut self.journal, model, outcome, profile_path)
+    }
+
+    /// Journals a degradation raised outside the pager (POST failures at
+    /// boot) — same single-writer reason as [`Pager::journal_post`].
+    pub fn journal_degraded(&mut self, reason: String) -> Result<(), PagerError> {
+        jrnl::degraded(&mut self.journal, reason)
     }
 
     /// Read-only view of the substrate, for inspection and tests.
@@ -188,6 +315,8 @@ impl<S: Substrate> Pager<S> {
                 digest,
                 profile,
                 handle: None,
+                provisional_logged: false,
+                unprofiled_logged: false,
             },
         );
         Ok(())
@@ -195,6 +324,8 @@ impl<S: Substrate> Pager<S> {
 
     /// Creates an agent and computes its window. No VRAM is committed: the
     /// agent starts `Fresh` and only becomes resident when it first infers.
+    ///
+    /// Admission is profile-gated (law 5) — see [`Pager::admit`].
     pub fn create_agent(
         &mut self,
         model: &str,
@@ -214,6 +345,7 @@ impl<S: Substrate> Pager<S> {
                 entry.profile.as_ref().and_then(|p| p.measured_ceiling()),
             )
         };
+        self.admit(model)?;
         let free_vram_bytes = self.probe_free_vram()?;
         let window = usable_window(&GeometryInput {
             training_ctx,
@@ -252,6 +384,67 @@ impl<S: Substrate> Pager<S> {
             state: AgentState::Fresh,
         });
         Ok(info)
+    }
+
+    /// Law 5's gate: no model gets work without a measured capability
+    /// profile.
+    ///
+    /// Three things can still admit an unprofiled model, and they are not
+    /// interchangeable:
+    ///
+    /// 1. **`posting`** — the bounded window while POST probes this daemon,
+    ///    which is the only way a profile can ever come to exist
+    ///    ([`crate::post`]). Journaled per model.
+    /// 2. **`allow_unprofiled`** — the operator's explicit override.
+    ///    Journaled per model, naming it, because the daemon is then serving
+    ///    a model whose real ceiling and codecs nobody measured.
+    /// 3. Neither: refused as [`PagerError::Unprofiled`], with the model's
+    ///    name, which the HTTP layers render as `422`.
+    ///
+    /// An unprofiled model is never *silently* admitted on any path.
+    ///
+    /// The gate is at agent **creation**, not per inference: an agent
+    /// admitted inside the POST window keeps working after the window
+    /// closes. Cutting a live conversation off mid-turn because POST
+    /// finished would be its own dishonesty, and the window is a few
+    /// seconds of boot. New work on a still-unprofiled model is refused.
+    fn admit(&mut self, model: &str) -> Result<(), PagerError> {
+        let has_profile = self
+            .models
+            .get(model)
+            .is_some_and(|entry| entry.profile.is_some());
+        if has_profile {
+            return Ok(());
+        }
+        let posting = self.posting;
+        if !posting && !self.allow_unprofiled {
+            return Err(PagerError::Unprofiled(model.to_string()));
+        }
+        let first_time = match self.models.get_mut(model) {
+            None => false,
+            Some(entry) => {
+                let said = if posting {
+                    &mut entry.provisional_logged
+                } else {
+                    &mut entry.unprofiled_logged
+                };
+                let first = !*said;
+                *said = true;
+                first
+            }
+        };
+        if first_time {
+            let reason = if posting {
+                format!("provisional admission: {model} has no profile yet; POST in progress")
+            } else {
+                format!(
+                    "admitting agents on {model} with no capability profile \
+                     (allow_unprofiled); its ceiling and codecs are unmeasured"
+                )
+            };
+            jrnl::degraded(&mut self.journal, reason)?;
+        }
+        Ok(())
     }
 
     /// Runs one inference for `id`, paging it in first if needed.
@@ -433,6 +626,7 @@ impl<S: Substrate> Pager<S> {
                 name: name.clone(),
                 digest: m.digest.clone(),
                 loaded: m.handle.is_some(),
+                profiled: m.profile.is_some(),
                 kv_per_token: m.kv_per_token,
                 training_ctx: m.meta.training_ctx,
             })
@@ -441,6 +635,8 @@ impl<S: Substrate> Pager<S> {
         StatusReport {
             free_vram_bytes: (self.free_vram)(),
             resident_kv_bytes: self.resident_kv_bytes(),
+            tier: self.tier.clone(),
+            posting: self.posting,
             agents,
             models,
         }
