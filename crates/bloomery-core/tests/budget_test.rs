@@ -22,3 +22,12 @@ fn charge_records_actuals_even_past_granted() {
     assert_eq!((b.spent(), b.remaining()), (120, 0));
     assert!(b.check(1).is_err());
 }
+
+#[test]
+fn charge_saturates_instead_of_overflowing() {
+    let mut b = Budget::new(u64::MAX);
+    b.charge(u64::MAX); // spent = u64::MAX
+    assert_eq!((b.spent(), b.remaining()), (u64::MAX, 0));
+    b.charge(1); // would overflow, should saturate
+    assert_eq!((b.spent(), b.remaining()), (u64::MAX, 0));
+}

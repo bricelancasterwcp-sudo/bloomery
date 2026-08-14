@@ -37,7 +37,7 @@ impl Budget {
     }
 
     pub fn charge(&mut self, actual: u64) {
-        self.spent_tokens += actual;
+        self.spent_tokens = self.spent_tokens.saturating_add(actual);
     }
 
     pub fn spent(&self) -> u64 {
