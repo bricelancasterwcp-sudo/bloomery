@@ -9,6 +9,8 @@
 
 pub mod contract;
 pub mod fake;
+#[cfg(feature = "llama")]
+pub mod llama;
 
 /// Opaque handle to a loaded model, minted by [`Substrate::load_model`].
 pub type ModelHandle = u64;
