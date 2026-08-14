@@ -21,7 +21,8 @@ endpoint is honest and capable. bloomery assumes neither and measures both.
 The full design, its nine laws and the failure each one was bought with are in
 [docs/superpowers/specs/2026-08-14-bloomery-design.md](docs/superpowers/specs/2026-08-14-bloomery-design.md).
 
-**Status: Phase 1, live-proven on one box.** The daemon boots, loads a real
+**Status: Phase 1 live-proven on one box; Phase 2a hardening landed on top.**
+The daemon boots, loads a real
 GGUF through llama.cpp, pages agents in and out of VRAM, and journals every
 decision. The pre-registered kill gate for the process model, **G2, passed**:
 p95 warm agent switch **32 ms** against a 2000 ms ceiling and p95 cold switch
@@ -29,12 +30,16 @@ p95 warm agent switch **32 ms** against a 2000 ms ceiling and p95 cold switch
 page-cache caveat that matters and is quantified in the evidence. Those
 switches happened because the run supplied residency pressure the *other* way:
 the pager's unmeasured-VRAM mode, which caps residency at one resident agent.
-With a measured budget the planner would have placed every agent and evicted
-none, for reasons that are an accounting gap rather than a tuning choice — see
-the evidence doc's [pressure configuration](docs/superpowers/evidence/2026-08-14-g2-agent-switch.md#2-the-pressure-configuration--and-why-it-had-to-be-this)
-section and the first bullet under [Honest limits](#honest-limits). Phases 2–4
-(capability plane, edit-codec syscall ABI, semantic store, appliance boot) are
-not built. See [Honest limits](#honest-limits) before believing anything else.
+With a measured budget the Phase 1 planner would have placed every agent and
+evicted none — an accounting gap rather than a tuning choice, and the first
+thing **Phase 2a** closed. Weights now spend from the reservation budget
+alongside KV, and the pager has been driven to evict under a natural measured
+budget on this box; that run is
+[recorded separately](docs/superpowers/evidence/2026-08-14-2a-natural-pressure.md)
+and is **not** a re-read of G2, which stands exactly as published. Phases 2b–4
+(edit-codec syscall ABI, capability grants, policy plane, semantic store,
+appliance boot) are not built. See [Honest limits](#honest-limits) before
+believing anything else.
 
 ## What works
 
@@ -42,12 +47,21 @@ not built. See [Honest limits](#honest-limits) before believing anything else.
   (free_vram − weights − overhead) / kv_per_token, user_cap)`, and every agent
   is told which term bound it. GGUF geometry is parsed from the file.
 * **A real pager.** Deterministic residency planning against a measured VRAM
-  budget *before* anything is allocated — or, when the probe reports
-  unmeasured, against a documented cap of one resident agent, journaled as a
-  degradation; priority eviction with the arithmetic
+  budget *before* anything is allocated — `avail = budget − overhead −
+  Σ loaded weights − Σ resident reservations`, where a context's reservation is
+  its KV cache *plus* the runtime buffers llama.cpp allocates beside it, so
+  everything that occupies VRAM spends from one pool — or, when the
+  probe reports unmeasured, against a documented cap of one resident agent,
+  journaled as a degradation; priority eviction with the arithmetic
   printed on refusal; KV images that round-trip through a RAM tier and an NVMe
-  spill tier, digest-tagged so a changed model invalidates them into a cold
-  start instead of a corrupt restore.
+  spill tier, tagged with a full-file model digest so a changed model
+  invalidates them into a cold start instead of a corrupt restore.
+* **Equal-priority peers time-share instead of starving.** Eviction still
+  requires a *strictly* lower-priority idle resident — the planner is
+  unchanged and deterministic — but a refusal between equal-priority peers
+  that has waited out `time_share_quantum_secs` (default 30 s) is retried as
+  an eviction of the least-recently-used peer, journaled as
+  `evict_timeshare(waited_Nms)`.
 * **A substrate that cannot lie about token counts.** llama.cpp via
   `llama-cpp-2`, per-sequence `state_seq_*_ext` save/restore, prompt and
   completion counts derived from vectors this process built. A reply without
@@ -69,15 +83,25 @@ not built. See [Honest limits](#honest-limits) before believing anything else.
 
 ## Honest limits
 
-Phase 1 limits, all known and none hidden:
+Limits after Phase 2a, all known and none hidden:
 
-* **Model weights are not charged against the reservation budget.** The
-  residency planner tracks KV bytes only. It will plan residency for agents
-  whose contexts cannot physically fit alongside the weights.
-* **Equal-priority agents are never evicted.** Eviction requires a *strictly*
-  lower-priority idle resident, so under memory pressure a same-priority peer
-  is refused rather than time-shared. bloomery cannot yet round-robin equal
-  peers under pressure.
+* **The VRAM budget is a static boot-time read.** The pager subtracts its own
+  weights and contexts from that number (reservation accounting) and never
+  re-reads the driver, so VRAM another process allocates after boot is
+  invisible to it. Deliberate — a live read already excludes what the pager
+  allocated, and subtracting residents from it would double-count.
+* **Weights are charged but never evicted.** They spend from the same budget
+  KV does, so residency planning is honest about them; nothing, however,
+  unloads a model automatically to make room. `POST /models/{m}/unload` is the
+  only thing that credits weights back.
+* **The per-context runtime reservation is configured, not measured.** A
+  llama.cpp context costs more than its KV cache — on this box, at
+  `n_ctx = 16384`, a 896 MiB KV cache came with a 304 MiB Vulkan compute buffer
+  and a 30 MiB host buffer. bloomery charges `ctx_overhead_mib` (default 384)
+  for that and does **not** measure it, so a different model, backend or window
+  can need a different number. Setting it too low is how the
+  [2a natural-pressure run](docs/superpowers/evidence/2026-08-14-2a-natural-pressure.md#attempt-1--aborted-oom-and-the-accounting-gap-it-found)
+  OOM'd a GPU the planner believed had room.
 * **The VRAM probe is `nvidia-smi`-only.** Anywhere else it reports
   *unmeasured* (`None`, never zero) and residency falls back to a cap of one
   resident agent, journaled as a degradation.
@@ -113,6 +137,10 @@ overhead_mib = 1024                # VRAM held back for allocator and compute bu
 default_priority = 100
 default_budget_tokens = 200000
 allow_unprofiled = false           # true = serve models nobody measured, journaled
+time_share_quantum_secs = 30       # how long an equal-priority refusal waits
+                                   # before the LRU peer is evicted anyway
+ctx_overhead_mib = 384             # VRAM each resident context reserves beyond
+                                   # its KV cache (llama.cpp compute buffers)
 
 [models]
 "qwen2.5-coder:7b-instruct-q8_0" = "/path/to/model.gguf"
@@ -136,8 +164,7 @@ curl -s localhost:8181/agents/a1/infer -d '{"prompt":"hello","max_tokens":32}'
 ```
 
 Reproducing the gate — the invocations verbatim, including the pressure setup
-without which the warm run produces no samples at all (and which the bench
-refuses to proceed without):
+without which the warm run produces no samples at all:
 
 ```bash
 cargo build --release -p bloomery-bench
@@ -148,18 +175,31 @@ cargo build --release -p bloomery-bench
 mkdir -p /tmp/no-tools
 env PATH=/tmp/no-tools target/release/bloomery-daemon --config bloomery.toml
 
+J=<data_dir>/journal/boot-<ts>.jsonl   # the boot this run is driving
+
 # warm class
-target/release/bloomery-bench switch \
+target/release/bloomery-bench switch --journal "$J" \
   --daemon http://127.0.0.1:8181 --model qwen2.5-coder:7b-instruct-q8_0 \
   --agents 8 --rounds 7 --window 2048 --prime-chars 6000 --max-tokens 8
 
 # cold class — restart the daemon first for a fresh journal
-target/release/bloomery-bench switch --cold \
+target/release/bloomery-bench switch --cold --journal "$J" \
   --daemon http://127.0.0.1:8181 --model qwen2.5-coder:7b-instruct-q8_0 \
   --agents 8 --rounds 7 --window 2048 --prime-chars 6000 --max-tokens 8
 
-target/release/bloomery-bench report --journal <data_dir>/journal/boot-<ts>.jsonl
+target/release/bloomery-bench report --journal "$J"
 ```
+
+`--journal` is not optional. The driver reads that file before and after its
+laps, predicts from the daemon's own `/status` numbers how many restores the
+workload must force, and fails the run if it did not deliver them — a bench
+that switched nothing exits zero otherwise, and `report` will print its `n: 0`
+without comment. The Phase 1 driver instead refused up front to run the warm
+class against a *measured* VRAM budget, because the planner then charged KV
+bytes only and would have evicted nobody; since Phase 2a charges the weights,
+that refusal is gone and a measured budget is the natural way to run this — see
+[the natural-pressure evidence](docs/superpowers/evidence/2026-08-14-2a-natural-pressure.md),
+which is a 2a acceptance run and **not** a re-read of G2.
 
 `report` is pure: point it at either committed journal in
 `docs/superpowers/evidence/` and it recomputes the published numbers with no
@@ -184,6 +224,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 * [Design spec](docs/superpowers/specs/2026-08-14-bloomery-design.md) — mission, laws, architecture, phases
 * [Kill gates G1–G4](docs/gates.md) — pre-registered, frozen before any instrument existed
 * [G2 evidence](docs/superpowers/evidence/2026-08-14-g2-agent-switch.md) — the switch-latency run, its lens, and its caveats
+* [2a natural-pressure evidence](docs/superpowers/evidence/2026-08-14-2a-natural-pressure.md) — eviction under a measured budget with the weights charged; an acceptance run, not a gate re-read
+* [Carried debt](docs/CARRIED-DEBT.md) — what each slice settled, what it deferred, and what has since been delivered
 * [Phase 0 prior art](docs/priorart/2026-08-14-phase0-priorart.md) — what already exists and what was decided against it
 * [Phase 1 plan](docs/superpowers/plans/2026-08-14-phase1-pager-daemon.md)
 

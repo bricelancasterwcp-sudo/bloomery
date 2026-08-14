@@ -4,6 +4,15 @@
 **Gate:** `docs/gates.md` G2, pre-registered 2026-08-14 before this instrument existed.
 **Verdict: PASS on both classes, with a page-cache caveat that is quantified below and is not decorative.**
 
+> **Pointer, added 2026-08-14 (Phase 2a).** No number, protocol or verdict on
+> this page has changed or been re-read. Two things it *describes* have since
+> changed, and are recorded here rather than left to contradict a later
+> document: the weights-not-in-reservation gap named in [§2](#2-the-pressure-configuration--and-why-it-had-to-be-this)
+> and [Accounting gaps](#accounting-gaps-this-run-exposes) 1 and 2 are closed,
+> and with them the bench's refusal to run a warm class against a measured
+> budget. See `2026-08-14-2a-natural-pressure.md`, which is an acceptance run
+> for that change and **not** a G2 reading.
+
 | class | commitment | measured (n=56) | margin |
 |---|---|---|---|
 | warm | p95 ≤ **2000 ms** | **p95 32 ms**, p50 29 ms | 62× |
