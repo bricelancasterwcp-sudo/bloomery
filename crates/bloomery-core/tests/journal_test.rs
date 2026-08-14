@@ -87,13 +87,59 @@ fn agent_removed_and_task_step_round_trip() {
 #[test]
 fn committed_g2_journal_still_replays() {
     // Backward-compatibility pin: schema changes must never orphan the
-    // committed evidence. Path is relative to the workspace root.
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/superpowers/evidence/2026-08-14-g2-warm-journal.jsonl");
-    let events = replay(&path).unwrap();
+    // committed evidence. Every committed `*.jsonl` under the evidence
+    // directory is a real journal from a real run (G2's cold/warm/coldcache
+    // journals carry `ModelUnloaded`, which the two hand-built round-trip
+    // tests above never touch) — loop over the directory rather than one
+    // named file, so a schema change is pinned against all of them, and a
+    // *future* committed journal is picked up automatically without anyone
+    // remembering to add a case for it. Path is relative to the workspace
+    // root.
+    let evidence_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/superpowers/evidence");
+    let journal_paths: Vec<_> = std::fs::read_dir(&evidence_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("jsonl"))
+        .collect();
     assert!(
-        events.len() > 100,
-        "expected a real journal, got {} events",
-        events.len()
+        journal_paths.len() >= 4,
+        "expected at least 4 committed journals under {}, found {}",
+        evidence_dir.display(),
+        journal_paths.len()
+    );
+
+    let mut total_events = 0usize;
+    for path in &journal_paths {
+        let events = replay(path).unwrap_or_else(|e| {
+            panic!("committed journal {} failed to replay: {e}", path.display())
+        });
+        assert!(
+            !events.is_empty(),
+            "expected a non-empty journal at {}, got 0 events",
+            path.display()
+        );
+        // The g2-warm journal specifically is large enough (hundreds of
+        // events from the real G2 bench run) that a per-file `>0` alone
+        // would let a truncation regression slip through unnoticed; keep
+        // its original stronger bound as a named case rather than folding
+        // it into the loop's generic assertion.
+        if path.file_name().and_then(|n| n.to_str()) == Some("2026-08-14-g2-warm-journal.jsonl") {
+            assert!(
+                events.len() > 100,
+                "expected a real journal, got {} events",
+                events.len()
+            );
+        }
+        total_events += events.len();
+    }
+    // Total-count sanity across all committed journals, so a regression
+    // that zeroed out every file's *individual* count in some correlated
+    // way (unlikely, but the `>0` checks above are per-file) still shows up
+    // in aggregate.
+    assert!(
+        total_events > 100,
+        "expected committed journals to carry a real number of events in \
+         aggregate, got {total_events}"
     );
 }

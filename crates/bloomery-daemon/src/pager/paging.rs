@@ -117,7 +117,13 @@ impl<S: Substrate> Pager<S> {
     /// When the budget is unmeasured there is no honest arithmetic left, so
     /// residency falls back to a count cap of one — planned as zero free
     /// bytes, which makes any second resident a priority decision or a
-    /// refusal.
+    /// refusal. One consequence worth naming: with any context already
+    /// resident and the requested agent's model cold, demand (reserved bytes
+    /// plus weights bytes) can never be covered under that flat zero-byte
+    /// cap — such a cross-model request refuses regardless of priority,
+    /// every time, for as long as the budget stays unmeasured. That is a
+    /// deliberate, safe narrowing versus Phase 1's cap-of-1 swap behavior,
+    /// not a regression.
     ///
     /// Nothing in this function touches the substrate on the refusal path.
     /// That is the point: memory pressure is decided from measured numbers

@@ -104,6 +104,33 @@ what closed it. Branch `feat/phase2a-hardening`.
    it. Deliberately deferred rather than bolted on beside a live-run
    fix.
 
+   **Multi-model window/placement divergence (same item, third half;
+   added 2026-08-14 in the final Phase 2a review, flagged as M-3 in
+   Task 3's review and routed here).** The ctx_overhead half above is
+   only one side of the same asymmetry. `create_agent` sizes a
+   candidate's window from `budget − <this agent's own model's>
+   weights_bytes − overhead_bytes` (`usable_window`'s `Vram` term,
+   `crates/bloomery-core/src/geometry.rs`) — it reads only the one
+   model the agent is being created against. `Pager::place`'s
+   admission arithmetic charges the fuller picture: `budget − overhead
+   − Σ ALL loaded models' weights − Σ ALL resident contexts'
+   reservations`. On a single-model daemon these coincide — there is
+   only one model to be "all loaded weights." On a multi-model daemon
+   they diverge: an agent windowed while a *different* model is also
+   loaded gets a window sized against a budget that never subtracted
+   that other model's weights, so a `Vram`-bound window can be
+   over-optimistic by up to that other model's entire `weights_bytes`
+   — and `place()` then refuses it permanently, for the same reason
+   the ctx_overhead half never recovers: the window law doesn't know
+   the term admission will actually charge. Same refuse-safely-
+   never-recovers class as the ctx_overhead half above, but larger in
+   magnitude (a whole model's weights vs. a few hundred MiB of context
+   overhead). The real fix is the same deferred core geometry change
+   already named above: the window law must subtract what admission
+   will actually charge, which for a multi-model daemon means
+   `GeometryInput` also carrying the other models' loaded weights and
+   residents' reservations — not a second, separate fix.
+
 ## Smaller items (fine as-is; fix opportunistically)
 
 - Test scratch accumulates in /tmp (pid-suffixed `bloomery-*` dirs from
