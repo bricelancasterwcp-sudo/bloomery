@@ -74,6 +74,12 @@ impl AgentTable {
         self.agents.remove(id)
     }
 
+    /// Every known agent, in unspecified order (the pager sorts where order
+    /// is user-visible).
+    pub fn iter(&self) -> impl Iterator<Item = &Agent> {
+        self.agents.values()
+    }
+
     /// Every currently-resident agent, in the shape the scheduler's
     /// residency planner (`bloomery_core::scheduler::plan_residency`)
     /// consumes. Task 12 does not yet track in-flight requests, so `busy`
