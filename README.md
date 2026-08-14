@@ -26,7 +26,13 @@ GGUF through llama.cpp, pages agents in and out of VRAM, and journals every
 decision. The pre-registered kill gate for the process model, **G2, passed**:
 p95 warm agent switch **32 ms** against a 2000 ms ceiling and p95 cold switch
 **862 ms** against 5000 ms, 56 samples per class on real hardware — with a
-page-cache caveat that matters and is quantified in the evidence. Phases 2–4
+page-cache caveat that matters and is quantified in the evidence. Those
+switches happened because the run supplied residency pressure the *other* way:
+the pager's unmeasured-VRAM mode, which caps residency at one resident agent.
+With a measured budget the planner would have placed every agent and evicted
+none, for reasons that are an accounting gap rather than a tuning choice — see
+the evidence doc's [pressure configuration](docs/superpowers/evidence/2026-08-14-g2-agent-switch.md#2-the-pressure-configuration--and-why-it-had-to-be-this)
+section and the first bullet under [Honest limits](#honest-limits). Phases 2–4
 (capability plane, edit-codec syscall ABI, semantic store, appliance boot) are
 not built. See [Honest limits](#honest-limits) before believing anything else.
 
@@ -35,8 +41,10 @@ not built. See [Honest limits](#honest-limits) before believing anything else.
 * **Computed windows, never configured ones.** `usable = min(training_ctx,
   (free_vram − weights − overhead) / kv_per_token, user_cap)`, and every agent
   is told which term bound it. GGUF geometry is parsed from the file.
-* **A real pager.** Deterministic residency planning against measured free
-  VRAM *before* anything is allocated; priority eviction with the arithmetic
+* **A real pager.** Deterministic residency planning against a measured VRAM
+  budget *before* anything is allocated — or, when the probe reports
+  unmeasured, against a documented cap of one resident agent, journaled as a
+  degradation; priority eviction with the arithmetic
   printed on refusal; KV images that round-trip through a RAM tier and an NVMe
   spill tier, digest-tagged so a changed model invalidates them into a cold
   start instead of a corrupt restore.
@@ -127,13 +135,30 @@ curl -s localhost:8181/agents -d '{"model":"qwen2.5-coder:7b-instruct-q8_0","win
 curl -s localhost:8181/agents/a1/infer -d '{"prompt":"hello","max_tokens":32}'
 ```
 
-Reproducing the gate:
+Reproducing the gate — the invocations verbatim, including the pressure setup
+without which the warm run produces no samples at all (and which the bench
+refuses to proceed without):
 
 ```bash
 cargo build --release -p bloomery-bench
-target/release/bloomery-bench switch --daemon http://127.0.0.1:8181 \
-  --model qwen2.5-coder:7b-instruct-q8_0 --agents 8 --rounds 7 --window 2048
-target/release/bloomery-bench report --journal /var/lib/bloomery/journal/boot-<ts>.jsonl
+
+# Both classes run against their own daemon boot, so each gets its own journal.
+# PATH holds no nvidia-smi: the VRAM probe then reports unmeasured and the pager
+# caps residency at one resident agent, which is what makes a switch a switch.
+mkdir -p /tmp/no-tools
+env PATH=/tmp/no-tools target/release/bloomery-daemon --config bloomery.toml
+
+# warm class
+target/release/bloomery-bench switch \
+  --daemon http://127.0.0.1:8181 --model qwen2.5-coder:7b-instruct-q8_0 \
+  --agents 8 --rounds 7 --window 2048 --prime-chars 6000 --max-tokens 8
+
+# cold class — restart the daemon first for a fresh journal
+target/release/bloomery-bench switch --cold \
+  --daemon http://127.0.0.1:8181 --model qwen2.5-coder:7b-instruct-q8_0 \
+  --agents 8 --rounds 7 --window 2048 --prime-chars 6000 --max-tokens 8
+
+target/release/bloomery-bench report --journal <data_dir>/journal/boot-<ts>.jsonl
 ```
 
 `report` is pure: point it at either committed journal in

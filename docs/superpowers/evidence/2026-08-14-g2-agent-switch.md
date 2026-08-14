@@ -9,10 +9,11 @@
 | warm | p95 ≤ **2000 ms** | **p95 32 ms**, p50 29 ms | 62× |
 | cold | p95 ≤ **5000 ms** | **p95 862 ms**, p50 834 ms | 5.8× |
 
-The cold class measures a switch whose weights are out of VRAM but whose GGUF
-is still in the OS page cache. An auxiliary probe of the other regime — page
-cache dropped as well, n=5, **not** a gate reading — measures **p95 5588 ms,
-p50 5435 ms**, i.e. *above* the 5000 ms ceiling. See
+The cold class measures a switch whose weights *and* KV image are out of VRAM
+but still in the OS page cache. An auxiliary probe with the page cache dropped
+(n=5, **not** a gate reading) measures **p95 5588 ms, p50 5435 ms** — *above*
+the 5000 ms ceiling — but it moved the weights side only; the cost of reading a
+KV image off NVMe media remains **unmeasured**. See
 [Page-cache caveat](#page-cache-caveat).
 
 ---
@@ -164,6 +165,17 @@ cells. Priming can only make the numbers worse, never better.
   the same journal: `SuspendSave` (nvme, ~65 MiB) ran 32–86 ms, median 50 ms.
   Adding it back would put cold p95 near 950 ms — still 5× inside the gate.
 
+**Scope, twice over.** (a) Residency was capped at one resident agent, so every
+switch here evicted exactly one victim. **Multi-victim eviction sequences — a
+placement whose `SchedulerDecision` names several agents at once — are
+unexercised by this run**, and nothing here says what one costs. (b) Both
+classes are *repeated measures*, not a survey: 56 = 8 agents × 7 laps, one
+model, one 2048-token window, one ~64.8 MiB image size, one box. It is 56
+repetitions of a single operation, which is what makes the tight spread (warm
+29–33 ms, cold 816–888 ms) unsurprising rather than reassuring. It is not 56
+scenarios, and it says nothing about other models, window sizes, image sizes or
+machines.
+
 ### 5. Resolution
 
 The journal records whole milliseconds. Warm samples of 5 ms and 29–33 ms sit
@@ -268,19 +280,25 @@ Component ops, from the same journals:
 | `ResumeLoad` (nvme) | cold | 56 | 5 / 5 / 6 | 67 967 556 |
 | `SuspendSave` (nvme) | cold | 63 | 32 / 50 / 86 | 67 967 556 |
 
-No `Refusal` and no `ContractViolation` appears in either journal: every one of
-the 120 inferences and 119 evictions the protocol asked for was served.
+No `Refusal` and no `ContractViolation` appears in either journal. Everything
+the protocol asked for was served: **135 inferences** (71 in the warm journal —
+8 primes, 56 lap steps, 7 reset agents; 64 in the cold journal — 8 primes and
+56 lap steps), **63 `EvictSave`** (all of them in the warm journal) and **70
+`SuspendSave`** (7 warm reset-agent page-outs, 63 cold page-outs inside
+`unload`).
 
 ---
 
 ## Page-cache caveat
 
-**The cold class above measures weights that were out of VRAM but still in the
-OS page cache.** `ModelLoaded` ran 811–884 ms for a 7723 MiB blob — roughly
-9 GB/s, which is host memory bandwidth, not NVMe. Nothing in the pinned
-protocol controls the page cache; the gate anticipated exactly this and
-required the caveat be stated. It is stated here with a number rather than a
-shrug.
+**The cold class above measures a switch in which *both* the weights and the KV
+image were out of VRAM but still in the OS page cache.** Both halves show it:
+`ModelLoaded` ran 811–884 ms for a 7723 MiB blob (~9 GB/s) and `ResumeLoad`
+read a 64.8 MiB image off "NVMe" in 5 ms (~13 GB/s). Those are host memory
+bandwidth, not NVMe media. Nothing in the pinned protocol controls the page
+cache; the gate anticipated exactly this and required the caveat be stated. It
+is stated here with numbers rather than a shrug — and, below, with an explicit
+note of which half is still unmeasured.
 
 **Auxiliary probe (n=5, not a gate reading).** Same daemon, same agent, same
 65 MiB image; before each switch the model was unloaded and
@@ -308,6 +326,17 @@ image (`sync` first — a dirty page cannot be dropped). Journal committed as
 increase, and **above the gate's 5000 ms cold ceiling.** A third datapoint from
 the pilot run, the first load of the session on a genuinely cold cache
 (including first-touch Vulkan warm-up), measured **11 317 ms**.
+
+**The probe moved the weights side only.** `ResumeLoad` in all five iterations
+measured **5 ms** — identical to the page-cache-warm cold run — so the
+`POSIX_FADV_DONTNEED` applied to the spilled `.kvimg` produced no measurable
+change and the image was still being served from memory. Whatever the cause
+(the pages were re-faulted before the read, or the advice was declined), the
+consequence is what matters: **the cost of reading a KV image off NVMe media
+is UNMEASURED by this run.** It is not "5 ms" and it is not "the same as
+warm" — it is a number nobody here has taken. This probe quantifies the
+weights-side page-cache penalty and nothing else, and any later claim about
+NVMe-tier restore cost needs its own instrument.
 
 So, plainly: a bloomery daemon that has been switching this model recently
 serves a cold switch in ~0.86 s and passes G2. The *first* cold switch after a
@@ -340,6 +369,16 @@ Recorded because they bound what the numbers mean, not as future work:
    used.
 
 ## Corrections
+
+**Shape of the run.** The task brief's example invocation was `--agents 4
+--rounds 30`; this run used `--agents 8 --rounds 7`. Same total (56 ≥ 50
+samples per class), different split, and the reason is a property of the
+protocol rather than of the numbers: one sample per lap — the lap-opening
+resume, which finds VRAM already vacated by the reset agent — contains no
+`EvictSave` and measures the restore half only. That fraction is exactly
+`1/agents`: 12.5% here (7 of 56), against 25% at `--agents 4` whatever the lap
+count. The change was made while designing the protocol, before the gate run,
+and moves the reading *toward* the more expensive population.
 
 The task brief's own pinned test asserted `p95 = 129` for the sample
 110…129 while its inline comment said "index 18", which is 128. The *formula*
