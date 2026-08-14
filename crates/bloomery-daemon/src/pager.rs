@@ -54,6 +54,15 @@ pub use status::{AgentInfo, AgentStatus, ModelStatus, StatusReport, TierStatus};
 /// operator's `config.overhead_mib` in via [`Pager::set_overhead_bytes`].
 const DEFAULT_OVERHEAD_BYTES: u64 = 0;
 
+/// VRAM reserved per resident context *on top of* its KV cache.
+///
+/// Zero by default for the same reason as [`DEFAULT_OVERHEAD_BYTES`]: the
+/// pager has measured nothing about this machine and will not invent a
+/// number. The daemon wires `config.ctx_overhead_mib` in via
+/// [`Pager::set_ctx_overhead_bytes`], and that config key carries the
+/// measured rationale.
+const DEFAULT_CTX_OVERHEAD_BYTES: u64 = 0;
+
 /// Offload every layer by default — llama.cpp clamps a too-large value down
 /// to the model's layer count. The pager's VRAM accounting assumes the KV
 /// cache lives on the GPU, so anything less would make its arithmetic a lie.
@@ -129,6 +138,9 @@ pub struct Pager<S: Substrate> {
     /// bloomery's static VRAM budget — see [`Pager::new`].
     free_vram: FreeVramFn,
     overhead_bytes: u64,
+    /// Per-context runtime reservation; see [`DEFAULT_CTX_OVERHEAD_BYTES`]
+    /// and [`Pager::set_ctx_overhead_bytes`].
+    ctx_overhead_bytes: u64,
     n_gpu_layers: u32,
     /// Monotonic: agent ids are the pager's to keep unique, because
     /// `plan_residency`'s behavior is unspecified for duplicate ids.
@@ -198,6 +210,7 @@ impl<S: Substrate> Pager<S> {
             models: HashMap::new(),
             free_vram,
             overhead_bytes: DEFAULT_OVERHEAD_BYTES,
+            ctx_overhead_bytes: DEFAULT_CTX_OVERHEAD_BYTES,
             n_gpu_layers: DEFAULT_N_GPU_LAYERS,
             next_agent_seq: 0,
             vram_unmeasured_logged: false,
@@ -227,6 +240,15 @@ impl<S: Substrate> Pager<S> {
 
     pub fn set_overhead_bytes(&mut self, bytes: u64) {
         self.overhead_bytes = bytes;
+    }
+
+    /// Sets what each resident context reserves beyond its KV cache.
+    ///
+    /// Applies to agents created *after* this call: `reserved_bytes` is
+    /// computed once, at creation, so an agent's reservation cannot change
+    /// under a placement decision that already read it.
+    pub fn set_ctx_overhead_bytes(&mut self, bytes: u64) {
+        self.ctx_overhead_bytes = bytes;
     }
 
     pub fn set_n_gpu_layers(&mut self, n: u32) {
@@ -488,11 +510,16 @@ impl<S: Substrate> Pager<S> {
             window_tokens: window.tokens,
             bound_by: bound_by.to_string(),
         };
+        // The KV cache alone. What residency plans against is
+        // `reserved_bytes` just below — see `Agent::reserved_bytes` for the
+        // measurement that separated the two.
+        let kv_bytes = u64::from(window.tokens).saturating_mul(kv_per_token);
         self.table.insert(Agent {
             id,
             model: model.to_string(),
             priority,
-            kv_bytes: u64::from(window.tokens).saturating_mul(kv_per_token),
+            kv_bytes,
+            reserved_bytes: kv_bytes.saturating_add(self.ctx_overhead_bytes),
             window,
             budget: Budget::new(budget_tokens),
             state: AgentState::Fresh,
@@ -747,7 +774,7 @@ impl<S: Substrate> Pager<S> {
                 window_tokens: a.window.tokens,
                 bound_by: bound_by_str(a.window.bound_by),
                 vram_unmeasured: a.window.vram_unmeasured,
-                kv_bytes: a.kv_bytes,
+                kv_bytes: a.reserved_bytes,
                 budget_granted: a.budget.granted(),
                 budget_spent: a.budget.spent(),
             })
@@ -768,7 +795,9 @@ impl<S: Substrate> Pager<S> {
         models.sort_by(|x, y| x.name.cmp(&y.name));
         StatusReport {
             free_vram_bytes: (self.free_vram)(),
-            resident_kv_bytes: self.resident_kv_bytes(),
+            overhead_bytes: self.overhead_bytes,
+            ctx_overhead_bytes: self.ctx_overhead_bytes,
+            resident_kv_bytes: self.resident_reserved_bytes(),
             loaded_weights_bytes: self.loaded_weights_bytes(),
             tier: self.tier.clone(),
             posting: self.posting,

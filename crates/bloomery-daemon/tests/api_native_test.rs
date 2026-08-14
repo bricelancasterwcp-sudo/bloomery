@@ -133,7 +133,17 @@ fn infer_residency_refusal_returns_409_with_arithmetic() {
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(v["error"], "refused");
     assert_eq!(v["needed"], PER_AGENT_KV_BYTES);
-    assert_eq!(v["free"], FREE_VRAM_BYTES - 4 * PER_AGENT_KV_BYTES);
+    // Task 5's live-run fix added the daemon-level overhead margin to the
+    // placement budget (it had only ever been in the window law), so the
+    // observed `free` is now short by exactly the fixture's
+    // `FIXTURE_OVERHEAD_BYTES`. Nothing about *why* this refuses changed —
+    // same-priority residents, `reclaimable: 0` — only the supply side of
+    // the arithmetic gained the term it was always meant to hold back.
+    const FIXTURE_OVERHEAD_BYTES: u64 = 16 * 1024 * 1024;
+    assert_eq!(
+        v["free"],
+        FREE_VRAM_BYTES - FIXTURE_OVERHEAD_BYTES - 4 * PER_AGENT_KV_BYTES
+    );
     assert_eq!(
         v["reclaimable"], 0,
         "same-priority residents are never evictable"

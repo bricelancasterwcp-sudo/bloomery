@@ -154,7 +154,9 @@ pub fn run(client: &Client, opts: &SwitchOpts) -> Result<Observed, String> {
 /// The per-agent footprint is the largest one among the workers, not the mean:
 /// the capacity that matters is how many of the *biggest* contexts fit, and
 /// the window law can hand different agents different windows if the binding
-/// term moves under them.
+/// term moves under them. `/status`'s per-agent `kv_bytes` carries the whole
+/// residency reservation (KV plus the per-context runtime overhead), which is
+/// exactly what placement charges.
 fn measure_pressure(
     client: &Client,
     opts: &SwitchOpts,
@@ -167,7 +169,17 @@ fn measure_pressure(
              accounting the pressure arithmetic rests on: {status}"
         )
     })?;
-    let kv_bytes_per_agent = status["agents"]
+    // Read, never assumed: the bench must divide by the same numbers
+    // `Pager::place` subtracts. The 2026-08-14 aborted run is the reason —
+    // a bench carrying its own copy of the per-context cost would have
+    // agreed with a pager that was wrong.
+    let overhead_bytes = status["overhead_bytes"].as_u64().ok_or_else(|| {
+        format!(
+            "/status has no overhead_bytes; this daemon predates the per-context reservation \
+             accounting the pressure arithmetic rests on: {status}"
+        )
+    })?;
+    let reserved_bytes_per_agent = status["agents"]
         .as_array()
         .map(|agents| {
             agents
@@ -184,8 +196,9 @@ fn measure_pressure(
         .unwrap_or(0);
     Pressure::compute(
         budget(&status),
+        overhead_bytes,
         weights_bytes,
-        kv_bytes_per_agent,
+        reserved_bytes_per_agent,
         opts.agents,
         opts.rounds,
         opts.cold,
@@ -205,8 +218,13 @@ fn budget(status: &serde_json::Value) -> Budget {
 fn status_line(client: &Client) -> Result<String, String> {
     let status = client.expect("GET", "/status", "", 200)?.json()?;
     Ok(format!(
-        "free_vram_bytes={} loaded_weights_bytes={} resident_kv_bytes={}",
-        status["free_vram_bytes"], status["loaded_weights_bytes"], status["resident_kv_bytes"]
+        "free_vram_bytes={} overhead_bytes={} ctx_overhead_bytes={} loaded_weights_bytes={} \
+         resident_kv_bytes={}",
+        status["free_vram_bytes"],
+        status["overhead_bytes"],
+        status["ctx_overhead_bytes"],
+        status["loaded_weights_bytes"],
+        status["resident_kv_bytes"]
     ))
 }
 

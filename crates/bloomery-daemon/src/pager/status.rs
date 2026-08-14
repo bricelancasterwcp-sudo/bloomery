@@ -25,8 +25,20 @@ pub struct StatusReport {
     /// bloomery's static VRAM budget (see `Pager::new`), not a live driver
     /// read; `None` = unmeasured, not zero.
     pub free_vram_bytes: Option<u64>,
-    /// Sum of the KV footprints the pager believes are currently resident.
+    /// Sum of what the pager believes currently-resident contexts
+    /// **reserve**: KV cache plus the per-context runtime overhead
+    /// ([`StatusReport::ctx_overhead_bytes`]). The name is Phase 1's and is
+    /// kept for wire compatibility; the value is the residency term, which
+    /// is the number placement decides on.
     pub resident_kv_bytes: u64,
+    /// The daemon-level VRAM margin held back from *both* the window law and
+    /// the placement budget (`config.overhead_mib`).
+    pub overhead_bytes: u64,
+    /// What each resident context reserves beyond its KV cache
+    /// (`config.ctx_overhead_mib`) — llama.cpp's per-context compute and
+    /// host buffers, which the 2026-08-14 natural-pressure run measured at
+    /// 304 MiB + 30 MiB against an 896 MiB KV cache.
+    pub ctx_overhead_bytes: u64,
     /// Sum of `weights_bytes` over every model whose weights are currently
     /// loaded into the substrate — the weights term of the reservation
     /// budget (Task 3: `avail = budget − Σ loaded weights − Σ resident kv`,
@@ -66,6 +78,11 @@ pub struct AgentStatus {
     pub bound_by: &'static str,
     /// True when this agent's window was computed without a VRAM measurement.
     pub vram_unmeasured: bool,
+    /// What this agent reserves when resident: KV cache plus
+    /// [`StatusReport::ctx_overhead_bytes`]. Name kept from Phase 1; the
+    /// value now includes the reservation, because that is what residency
+    /// plans against and reporting the bare KV here would be a number that
+    /// looks like the accounting and is not.
     pub kv_bytes: u64,
     pub budget_granted: u64,
     pub budget_spent: u64,

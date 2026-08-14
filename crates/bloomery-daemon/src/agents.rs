@@ -30,8 +30,21 @@ pub struct Agent {
     pub priority: u8,
     pub window: bloomery_core::geometry::Window,
     pub budget: bloomery_core::budget::Budget,
-    /// `window.tokens * kv_per_token` for this agent's model.
+    /// `window.tokens * kv_per_token` for this agent's model — the KV cache
+    /// alone. **Not** what residency plans against; see [`Agent::reserved_bytes`].
     pub kv_bytes: u64,
+    /// What making this agent resident actually costs the VRAM budget:
+    /// `kv_bytes` plus the per-context runtime overhead
+    /// (`Pager::set_ctx_overhead_bytes`).
+    ///
+    /// The two are different numbers because llama.cpp allocates more than a
+    /// KV cache per context: the 2026-08-14 natural-pressure run measured a
+    /// 304 MiB `Vulkan0` compute buffer and a 30 MiB host buffer alongside
+    /// every 896 MiB KV cache, and planning against the KV alone put six
+    /// contexts where five fit and OOM'd the device. Every residency
+    /// decision — placement, eviction sufficiency, the time-sharing
+    /// tiebreak — reads this field, never `kv_bytes`.
+    pub reserved_bytes: u64,
     pub state: AgentState,
 }
 
@@ -85,6 +98,12 @@ impl AgentTable {
     /// consumes. Task 12 does not yet track in-flight requests, so `busy`
     /// is always reported `false` here; a later task that adds request
     /// tracking is responsible for threading a real value through.
+    ///
+    /// The planner's `kv_bytes` field is fed [`Agent::reserved_bytes`], not
+    /// [`Agent::kv_bytes`]. The planner is untouched by that: its field means
+    /// "bytes this residency holds, and therefore bytes freed by evicting
+    /// it", and the per-context runtime overhead satisfies both halves —
+    /// llama.cpp frees the compute buffer with the context.
     pub fn residents(&self) -> Vec<bloomery_core::scheduler::Resident> {
         self.agents
             .values()
@@ -92,7 +111,7 @@ impl AgentTable {
                 AgentState::Resident { .. } => Some(bloomery_core::scheduler::Resident {
                     id: a.id.clone(),
                     priority: a.priority,
-                    kv_bytes: a.kv_bytes,
+                    kv_bytes: a.reserved_bytes,
                     busy: false,
                 }),
                 _ => None,

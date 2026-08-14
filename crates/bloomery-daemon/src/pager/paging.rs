@@ -23,7 +23,13 @@ use super::journal as jrnl;
 use super::{Pager, PagerError};
 
 impl<S: Substrate> Pager<S> {
-    pub(super) fn resident_kv_bytes(&self) -> u64 {
+    /// Sum of what every resident context **reserves** — KV plus the
+    /// per-context runtime overhead (`Agent::reserved_bytes`), because
+    /// `AgentTable::residents` hands the planner the reserved figure. Named
+    /// for the budget term it is, not for the KV half of it; `/status`
+    /// reports it under `resident_kv_bytes` for wire compatibility and says
+    /// there what it contains.
+    pub(super) fn resident_reserved_bytes(&self) -> u64 {
         self.table
             .residents()
             .iter()
@@ -126,12 +132,18 @@ impl<S: Substrate> Pager<S> {
     /// instead — see that function's doc comment for the full rule and the
     /// determinism argument.
     fn place(&mut self, id: &str) -> Result<(), PagerError> {
-        let (priority, kv_bytes, window_tokens, model) = {
+        let (priority, kv_bytes, reserved_bytes, window_tokens, model) = {
             let a = self
                 .table
                 .get(id)
                 .ok_or_else(|| PagerError::UnknownAgent(id.to_string()))?;
-            (a.priority, a.kv_bytes, a.window.tokens, a.model.clone())
+            (
+                a.priority,
+                a.kv_bytes,
+                a.reserved_bytes,
+                a.window.tokens,
+                a.model.clone(),
+            )
         };
         let (model_loaded, weights_bytes) = {
             let entry = self
@@ -146,10 +158,12 @@ impl<S: Substrate> Pager<S> {
         // extra here — its weights are already charged via
         // `loaded_weights_bytes` on the supply side below.
         let weights_term = if model_loaded { 0 } else { weights_bytes };
-        let demand = kv_bytes.saturating_add(weights_term);
+        // The demand side carries what this placement will actually hold:
+        // the whole per-context reservation, not the KV half of it.
+        let demand = reserved_bytes.saturating_add(weights_term);
 
         let residents = self.table.residents();
-        let resident_kv = self.resident_kv_bytes();
+        let resident_reserved = self.resident_reserved_bytes();
         let loaded_weights = self.loaded_weights_bytes();
         let req = ResidencyRequest {
             id: id.to_string(),
@@ -161,10 +175,12 @@ impl<S: Substrate> Pager<S> {
         // fallback plans against a flat `0` free bytes (the residency-
         // count-cap-of-one), so `avail` is `0` there too — same number,
         // computed once, rather than a second `0` literal that could drift.
+        let overhead = self.overhead_bytes;
         let avail = match budget {
             Some(budget) => budget
+                .saturating_sub(overhead)
                 .saturating_sub(loaded_weights)
-                .saturating_sub(resident_kv),
+                .saturating_sub(resident_reserved),
             None => 0,
         };
         let placement = match budget {
@@ -222,9 +238,12 @@ impl<S: Substrate> Pager<S> {
                     // unmeasured instead.
                     let detail = match budget {
                         Some(budget) => format!(
-                            "residency: weights {weights_term} B + kv {kv_bytes} B vs budget \
-                             {budget} B − loaded {loaded_weights} B − resident {resident_kv} B \
-                             (needed {needed} B, free {free} B, reclaimable {reclaimable} B)"
+                            "residency: weights {weights_term} B + reserved {reserved_bytes} B \
+                             (kv {kv_bytes} B + ctx overhead {ctx_overhead} B) vs budget \
+                             {budget} B − overhead {overhead} B − loaded {loaded_weights} B − \
+                             resident {resident_reserved} B (needed {needed} B, free {free} B, \
+                             reclaimable {reclaimable} B)",
+                            ctx_overhead = reserved_bytes.saturating_sub(kv_bytes)
                         ),
                         None => format!(
                             "residency: budget unmeasured (residency capped at 1 agent); \

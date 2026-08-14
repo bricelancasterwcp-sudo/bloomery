@@ -194,6 +194,10 @@ fn agent_table_insert_get_remove_and_residents() {
         window,
         budget: Budget::new(200_000),
         kv_bytes: 123_456,
+        // Deliberately different from `kv_bytes`: `residents()` must hand the
+        // planner the *reserved* figure, and two equal numbers could not tell
+        // the two fields apart.
+        reserved_bytes: 223_456,
         state: AgentState::Resident { ctx: 7 },
     };
     table.insert(agent);
@@ -207,7 +211,10 @@ fn agent_table_insert_get_remove_and_residents() {
     let residents: Vec<Resident> = table.residents();
     assert_eq!(residents.len(), 1);
     assert_eq!(residents[0].id, "a1");
-    assert_eq!(residents[0].kv_bytes, 123_456);
+    assert_eq!(
+        residents[0].kv_bytes, 223_456,
+        "the planner is fed reserved_bytes, not the bare KV"
+    );
 
     let removed = table.remove("a1");
     assert!(removed.is_some());

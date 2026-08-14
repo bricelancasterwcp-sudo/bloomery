@@ -23,8 +23,16 @@
 //! # The prediction
 //!
 //! `capacity` is how many agent contexts fit alongside the loaded weights:
-//! `(budget − weights) / kv_per_agent`, or the documented cap of
-//! [`UNMEASURED_CAPACITY`] when the probe measured nothing.
+//! `(budget − overhead − weights) / reserved_per_agent`, or the documented cap
+//! of [`UNMEASURED_CAPACITY`] when the probe measured nothing.
+//!
+//! Every term is read from `/status`, never assumed, and every one of them is
+//! a term the pager itself subtracts in `Pager::place`. `reserved_per_agent`
+//! is the agent's whole residency reservation — KV cache *plus* the
+//! per-context runtime overhead — because that is what placement charges.
+//! The 2026-08-14 aborted run is why this is spelled out: the bench and the
+//! pager both divided by the bare KV, agreed with each other, and were both
+//! wrong by a 304 MiB compute buffer per context.
 //!
 //! One warm lap opens with the single-use reset agent, which evicts the
 //! lowest-priority resident and then suspends, handing that slot back. So a
@@ -75,8 +83,12 @@ pub const UNMEASURED_CAPACITY: u64 = 1;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pressure {
     pub budget: Budget,
+    /// The daemon-level margin held back from the placement budget.
+    pub overhead_bytes: u64,
     pub weights_bytes: u64,
-    pub kv_bytes_per_agent: u64,
+    /// What one agent reserves when resident: KV plus per-context overhead,
+    /// as `/status` reports it per agent.
+    pub reserved_bytes_per_agent: u64,
     pub agents: usize,
     pub rounds: usize,
     pub cold: bool,
@@ -89,19 +101,20 @@ pub struct Pressure {
 }
 
 impl Pressure {
-    /// Builds the arithmetic. `kv_bytes_per_agent` of zero is an instrument
+    /// Builds the arithmetic. A reserved figure of zero is an instrument
     /// failure, not a divide-by-zero: `/status` reporting no KV footprint for
     /// an agent it just created means the numbers this check rests on are not
     /// the numbers it thinks they are.
     pub fn compute(
         budget: Budget,
+        overhead_bytes: u64,
         weights_bytes: u64,
-        kv_bytes_per_agent: u64,
+        reserved_bytes_per_agent: u64,
         agents: usize,
         rounds: usize,
         cold: bool,
     ) -> Result<Pressure, String> {
-        if kv_bytes_per_agent == 0 {
+        if reserved_bytes_per_agent == 0 {
             return Err(
                 "/status reports kv_bytes = 0 for the bench's agents; the pressure arithmetic \
                  has nothing to divide by and the run's sample count could not be checked"
@@ -110,7 +123,12 @@ impl Pressure {
         }
         let capacity_contexts = match budget {
             Budget::Unmeasured => UNMEASURED_CAPACITY,
-            Budget::Measured(bytes) => bytes.saturating_sub(weights_bytes) / kv_bytes_per_agent,
+            Budget::Measured(bytes) => {
+                bytes
+                    .saturating_sub(overhead_bytes)
+                    .saturating_sub(weights_bytes)
+                    / reserved_bytes_per_agent
+            }
         };
         let predicted_per_lap = if cold {
             agents as u64
@@ -124,8 +142,9 @@ impl Pressure {
         };
         Ok(Pressure {
             budget,
+            overhead_bytes,
             weights_bytes,
-            kv_bytes_per_agent,
+            reserved_bytes_per_agent,
             agents,
             rounds,
             cold,
@@ -165,18 +184,21 @@ impl Pressure {
         };
         format!(
             "  budget            {budget}\n  \
+             daemon overhead   {} bytes ({})\n  \
              loaded weights    {} bytes ({})\n  \
-             kv per agent      {} bytes ({})\n  \
+             reserved / agent  {} bytes ({}) — kv + per-context overhead\n  \
              capacity          {} contexts alongside the weights\n  \
              class             {}\n  \
              agents/rounds     {} / {}\n  \
              predicted         {} restores per lap, {} for the run\n  \
              floor             {} restores per lap, {} for the run (a floor, \
              not an expectation: over-delivery is not an error)",
+            self.overhead_bytes,
+            mib(self.overhead_bytes),
             self.weights_bytes,
             mib(self.weights_bytes),
-            self.kv_bytes_per_agent,
-            mib(self.kv_bytes_per_agent),
+            self.reserved_bytes_per_agent,
+            mib(self.reserved_bytes_per_agent),
             self.capacity_contexts,
             if self.cold { "cold" } else { "warm" },
             self.agents,
@@ -273,46 +295,51 @@ mod tests {
     use super::*;
 
     const GIB: u64 = 1024 * 1024 * 1024;
+    const MIB: u64 = 1024 * 1024;
     /// 16384 tokens at 57344 bytes per token — the live 2a run's agent.
     const KV: u64 = 939_524_096;
+    /// KV plus the 384 MiB per-context reservation the daemon wires by
+    /// default: what one of those agents actually costs residency.
+    const RESERVED: u64 = KV + 384 * MIB;
 
     fn measured(agents: usize, rounds: usize, cold: bool) -> Pressure {
         Pressure::compute(
             Budget::Measured(14 * GIB),
+            1024 * MIB,
             8 * GIB + GIB / 10,
-            KV,
+            RESERVED,
             agents,
             rounds,
             cold,
         )
-        .expect("nonzero kv")
+        .expect("nonzero reservation")
     }
 
     #[test]
     fn measured_budget_capacity_is_budget_minus_weights_over_kv() {
         let p = measured(8, 8, false);
-        // (14 − 8.1) GiB = 5.9 GiB, 0.875 GiB per context -> 6.
-        assert_eq!(p.capacity_contexts, 6);
+        // (14 − 1 − 8.1) GiB = 4.9 GiB over a 1.25 GiB reservation -> 3.
+        assert_eq!(p.capacity_contexts, 3);
     }
 
     #[test]
     fn warm_lap_restores_every_worker_the_capacity_cannot_hold() {
         let p = measured(8, 8, false);
-        assert_eq!(p.predicted_per_lap, 3);
-        assert_eq!(p.predicted(), 24);
+        assert_eq!(p.predicted_per_lap, 6);
+        assert_eq!(p.predicted(), 48);
     }
 
     #[test]
     fn warm_floor_sits_one_restore_per_lap_below_the_prediction() {
         let p = measured(8, 8, false);
-        assert_eq!(p.floor_per_lap, 2);
-        assert_eq!(p.floor(), 16);
+        assert_eq!(p.floor_per_lap, 5);
+        assert_eq!(p.floor(), 40);
     }
 
     #[test]
     fn unmeasured_budget_predicts_the_phase_one_expectation() {
-        let p =
-            Pressure::compute(Budget::Unmeasured, 8 * GIB, KV, 8, 7, false).expect("nonzero kv");
+        let p = Pressure::compute(Budget::Unmeasured, 0, 8 * GIB, RESERVED, 8, 7, false)
+            .expect("nonzero reservation");
         assert_eq!(p.capacity_contexts, UNMEASURED_CAPACITY);
         assert_eq!(p.predicted(), 56, "one restore per worker per lap");
         assert_eq!(p.floor(), 49);
@@ -328,8 +355,8 @@ mod tests {
     #[test]
     fn a_budget_that_holds_every_context_has_no_pressure() {
         // 9 contexts fit and only 8 agents plus the reset agent exist.
-        let p =
-            Pressure::compute(Budget::Measured(9 * KV), 0, KV, 8, 8, false).expect("nonzero kv");
+        let p = Pressure::compute(Budget::Measured(9 * RESERVED), 0, 0, RESERVED, 8, 8, false)
+            .expect("nonzero reservation");
         assert_eq!(p.capacity_contexts, 9);
         assert_eq!(p.predicted_per_lap, 0);
         assert!(!p.has_pressure());
@@ -337,15 +364,15 @@ mod tests {
 
     #[test]
     fn a_budget_one_context_short_still_has_pressure() {
-        let p =
-            Pressure::compute(Budget::Measured(8 * KV), 0, KV, 8, 8, false).expect("nonzero kv");
+        let p = Pressure::compute(Budget::Measured(8 * RESERVED), 0, 0, RESERVED, 8, 8, false)
+            .expect("nonzero reservation");
         assert_eq!(p.predicted_per_lap, 1);
         assert!(p.has_pressure());
     }
 
     #[test]
     fn zero_kv_is_an_instrument_failure_not_a_division() {
-        let err = Pressure::compute(Budget::Measured(14 * GIB), 0, 0, 8, 8, false)
+        let err = Pressure::compute(Budget::Measured(14 * GIB), 0, 0, 0, 8, 8, false)
             .expect_err("kv_bytes = 0 must be refused");
         assert!(err.contains("kv_bytes = 0"), "{err}");
     }
@@ -353,20 +380,20 @@ mod tests {
     #[test]
     fn a_run_that_meets_its_floor_passes() {
         let p = measured(8, 8, false);
-        let observed = Observed { warm: 16, cold: 0 };
+        let observed = Observed { warm: 40, cold: 0 };
         assert_eq!(check(&p, &observed, "{}"), Ok(()));
     }
 
     #[test]
     fn a_run_below_its_floor_fails_with_the_whole_arithmetic() {
         let p = measured(8, 8, false);
-        let observed = Observed { warm: 15, cold: 0 };
+        let observed = Observed { warm: 39, cold: 0 };
         let err = check(&p, &observed, "{\"loaded_weights_bytes\":8697308774}")
-            .expect_err("15 samples is below the floor of 16");
-        assert!(err.contains("below the floor of 16"), "{err}");
-        assert!(err.contains("warm 15 + cold 0 = 15"), "{err}");
+            .expect_err("39 samples is below the floor of 40");
+        assert!(err.contains("below the floor of 40"), "{err}");
+        assert!(err.contains("warm 39 + cold 0 = 39"), "{err}");
         assert!(err.contains("loaded_weights_bytes"), "{err}");
-        assert!(err.contains("capacity          6 contexts"), "{err}");
+        assert!(err.contains("capacity          3 contexts"), "{err}");
     }
 
     #[test]
@@ -380,7 +407,7 @@ mod tests {
     fn a_warm_run_that_produced_only_cold_samples_fails() {
         let p = measured(8, 8, false);
         // Above the floor in total, but nothing in the class it ran for.
-        let observed = Observed { warm: 0, cold: 24 };
+        let observed = Observed { warm: 0, cold: 48 };
         let err = check(&p, &observed, "{}").expect_err("wrong class must not pass");
         assert!(
             err.contains("none of them landed in the warm class"),
@@ -393,7 +420,7 @@ mod tests {
         // A warm run whose images spilled to NVMe still switched; the floor is
         // about pressure, and the class check below is what catches the mix.
         let p = measured(8, 8, false);
-        let observed = Observed { warm: 1, cold: 15 };
+        let observed = Observed { warm: 1, cold: 39 };
         assert_eq!(check(&p, &observed, "{}"), Ok(()));
     }
 }

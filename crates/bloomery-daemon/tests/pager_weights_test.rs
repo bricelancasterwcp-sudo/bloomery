@@ -206,10 +206,17 @@ fn a_second_models_weights_that_cannot_fit_are_refused_with_the_arithmetic() {
     // M-2: pin the *rendered* detail string byte-for-byte, not just "it
     // mentions weights somewhere" — this is what would have caught I-1
     // (the unmeasured-budget branch fabricating a "budget 0 B" term).
+    // Task 5's live-run fix widened this rendering: the demand side now names
+    // the per-context reservation and its split, and the supply side names the
+    // daemon-level overhead margin. Both new terms are `0 B` in this fixture
+    // (it wires neither), and every other number is byte-identical to what
+    // Task 3 pinned — the arithmetic did not move, the sentence explaining it
+    // did.
     let expected_detail = format!(
-        "residency: weights {weights_b} B + kv {KV_BYTES} B vs budget {budget} B − loaded \
-         {weights_a} B − resident {KV_BYTES} B (needed {expected_needed} B, free \
-         {expected_free} B, reclaimable {expected_reclaimable} B)",
+        "residency: weights {weights_b} B + reserved {KV_BYTES} B (kv {KV_BYTES} B + ctx \
+         overhead 0 B) vs budget {budget} B − overhead 0 B − loaded {weights_a} B − resident \
+         {KV_BYTES} B (needed {expected_needed} B, free {expected_free} B, reclaimable \
+         {expected_reclaimable} B)",
         expected_needed = weights_b + KV_BYTES,
         expected_free = budget - weights_a - KV_BYTES,
         expected_reclaimable = KV_BYTES,
