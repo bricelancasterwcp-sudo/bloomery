@@ -10,8 +10,8 @@
 
 use std::time::Instant;
 
-use bloomery_core::journal::PagerOpKind;
-use bloomery_core::scheduler::{plan_residency, Placement, ResidencyRequest};
+use bloomery_core::journal::{AgentId, PagerOpKind};
+use bloomery_core::scheduler::{plan_residency, Placement, ResidencyRequest, Resident};
 use bloomery_substrate::{
     CtxHandle, ModelHandle, Substrate, SubstrateError, STATE_SIZE_MISMATCH, WINDOW_EXCEEDED,
 };
@@ -109,6 +109,14 @@ impl<S: Substrate> Pager<S> {
     /// That is the point: memory pressure is decided from measured numbers
     /// before allocation, never inferred from an allocation that blew up —
     /// in particular, a weights-refusal never calls `load_model`.
+    ///
+    /// **The equal-priority tiebreak (Task 4).** A refusal the frozen
+    /// planner hands back is not always final: [`Pager::try_time_share`]
+    /// gets first look at it, and when every resident in the way is idle
+    /// and exactly `id`'s own priority, a refusal that has already waited
+    /// out the time-sharing quantum turns into an eviction of the LRU one
+    /// instead — see that function's doc comment for the full rule and the
+    /// determinism argument.
     fn place(&mut self, id: &str) -> Result<(), PagerError> {
         let (priority, kv_bytes, window_tokens, model) = {
             let a = self
@@ -152,8 +160,11 @@ impl<S: Substrate> Pager<S> {
             None => plan_residency(&residents, &req, 0),
         };
 
-        match placement {
-            Placement::Fits => jrnl::scheduler_decision(&mut self.journal, id, "fits", &[]),
+        let outcome = match placement {
+            Placement::Fits => {
+                jrnl::scheduler_decision(&mut self.journal, id, "fits", &[])?;
+                Ok(())
+            }
             Placement::Evict(victims) => {
                 jrnl::scheduler_decision(&mut self.journal, id, "evict", &victims)?;
                 for victim in &victims {
@@ -166,47 +177,130 @@ impl<S: Substrate> Pager<S> {
                 free,
                 reclaimable,
             } => {
-                jrnl::scheduler_decision(&mut self.journal, id, "refuse", &[])?;
-                // `Refusal` is token-shaped, so the residency arithmetic (in
-                // bytes) rides in `detail` rather than being rounded into a
-                // token field it doesn't belong in. The weights/kv/budget
-                // breakdown is spelled out explicitly (law 2: the
-                // arithmetic, printed) rather than left implicit in
-                // `needed`/`free`/`reclaimable` alone, which cannot show
-                // *why* — a reader should not have to re-derive that a cold
-                // model's weights were the reason this refused.
-                //
-                // `budget` is `None`-vs-zero honest (law 5): an unmeasured
-                // budget never fabricates a `budget 0 B` term or a
-                // subtraction this branch never actually performed (`avail`
-                // was planned as the residency-count-cap-of-one's flat `0`,
-                // not derived from `budget − loaded − resident`) — it says
-                // plainly that the budget is unmeasured instead.
-                let detail = match budget {
-                    Some(budget) => format!(
-                        "residency: weights {weights_term} B + kv {kv_bytes} B vs budget \
-                         {budget} B − loaded {loaded_weights} B − resident {resident_kv} B \
-                         (needed {needed} B, free {free} B, reclaimable {reclaimable} B)"
-                    ),
-                    None => format!(
-                        "residency: budget unmeasured (residency capped at 1 agent); \
-                         needed {needed} B, reclaimable {reclaimable} B"
-                    ),
-                };
-                jrnl::refusal(
-                    &mut self.journal,
-                    id,
-                    u64::from(window_tokens),
-                    window_tokens,
-                    detail,
-                )?;
-                Err(PagerError::Refused {
-                    needed,
-                    free,
-                    reclaimable,
-                })
+                if let Some((victim, waited_ms)) = self.try_time_share(id, priority, &residents) {
+                    jrnl::scheduler_decision(
+                        &mut self.journal,
+                        id,
+                        &format!("evict_timeshare(waited_{waited_ms}ms)"),
+                        std::slice::from_ref(&victim),
+                    )?;
+                    self.evict(&victim)?;
+                    Ok(())
+                } else {
+                    jrnl::scheduler_decision(&mut self.journal, id, "refuse", &[])?;
+                    // `Refusal` is token-shaped, so the residency arithmetic
+                    // (in bytes) rides in `detail` rather than being rounded
+                    // into a token field it doesn't belong in. The
+                    // weights/kv/budget breakdown is spelled out explicitly
+                    // (law 2: the arithmetic, printed) rather than left
+                    // implicit in `needed`/`free`/`reclaimable` alone, which
+                    // cannot show *why* — a reader should not have to
+                    // re-derive that a cold model's weights were the reason
+                    // this refused.
+                    //
+                    // `budget` is `None`-vs-zero honest (law 5): an
+                    // unmeasured budget never fabricates a `budget 0 B` term
+                    // or a subtraction this branch never actually performed
+                    // (`avail` was planned as the residency-count-cap-of-one's
+                    // flat `0`, not derived from `budget − loaded −
+                    // resident`) — it says plainly that the budget is
+                    // unmeasured instead.
+                    let detail = match budget {
+                        Some(budget) => format!(
+                            "residency: weights {weights_term} B + kv {kv_bytes} B vs budget \
+                             {budget} B − loaded {loaded_weights} B − resident {resident_kv} B \
+                             (needed {needed} B, free {free} B, reclaimable {reclaimable} B)"
+                        ),
+                        None => format!(
+                            "residency: budget unmeasured (residency capped at 1 agent); \
+                             needed {needed} B, reclaimable {reclaimable} B"
+                        ),
+                    };
+                    jrnl::refusal(
+                        &mut self.journal,
+                        id,
+                        u64::from(window_tokens),
+                        window_tokens,
+                        detail,
+                    )?;
+                    Err(PagerError::Refused {
+                        needed,
+                        free,
+                        reclaimable,
+                    })
+                }
             }
+        };
+        // Task 4: any placement that actually succeeds — whether by fitting
+        // outright, the frozen planner's own eviction, or this file's
+        // time-sharing tiebreak — clears `id`'s waiting mark. Without this,
+        // a mark from a long-past, unrelated stand-off would sit in the map
+        // forever and make some future, otherwise-ordinary refusal look
+        // like it had already waited a full quantum the instant it started
+        // (pinned by `pager_timeshare_test.rs::successful_placement_clears_the_waiting_tracker`).
+        if outcome.is_ok() {
+            self.waiting_since.remove(id);
         }
+        outcome
+    }
+
+    /// The equal-priority LRU time-sharing tiebreak (Phase 2a spec §2 item
+    /// 4, Task 4).
+    ///
+    /// **The spec rule.** `plan_residency` (frozen) only ever evicts a
+    /// resident whose priority is *strictly less* than the requester's —
+    /// two equal-priority agents contending for the same room is therefore
+    /// a refusal the planner alone can never resolve, no matter how long
+    /// either one waits. This helper is the pager's own layer on top: when
+    /// a refusal is *purely* equal-priority (every resident blocking it is
+    /// idle *and* exactly the request's own priority — a single
+    /// higher-priority or busy resident anywhere in the mix disqualifies
+    /// it, and it stays a plain refusal forever), the first such refusal
+    /// for `id` starts a clock (`waiting_since`); once a later attempt has
+    /// waited at least `time_share_quantum_ms`, this returns the
+    /// least-recently-used equal-priority resident as the victim — last-use
+    /// being the clock reading at that resident's most recent successful
+    /// `infer` completion (`last_use`), ties broken by lexical id — so
+    /// `place` can evict it through the exact same `evict` path
+    /// `Placement::Evict` uses (same `EvictSave` journal shape). This is a
+    /// *single*-victim tiebreak, not `plan_residency`'s iterative
+    /// accumulation: the spec names "the" LRU resident, and every scenario
+    /// this was built against is satisfied by freeing exactly one.
+    ///
+    /// **Determinism.** Every timestamp this function reads comes from
+    /// `self.clock` (see [`ClockFn`](super::ClockFn)) — never a bare
+    /// `Instant::now()` — and `waiting_since`/`last_use` are plain,
+    /// deterministically-updated maps. So the same sequence of clock
+    /// readings, fed through the same sequence of calls, always produces
+    /// the same tiebreak decision: replayable in tests with a fake clock,
+    /// and never dependent on real wall-clock jitter in production.
+    fn try_time_share(
+        &mut self,
+        id: &str,
+        req_priority: u8,
+        residents: &[Resident],
+    ) -> Option<(AgentId, u64)> {
+        let qualifies = !residents.is_empty()
+            && residents
+                .iter()
+                .all(|r| !r.busy && r.priority == req_priority);
+        if !qualifies {
+            return None;
+        }
+        let now = (self.clock)();
+        let started = *self.waiting_since.entry(id.to_string()).or_insert(now);
+        let waited_ms = now.saturating_sub(started);
+        if waited_ms < self.time_share_quantum_ms {
+            return None;
+        }
+        residents
+            .iter()
+            .min_by(|a, b| {
+                let a_use = self.last_use.get(&a.id).copied().unwrap_or(0);
+                let b_use = self.last_use.get(&b.id).copied().unwrap_or(0);
+                a_use.cmp(&b_use).then_with(|| a.id.cmp(&b.id))
+            })
+            .map(|victim| (victim.id.clone(), waited_ms))
     }
 
     /// Evicts a victim: its image goes to RAM (cheapest to page back in),

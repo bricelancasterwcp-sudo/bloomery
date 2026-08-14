@@ -134,6 +134,7 @@ fn run(config: Config, journal: Journal) -> ! {
     pager.set_defaults(config.default_priority, config.default_budget_tokens);
     pager.set_allow_unprofiled(config.allow_unprofiled);
     pager.set_tier(&config.tier.name, config.tier.emulated);
+    pager.set_time_share_quantum_ms(config.time_share_quantum_secs.saturating_mul(1000));
 
     // Unprofiled on purpose: POST is the only source of a profile, and it
     // cannot run until this daemon is serving.

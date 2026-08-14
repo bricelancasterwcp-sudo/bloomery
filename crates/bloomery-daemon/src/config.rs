@@ -31,6 +31,15 @@ fn default_budget_tokens() -> u64 {
     200_000
 }
 
+/// Task 4's equal-priority time-sharing quantum, in seconds — how long a
+/// qualifying refusal waits before the pager takes the LRU equal-priority
+/// resident anyway. Matches `pager::DEFAULT_TIME_SHARE_QUANTUM_MS` (30s);
+/// `main.rs` wires this through `Pager::set_time_share_quantum_ms` as
+/// milliseconds.
+fn default_time_share_quantum_secs() -> u64 {
+    30
+}
+
 /// `pub(crate)` so `post.rs` builds its test runner against the same
 /// spelling this config defaults to, rather than a second literal that
 /// could drift from it.
@@ -55,6 +64,8 @@ pub struct Config {
     pub default_budget_tokens: u64,
     #[serde(default)]
     pub allow_unprofiled: bool,
+    #[serde(default = "default_time_share_quantum_secs")]
+    pub time_share_quantum_secs: u64,
     pub assay: AssayConfig,
 }
 

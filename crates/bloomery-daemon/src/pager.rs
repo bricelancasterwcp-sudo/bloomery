@@ -29,6 +29,7 @@ mod status;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use bloomery_core::budget::{Budget, BudgetExhausted};
 use bloomery_core::geometry::{kv_bytes_per_token, usable_window, GeometryInput};
@@ -72,12 +73,28 @@ const CHARS_PER_TOKEN: u64 = 3;
 const DEFAULT_PRIORITY: u8 = 100;
 const DEFAULT_BUDGET_TOKENS: u64 = 200_000;
 
+/// Default equal-priority time-sharing quantum (Task 4, spec §2 item 4):
+/// how long a qualifying refusal must wait before the pager takes the
+/// least-recently-used equal-priority resident anyway. `main.rs` wires the
+/// operator's `config.time_share_quantum_secs` in via
+/// [`Pager::set_time_share_quantum_ms`].
+const DEFAULT_TIME_SHARE_QUANTUM_MS: u64 = 30_000;
+
 /// Source of bloomery's static VRAM budget — see [`Pager::new`].
 ///
 /// `Send + Sync` from the start: Task 14 shares one pager across request
 /// threads behind a lock, and adding the bounds later would be a breaking
 /// change to every caller that built one.
 pub type FreeVramFn = Box<dyn Fn() -> Option<u64> + Send + Sync>;
+
+/// The pager's one source of "now" — monotonic milliseconds, never wall
+/// time. `Pager::new` closes over an `Instant` captured at construction and
+/// reports its own elapsed time by default; `set_clock` swaps in a
+/// deterministic fake for tests. Every scheduling decision that needs a
+/// timestamp (Task 4's time-sharing tiebreak) reads through this closure —
+/// see `paging::try_time_share`'s doc comment for the determinism argument
+/// this exists to support.
+pub type ClockFn = Box<dyn Fn() -> u64 + Send + Sync>;
 
 /// A registered model: its file, geometry, blob identity, optional profile,
 /// and the substrate handle once its weights are actually loaded.
@@ -128,6 +145,24 @@ pub struct Pager<S: Substrate> {
     /// daemon wires one: an undeclared tier is reported as unknown, never
     /// invented (law 5's None-vs-zero, applied to a label).
     tier: Option<TierStatus>,
+    /// The pager's one clock — see [`ClockFn`]. Defaults to an `Instant`
+    /// captured at [`Pager::new`]; [`Pager::set_clock`] swaps in a fake for
+    /// deterministic tests.
+    clock: ClockFn,
+    /// How long a qualifying equal-priority refusal must wait before
+    /// [`paging::try_time_share`] evicts the LRU resident anyway — see
+    /// [`Pager::set_time_share_quantum_ms`].
+    time_share_quantum_ms: u64,
+    /// `agent id -> clock reading at the FIRST qualifying refusal it hit`
+    /// (Task 4). Cleared on any successful placement and on
+    /// [`Pager::remove_agent`], so a stale mark from an earlier stand-off
+    /// can never make a later, unrelated refusal look like it has already
+    /// waited a full quantum.
+    waiting_since: HashMap<String, u64>,
+    /// `agent id -> clock reading at that agent's most recent successful
+    /// `infer` completion` (Task 4). The LRU tiebreak's ordering key —
+    /// never touched by placement itself, only by a completed inference.
+    last_use: HashMap<String, u64>,
 }
 
 impl<S: Substrate> Pager<S> {
@@ -149,6 +184,7 @@ impl<S: Substrate> Pager<S> {
         image_store: ImageStore,
         free_vram: FreeVramFn,
     ) -> Pager<S> {
+        let start = Instant::now();
         Pager {
             substrate,
             journal,
@@ -172,6 +208,15 @@ impl<S: Substrate> Pager<S> {
             default_priority: DEFAULT_PRIORITY,
             default_budget_tokens: DEFAULT_BUDGET_TOKENS,
             tier: None,
+            // The determinism law (Task 4): this closure is the *only*
+            // place production code calls `Instant::now()`-derived time for
+            // scheduling purposes — everywhere else reads through
+            // `self.clock`. `set_clock` replaces it wholesale for tests, so
+            // nothing here needs to be swappable piecemeal.
+            clock: Box::new(move || u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)),
+            time_share_quantum_ms: DEFAULT_TIME_SHARE_QUANTUM_MS,
+            waiting_since: HashMap::new(),
+            last_use: HashMap::new(),
         }
     }
 
@@ -228,6 +273,23 @@ impl<S: Substrate> Pager<S> {
             name: name.to_string(),
             emulated,
         });
+    }
+
+    /// Replaces the pager's clock (Task 4). Production code never needs
+    /// this — [`Pager::new`]'s default is an `Instant`-backed monotonic
+    /// clock — but a deterministic fake lets tests drive the equal-priority
+    /// time-sharing tiebreak (`paging::try_time_share`) with an exact,
+    /// controllable notion of elapsed time instead of a real wall clock.
+    pub fn set_clock(&mut self, clock: ClockFn) {
+        self.clock = clock;
+    }
+
+    /// Sets the equal-priority time-sharing quantum
+    /// (`config.time_share_quantum_secs`, default 30s / 30_000ms) — how
+    /// long a qualifying refusal must wait before
+    /// `paging::try_time_share` evicts the LRU resident anyway.
+    pub fn set_time_share_quantum_ms(&mut self, ms: u64) {
+        self.time_share_quantum_ms = ms;
     }
 
     /// Attaches a measured [`Profile`] to a registered model — POST's whole
@@ -571,6 +633,12 @@ impl<S: Substrate> Pager<S> {
             .budget
             .charge(charged);
         jrnl::infer_completed(&mut self.journal, id, &verified)?;
+        // The Task 4 LRU tiebreak's ordering key: the clock reading at this
+        // agent's most recent *successful* inference, read through the
+        // pager's own clock (never `Instant::now()` ad hoc) so the
+        // eviction decision built from it stays deterministic under a
+        // fake clock.
+        self.last_use.insert(id.to_string(), (self.clock)());
         Ok(verified)
     }
 
@@ -641,6 +709,12 @@ impl<S: Substrate> Pager<S> {
         self.destroy_context(id)?;
         self.images.drop_image(id);
         self.table.remove(id);
+        // Task 4: a removed agent can never be "waiting" or have a
+        // "last use" again — an id is never reused (monotonic
+        // `next_agent_seq`), so leaving either mark behind would just be a
+        // permanent, meaningless entry in both maps.
+        self.waiting_since.remove(id);
+        self.last_use.remove(id);
         jrnl::agent_removed(&mut self.journal, id, reason)?;
         Ok(())
     }

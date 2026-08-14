@@ -41,6 +41,7 @@ llama = "/models/llama.gguf"
     assert_eq!(config.default_priority, 100);
     assert_eq!(config.default_budget_tokens, 200_000);
     assert!(!config.allow_unprofiled);
+    assert_eq!(config.time_share_quantum_secs, 30);
 }
 
 #[test]
