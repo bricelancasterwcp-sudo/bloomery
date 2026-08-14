@@ -6,6 +6,11 @@
 //! models exist — so a missing `models` table (or any other required field)
 //! fails with serde's own "missing field `<name>`" error, which already
 //! names the field, rather than a generic parse failure.
+//!
+//! Unknown TOML keys are intentionally ignored (no
+//! `#[serde(deny_unknown_fields)]`): a config carrying a key this daemon
+//! build doesn't recognize yet (forward-compatibility, operator scratch
+//! notes, a newer schema field) should not hard-fail an older build.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

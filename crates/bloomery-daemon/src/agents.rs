@@ -147,7 +147,20 @@ impl ImageStore {
     }
 
     /// Stores (or overwrites) `id`'s image in the RAM tier.
+    ///
+    /// Also invalidates any NVMe-spilled entry for `id`, best-effort
+    /// deleting its backing file (errors, including the file already being
+    /// gone, are ignored — this is cleanup, not the source of truth).
+    /// Without this, a fresh RAM image followed by a spill under a new
+    /// digest leaves the *old* spilled entry reachable: a later `take` for
+    /// the old digest would find its file untouched, its recorded length
+    /// still matching, and hand back a clean `Nvme(..)` — resurrecting an
+    /// image the id's owner already moved past instead of reporting it
+    /// gone.
     pub fn put_ram(&mut self, id: &str, digest: &str, bytes: Vec<u8>) {
+        if let Some(old) = self.spilled.remove(id) {
+            let _ = std::fs::remove_file(&old.path);
+        }
         self.ram.insert(
             id.to_string(),
             RamEntry {
@@ -161,8 +174,13 @@ impl ImageStore {
     /// `{id}.{digest}.kvimg` under the spill dir. Any previously spilled
     /// file for `id` under a different digest is removed so re-spilling
     /// after a model change doesn't leak orphaned files.
+    ///
+    /// The RAM entry is only removed once the disk write has actually
+    /// succeeded: if the write fails (out of space, I/O error, permission
+    /// denied, ...) the only copy of the image must survive intact in RAM
+    /// rather than being silently dropped along with the failed write.
     pub fn spill(&mut self, id: &str) -> std::io::Result<()> {
-        let entry = self.ram.remove(id).ok_or_else(|| {
+        let entry = self.ram.get(id).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 format!("no RAM image to spill for {id}"),
@@ -172,6 +190,9 @@ impl ImageStore {
         let filename = format!("{id}.{}.kvimg", entry.digest);
         let path = self.spill_dir.join(filename);
         std::fs::write(&path, &entry.bytes)?;
+
+        // Write succeeded — only now is it safe to move the entry out of RAM.
+        let entry = self.ram.remove(id).expect("checked present above");
         let len = entry.bytes.len() as u64;
 
         let old = self.spilled.insert(

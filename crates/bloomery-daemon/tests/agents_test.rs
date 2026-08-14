@@ -65,6 +65,71 @@ fn spilled_image_truncated_on_disk_is_corrupt_not_bogus_success() {
     }
 }
 
+/// Review finding (Important #1): `spill` used to remove the RAM entry
+/// *before* attempting the disk write. If the write failed (ENOSPC, EIO,
+/// permissions), the bytes were already gone from RAM and never made it to
+/// disk — silently indistinguishable from an id that was never spilled.
+/// This replaces the spill dir with a plain file after `ImageStore::new`
+/// creates it as a real directory, so any write underneath it fails
+/// structurally (`ENOTDIR`) regardless of process privileges — robust even
+/// when tests run as root, where a chmod-based permission test would be
+/// silently bypassed.
+#[test]
+fn spill_write_failure_preserves_ram_copy() {
+    let dir = std::env::temp_dir().join("bloomery-img-test-spill-fail");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_file(&dir);
+    let mut st = ImageStore::new(&dir).unwrap();
+    st.put_ram("a1", "digestX", vec![1, 2, 3]);
+
+    // Swap the spill dir out for a regular file: any write under it now
+    // fails at the filesystem level, not via a permission check.
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::write(&dir, b"not a directory").unwrap();
+
+    let result = st.spill("a1");
+    assert!(result.is_err(), "spill should report the write failure");
+
+    match st.take("a1", "digestX") {
+        ImageFetch::Ram(b) => assert_eq!(b, vec![1, 2, 3]),
+        o => panic!("spill failure must not lose the only copy: {o:?}"),
+    }
+
+    // Leave a clean filesystem behind for other tests / future runs.
+    let _ = std::fs::remove_file(&dir);
+}
+
+/// Review finding (Important #2): traced resurrection path.
+/// `put_ram(id, D1) + spill` -> `put_ram(id, D2)` -> `take(id, D2)` consumes
+/// the RAM copy -> a later `take(id, D1)` used to find the untouched D1
+/// spill entry (digest and recorded length both still match) and return a
+/// clean `Nvme(..)` — resurrecting an image the id's owner has already
+/// moved past. `put_ram` must invalidate (drop the index entry for, and
+/// best-effort delete the file of) any spilled image for that id, so the
+/// old digest is simply gone, not silently servable again.
+#[test]
+fn put_ram_invalidates_previously_spilled_entry_for_same_id() {
+    let dir = std::env::temp_dir().join("bloomery-img-test-resurrection");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut st = ImageStore::new(&dir).unwrap();
+
+    st.put_ram("a1", "D1", vec![1, 1, 1]);
+    st.spill("a1").unwrap();
+
+    st.put_ram("a1", "D2", vec![2, 2, 2]);
+    match st.take("a1", "D2") {
+        ImageFetch::Ram(b) => assert_eq!(b, vec![2, 2, 2]),
+        o => panic!("{o:?}"),
+    }
+
+    // The D1 image no longer exists as far as the store is concerned —
+    // never a clean Nvme hit for a digest the id has moved past.
+    match st.take("a1", "D1") {
+        ImageFetch::Missing => {}
+        o => panic!("stale spilled image resurrected as {o:?}, expected Missing"),
+    }
+}
+
 #[test]
 fn agent_table_insert_get_remove_and_residents() {
     use bloomery_core::budget::Budget;
