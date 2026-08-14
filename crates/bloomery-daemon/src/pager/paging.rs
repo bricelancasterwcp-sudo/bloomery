@@ -175,18 +175,30 @@ impl<S: Substrate> Pager<S> {
                 // `needed`/`free`/`reclaimable` alone, which cannot show
                 // *why* — a reader should not have to re-derive that a cold
                 // model's weights were the reason this refused.
+                //
+                // `budget` is `None`-vs-zero honest (law 5): an unmeasured
+                // budget never fabricates a `budget 0 B` term or a
+                // subtraction this branch never actually performed (`avail`
+                // was planned as the residency-count-cap-of-one's flat `0`,
+                // not derived from `budget − loaded − resident`) — it says
+                // plainly that the budget is unmeasured instead.
+                let detail = match budget {
+                    Some(budget) => format!(
+                        "residency: weights {weights_term} B + kv {kv_bytes} B vs budget \
+                         {budget} B − loaded {loaded_weights} B − resident {resident_kv} B \
+                         (needed {needed} B, free {free} B, reclaimable {reclaimable} B)"
+                    ),
+                    None => format!(
+                        "residency: budget unmeasured (residency capped at 1 agent); \
+                         needed {needed} B, reclaimable {reclaimable} B"
+                    ),
+                };
                 jrnl::refusal(
                     &mut self.journal,
                     id,
                     u64::from(window_tokens),
                     window_tokens,
-                    format!(
-                        "residency: weights {weights_term} B + kv {kv_bytes} B vs budget \
-                         {budget_display} B − loaded {loaded_weights} B − resident \
-                         {resident_kv} B (needed {needed} B, free {free} B, reclaimable \
-                         {reclaimable} B)",
-                        budget_display = budget.unwrap_or(0),
-                    ),
+                    detail,
                 )?;
                 Err(PagerError::Refused {
                     needed,
