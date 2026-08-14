@@ -9,8 +9,10 @@
 //! run finished clean reporting zero warm samples. Refusing was the honest
 //! move while that accounting gap existed.
 //!
-//! Phase 2a closed the gap — `Pager::place` now plans against
-//! `budget − Σ loaded weights − Σ resident kv` — so a measured budget is a
+//! Phase 2a closed the gap — `Pager::place` plans against
+//! `budget − overhead − Σ loaded weights − Σ resident reservations`, where a
+//! reservation is a context's KV cache plus its per-context runtime overhead
+//! — so a measured budget is a
 //! perfectly legitimate way to run this bench, and in fact the only way to
 //! measure switches under *natural* pressure rather than under the
 //! unmeasured-probe cap of one resident agent. The blanket refusal is

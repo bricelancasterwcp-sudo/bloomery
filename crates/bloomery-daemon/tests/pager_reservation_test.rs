@@ -88,6 +88,18 @@ fn write_gguf(dir: &Path, name: &str) -> PathBuf {
 /// The gap between those two lines is exactly what OOM'd the GPU on
 /// 2026-08-14, so the test asserts both halves: the refusal *and* the fact
 /// that the un-reserved arithmetic would have said yes.
+///
+/// **This refusal is also the state a VRAM-bound automatic window walks into
+/// unaided.** The scenario reaches it by hand — an explicit `window_cap` and
+/// a budget chosen to sit between the two sums — but `usable_window`'s VRAM
+/// term subtracts `weights` and `overhead_bytes` and *not* `ctx_overhead`, so
+/// an agent whose window is `BoundBy::Vram` is sized to consume the entire
+/// remaining budget and then reserves `ctx_overhead_bytes` more than that. It
+/// refuses here every time, with no smaller window to fall back to. Safe, and
+/// deliberately still open: carried-debt item 7. Nothing in the workspace
+/// hits it today because every bench agent is `user_cap`-bound (all 16 in the
+/// committed natural-pressure journal), which is exactly why it needs a test
+/// that names it rather than a comment nobody reads.
 #[test]
 fn a_context_whose_kv_fits_but_whose_reservation_does_not_is_refused() {
     let dir = fresh_dir("bloomery-pager-reservation-refuse");

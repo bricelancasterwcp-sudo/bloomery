@@ -12,6 +12,15 @@
 > and with them the bench's refusal to run a warm class against a measured
 > budget. See `2026-08-14-2a-natural-pressure.md`, which is an acceptance run
 > for that change and **not** a G2 reading.
+>
+> One consequence for the commands on this page: `bloomery-bench switch` now
+> **requires** a `--journal <path>` argument, so the two `switch` invocations
+> quoted below would need it added to run against a current build. They are
+> left verbatim because they are the record of what was actually run on
+> 2026-08-14, not a script to re-execute. **The reproduction path for the
+> numbers is unchanged**: `bloomery-bench report --journal <file>` against
+> either committed journal recomputes every figure on this page exactly, with
+> no daemon and no GPU.
 
 | class | commitment | measured (n=56) | margin |
 |---|---|---|---|

@@ -97,11 +97,21 @@ Limits after Phase 2a, all known and none hidden:
 * **The per-context runtime reservation is configured, not measured.** A
   llama.cpp context costs more than its KV cache — on this box, at
   `n_ctx = 16384`, a 896 MiB KV cache came with a 304 MiB Vulkan compute buffer
-  and a 30 MiB host buffer. bloomery charges `ctx_overhead_mib` (default 384)
-  for that and does **not** measure it, so a different model, backend or window
-  can need a different number. Setting it too low is how the
+  and a 30 MiB host buffer. The **default** `ctx_overhead_mib = 384` is derived
+  from that measured floor ([excerpt committed](docs/superpowers/evidence/2026-08-14-2a-daemon-log-excerpt.txt));
+  the **active value is configured, not measured per run**, and bloomery never
+  reads it back from the substrate, so a different model, backend or window can
+  need a different number. Setting it too low is how the
   [2a natural-pressure run](docs/superpowers/evidence/2026-08-14-2a-natural-pressure.md#attempt-1--aborted-oom-and-the-accounting-gap-it-found)
   OOM'd a GPU the planner believed had room.
+* **A VRAM-bound window is un-placeable by exactly that reservation.** The
+  window law subtracts `weights` and `overhead_mib` from free VRAM, but not
+  `ctx_overhead_mib`; placement charges it. So an agent whose window is bound
+  by VRAM (rather than by `window_cap`, the training context, or a measured
+  ceiling) is sized to fill the budget and then reserves more than it — a
+  permanent, safe refusal with nothing allocated, and no recovery but a smaller
+  window or a smaller reservation. Fixing it properly means changing the window
+  law itself; it is [carried debt](docs/CARRIED-DEBT.md), not a surprise.
 * **The VRAM probe is `nvidia-smi`-only.** Anywhere else it reports
   *unmeasured* (`None`, never zero) and residency falls back to a cap of one
   resident agent, journaled as a degradation.

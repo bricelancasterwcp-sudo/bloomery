@@ -41,8 +41,9 @@ pub struct StatusReport {
     pub ctx_overhead_bytes: u64,
     /// Sum of `weights_bytes` over every model whose weights are currently
     /// loaded into the substrate — the weights term of the reservation
-    /// budget (Task 3: `avail = budget − Σ loaded weights − Σ resident kv`,
-    /// see the accounting rule on `Pager::place`). Derived from the loaded
+    /// budget (`avail = budget − overhead − Σ loaded weights − Σ resident
+    /// reservations`; Task 3 added the weights term, Task 5's live run added
+    /// the other two — see the accounting rule on `Pager::place`). Derived from the loaded
     /// set on every call rather than tracked as a counter, so `unload_model`
     /// crediting weights back is just this sum recomputing; `0` when
     /// nothing is loaded.

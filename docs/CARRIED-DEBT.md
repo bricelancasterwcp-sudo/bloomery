@@ -22,7 +22,9 @@ what closed it. Branch `feat/phase2a-hardening`.
    first pager work item for Phase 2. The evidence doc's pressure
    arithmetic (§2) is effectively the design note.~~
    **DELIVERED** — `Pager::place` plans against
-   `budget − Σ loaded weights − Σ resident kv`, a cold model's weights
+   `budget − Σ loaded weights − Σ resident kv` *(superseded — the shipped
+   formula is two terms wider; see the end of this item and item 7)*, a cold
+   model's weights
    join the demand side of its own admission, refusals print the whole
    arithmetic, and `/status` carries `loaded_weights_bytes`. Live
    evidence of eviction under a natural measured budget (48 warm
@@ -77,8 +79,30 @@ what closed it. Branch `feat/phase2a-hardening`.
    bloomery reads from the substrate. Another model, backend or window
    will want another number, and setting it too low is an OOM rather
    than a refusal (recorded 2026-08-14 by the aborted natural-pressure
-   attempt). Measuring it at model-load time, or reading it back from
-   llama.cpp, is the honest fix.
+   attempt). The default is derived from a measured floor — excerpt
+   committed as
+   `docs/superpowers/evidence/2026-08-14-2a-daemon-log-excerpt.txt` —
+   but the *active* value is configured, never measured per run.
+   Measuring it at model-load time, or reading it back from llama.cpp,
+   is the honest fix.
+
+   **Window/placement asymmetry (same item, second half).**
+   `usable_window`'s VRAM term subtracts `weights` and `overhead_bytes`
+   but **not** `ctx_overhead_bytes`, while placement charges
+   `kv + ctx_overhead`. An agent whose window comes out `BoundBy::Vram`
+   is therefore sized to consume the whole remaining budget and then
+   reserves exactly `ctx_overhead_bytes` more than exists: permanently
+   un-placeable, refused safely (law 1, pre-checked, nothing allocated)
+   but with no smaller window to fall back to and no recovery short of
+   lowering the window cap or `ctx_overhead_mib`. Not hit by the
+   2026-08-14 run — all 16 agents were `user_cap`-bound, verified from
+   the committed journal — and pinned in
+   `pager_reservation_test.rs`'s refusal scenario, which is the same
+   end state. **The real fix is a core geometry change**: the window law
+   must subtract the per-context reservation it is sizing, which means
+   `GeometryInput` grows a term and every window-law test moves with
+   it. Deliberately deferred rather than bolted on beside a live-run
+   fix.
 
 ## Smaller items (fine as-is; fix opportunistically)
 

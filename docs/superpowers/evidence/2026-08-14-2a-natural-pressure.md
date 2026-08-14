@@ -26,10 +26,12 @@ weights`, and together those wanted more VRAM than the card has (G2 evidence,
 unmeasured probe, residency capped at one resident agent. Real switches, real
 images, real GPU; an artificial reason for them to happen.
 
-Phase 2a charges the weights to the same pool:
+Phase 2a charges the weights to the same pool — *as this run began*, and
+superseded by the end of it; the formula the daemon ships is two terms wider
+and appears under [the fix](#the-fix):
 
 ```
-avail = budget − Σ loaded weights − Σ resident kv
+avail = budget − Σ loaded weights − Σ resident kv     # superseded, see below
 ```
 
 That closes the gap on paper. This run is the check that it closes it on the
@@ -265,6 +267,15 @@ Three changes, each pinned by tests before the rerun
 3. **The daemon-level `overhead_mib` margin now enters placement too.** It
    had only ever been in the window law, which is why a 1 GiB "held back"
    margin was silently available for the pager to fill.
+
+**One asymmetry is left open, deliberately.** `usable_window`'s VRAM term
+subtracts `weights` and `overhead_mib` but not `ctx_overhead_mib`, so an agent
+whose window comes out `BoundBy::Vram` is sized to fill the remaining budget
+and then reserves `ctx_overhead_bytes` beyond it — permanently un-placeable,
+refused safely but with no smaller window to fall back to. Every agent in this
+run was `user_cap`-bound (all 16 `AgentCreated` events in the committed
+journal say `"bound_by":"user_cap"`), so the run never met it. Closing it means
+changing the core window law, which is deferred as carried-debt item 7.
 
 ### Attempt 2 — the run
 
