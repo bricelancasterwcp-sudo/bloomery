@@ -160,15 +160,31 @@ fn read_f64<R: Read>(reader: &mut R) -> io::Result<f64> {
     Ok(f64::from_le_bytes(buf))
 }
 
-fn read_gguf_string<R: Read>(reader: &mut R) -> io::Result<String> {
-    let len = read_u64(reader)? as usize;
-    let bytes = read_exact_buf(reader, len)?;
+/// Rejects a file-provided length before it is used for an allocation or a
+/// loop bound. Every byte a well-formed GGUF file claims a string/array
+/// holds (or a kv pair count) must actually fit inside the file, so any
+/// declared length greater than the file's own size is corrupt data — never
+/// a reason to attempt a multi-terabyte allocation or an unbounded loop.
+fn check_len_bound(len: u64, file_len: u64) -> io::Result<()> {
+    if len > file_len {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("declared length {len} exceeds file size {file_len} bytes"),
+        ));
+    }
+    Ok(())
+}
+
+fn read_gguf_string<R: Read>(reader: &mut R, file_len: u64) -> io::Result<String> {
+    let len = read_u64(reader)?;
+    check_len_bound(len, file_len)?;
+    let bytes = read_exact_buf(reader, len as usize)?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Reads one typed value for the given type tag, discarding array payloads
 /// element-by-element (strings inside arrays each carry their own length).
-fn read_gguf_value<R: Read>(reader: &mut R, type_tag: u32) -> io::Result<GgufValue> {
+fn read_gguf_value<R: Read>(reader: &mut R, type_tag: u32, file_len: u64) -> io::Result<GgufValue> {
     match type_tag {
         GGUF_TYPE_U8 => Ok(GgufValue::U8(read_u8(reader)?)),
         GGUF_TYPE_I8 => Ok(GgufValue::I8(read_i8(reader)?)),
@@ -178,16 +194,17 @@ fn read_gguf_value<R: Read>(reader: &mut R, type_tag: u32) -> io::Result<GgufVal
         GGUF_TYPE_I32 => Ok(GgufValue::I32(read_i32(reader)?)),
         GGUF_TYPE_F32 => Ok(GgufValue::F32(read_f32(reader)?)),
         GGUF_TYPE_BOOL => Ok(GgufValue::Bool(read_u8(reader)? != 0)),
-        GGUF_TYPE_STRING => Ok(GgufValue::Str(read_gguf_string(reader)?)),
+        GGUF_TYPE_STRING => Ok(GgufValue::Str(read_gguf_string(reader, file_len)?)),
         GGUF_TYPE_U64 => Ok(GgufValue::U64(read_u64(reader)?)),
         GGUF_TYPE_I64 => Ok(GgufValue::I64(read_i64(reader)?)),
         GGUF_TYPE_F64 => Ok(GgufValue::F64(read_f64(reader)?)),
         GGUF_TYPE_ARRAY => {
             let elem_type = read_u32(reader)?;
             let len = read_u64(reader)?;
+            check_len_bound(len, file_len)?;
             for _ in 0..len {
                 // Discard: we only need to advance the cursor correctly.
-                read_gguf_value(reader, elem_type)?;
+                read_gguf_value(reader, elem_type, file_len)?;
             }
             Ok(GgufValue::Array)
         }
@@ -199,12 +216,16 @@ fn read_gguf_value<R: Read>(reader: &mut R, type_tag: u32) -> io::Result<GgufVal
 }
 
 /// Reads the GGUF header and key-value metadata section into a map.
-fn read_kv_map<R: Read>(reader: &mut R, kv_count: u64) -> io::Result<HashMap<String, GgufValue>> {
-    let mut kvs = HashMap::with_capacity(kv_count as usize);
+fn read_kv_map<R: Read>(
+    reader: &mut R,
+    kv_count: u64,
+    file_len: u64,
+) -> io::Result<HashMap<String, GgufValue>> {
+    let mut kvs = HashMap::new();
     for _ in 0..kv_count {
-        let key = read_gguf_string(reader)?;
+        let key = read_gguf_string(reader, file_len)?;
         let type_tag = read_u32(reader)?;
-        let value = read_gguf_value(reader, type_tag)?;
+        let value = read_gguf_value(reader, type_tag, file_len)?;
         kvs.insert(key, value);
     }
     Ok(kvs)
@@ -245,11 +266,18 @@ fn resolve_head_dim(kvs: &HashMap<String, GgufValue>, arch: &str) -> Result<u32,
     let head_count_key = format!("{arch}.attention.head_count");
     let embedding_length = lookup_u32(kvs, &embedding_length_key)?;
     let head_count = lookup_u32(kvs, &head_count_key)?;
+    if head_count == 0 {
+        return Err(GgufError::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{head_count_key} is zero"),
+        )));
+    }
     Ok(embedding_length / head_count)
 }
 
 /// Parses the metadata section of a GGUF v3 file at `path`.
 pub fn parse_gguf_meta(path: &Path) -> Result<GgufMeta, GgufError> {
+    let file_len = std::fs::metadata(path)?.len();
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
 
@@ -266,15 +294,15 @@ pub fn parse_gguf_meta(path: &Path) -> Result<GgufMeta, GgufError> {
 
     let _tensor_count = read_u64(&mut reader)?;
     let kv_count = read_u64(&mut reader)?;
+    check_len_bound(kv_count, file_len)?;
 
-    let kvs = read_kv_map(&mut reader, kv_count)?;
+    let kvs = read_kv_map(&mut reader, kv_count, file_len)?;
 
     let arch = lookup_string(&kvs, "general.architecture")?;
     let layers = lookup_u32(&kvs, &format!("{arch}.block_count"))?;
     let kv_heads = lookup_u32(&kvs, &format!("{arch}.attention.head_count_kv"))?;
     let head_dim = resolve_head_dim(&kvs, &arch)?;
     let training_ctx = lookup_u32(&kvs, &format!("{arch}.context_length"))?;
-    let weights_bytes = std::fs::metadata(path)?.len();
 
     Ok(GgufMeta {
         arch,
@@ -282,6 +310,6 @@ pub fn parse_gguf_meta(path: &Path) -> Result<GgufMeta, GgufError> {
         kv_heads,
         head_dim,
         training_ctx,
-        weights_bytes,
+        weights_bytes: file_len,
     })
 }
