@@ -1,0 +1,20 @@
+[package]
+name = "bloomery-substrate"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+# The real llama.cpp backend. Off by default so the whole workspace test
+# suite stays GPU-free and buildable on a machine with no llama.cpp
+# toolchain: with the feature off, `src/llama.rs` is not even compiled.
+llama = ["dep:llama-cpp-2", "dep:self_cell"]
+# Vulkan offload for the llama backend. Forwards to the crate's own
+# `vulkan` feature (llama-cpp-2 0.1.154: `vulkan = ["llama-cpp-sys-2/vulkan"]`).
+vulkan = ["llama-cpp-2?/vulkan"]
+
+[dependencies]
+# Pinned exactly: the D1 decision record (docs/priorart/2026-08-14-phase0-priorart.md)
+# verified this exact version's API surface against the published tarball.
+llama-cpp-2 = { version = "=0.1.154", optional = true }
+# Lets a model own the contexts borrowed from it without `unsafe` or leaks.
+self_cell = { version = "1", optional = true }
