@@ -165,8 +165,9 @@ fn digest_covers_the_whole_file_not_just_the_prefix() {
 #[test]
 fn loading_a_model_charges_its_weights_against_the_budget() {
     // budget 300 MiB; weights 200 MiB; context 56 MiB.
-    // Agent 1 infers: model loads (200) + ctx (56) = 256 ≤ 300 → OK.
-    // Agent 2 (same model, equal priority) infers: 200 + 2×56 = 312 > 300
+    // Agent 1 (priority 50) infers: model loads (200) + ctx (56) = 256 ≤ 300 → OK.
+    // Agent 2 (same model, priority 100 — strictly higher, so the frozen
+    // planner may evict a1) infers: 200 + 2×56 = 312 > 300
     // → planner must evict agent 1's context (not refuse):
     //   avail = 300 − 200 − 56 = 44 < 56, reclaimable 56 → Evict.
     // assert: infer(a2) succeeds AND journal has PagerOp{EvictSave, id: a1}.
