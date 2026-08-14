@@ -279,7 +279,11 @@ pub fn model_digest(gguf: &Path) -> std::io::Result<String> {
     let mut buffer = vec![0u8; 1024 * 1024]; // 1 MiB fixed buffer
 
     loop {
-        let n = file.read(&mut buffer)?;
+        let n = match file.read(&mut buffer) {
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
         if n == 0 {
             break;
         }
