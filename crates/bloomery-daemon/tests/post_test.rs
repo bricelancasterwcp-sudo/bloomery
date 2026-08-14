@@ -596,3 +596,99 @@ fn the_probe_url_points_at_the_v1_surface_not_the_root() {
         "assay must be pointed at /v1, got: {cmd}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Review round: subprocess bounding, stale-document guard, dedup pin.
+// ---------------------------------------------------------------------------
+
+/// A wedged assay must not hold the provisional-admission window open
+/// forever — the exact failure `post.rs`'s own docs say must never happen.
+/// This drives the **real** spawn layer (the injectable runner replaces the
+/// subprocess entirely, so it cannot exercise this), with a short timeout
+/// standing in for the shipped 600 s cap, and proves both halves: the
+/// expiry is named, and the child is actually killed rather than abandoned.
+#[test]
+fn a_wedged_probe_is_killed_and_named_a_timeout() {
+    let marker = std::env::temp_dir().join(format!(
+        "bloomery-post-timeout-{}-{}.marker",
+        std::process::id(),
+        line!()
+    ));
+    let _ = std::fs::remove_file(&marker);
+    let script = format!("sleep 1; echo x > {}", marker.display());
+    let started = std::time::Instant::now();
+
+    let err = bloomery_daemon::post::run_bounded_for_test(
+        "/bin/sh",
+        &["-c".to_string(), script],
+        std::time::Duration::from_millis(300),
+    )
+    .expect_err("a child that outlives the cap must not return Ok");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+    assert!(
+        err.to_string().contains("timed out"),
+        "the expiry must be named: {err}"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "the cap must bound the wait, not the child"
+    );
+
+    // The child would write the marker at t+1s. It never gets there,
+    // because it was killed — not merely stopped being waited on.
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    assert!(
+        !marker.exists(),
+        "the timed-out child kept running after the cap expired"
+    );
+}
+
+/// A leftover document from a previous boot must never be mistaken for what
+/// assay just wrote. Without removing it first, an assay that exits 0
+/// having written nothing (a crash after its own success path, a `--json`
+/// path it could not write) would silently attach yesterday's measurements
+/// as today's.
+#[test]
+fn a_stale_json_document_is_not_attached_as_a_fresh_profile() {
+    let out = std::env::temp_dir().join(format!(
+        "bloomery-post-stale-{}-{}.json",
+        std::process::id(),
+        line!()
+    ));
+    std::fs::write(
+        &out,
+        r#"{"assay_profile_version":3,"model":{"name":"qwen"},
+            "ceiling":{"max_verified":99999},"verdicts":{}}"#,
+    )
+    .unwrap();
+
+    let runner = PostRunner::with_runner(Box::new(|_, _| Ok(fake_output(0, "", ""))));
+    match runner.probe(8181, "qwen", &tier(), &out) {
+        Err(PostError::BadProfile(msg)) => assert!(msg.contains(&out.display().to_string())),
+        other => panic!("a stale document must not become a profile, got {other:?}"),
+    }
+    assert!(
+        !out.exists(),
+        "the stale document must be gone, not left to be re-read next boot"
+    );
+}
+
+/// The degradation is said once per model, not once per agent: a busy
+/// `allow_unprofiled` daemon (or POST's ~75 calls) would otherwise bury the
+/// journal in one repeated sentence. Kills the delete-the-dedup mutant.
+#[test]
+fn the_unprofiled_degradation_is_said_once_per_model_not_once_per_agent() {
+    let (mut p, jpath, _dir) = unprofiled_pager("dedup");
+    p.set_allow_unprofiled(true);
+    p.create_agent("qwen", 100, None, 1000).unwrap();
+    p.create_agent("qwen", 100, None, 1000).unwrap();
+    p.create_agent("qwen", 100, None, 1000).unwrap();
+
+    let said = replay(&jpath)
+        .unwrap()
+        .iter()
+        .filter(|e| matches!(e, Event::Degraded { reason } if reason.contains("qwen")))
+        .count();
+    assert_eq!(said, 1, "three agents, one sentence");
+}

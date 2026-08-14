@@ -446,8 +446,13 @@ impl<S: Substrate> Pager<S> {
     /// The gate is at agent **creation**, not per inference: an agent
     /// admitted inside the POST window keeps working after the window
     /// closes. Cutting a live conversation off mid-turn because POST
-    /// finished would be its own dishonesty, and the window is a few
-    /// seconds of boot. New work on a still-unprofiled model is refused.
+    /// finished would be its own dishonesty. New work on a still-unprofiled
+    /// model is refused.
+    ///
+    /// The window is not small: one `--quick` probe measured ~110 s per
+    /// model (enthusiast-16GB tier, 2026-08-14), models are probed
+    /// sequentially, so it lasts roughly that sum — minutes on a
+    /// multi-model daemon. Anything admitted in that span outlives it.
     fn admit(&mut self, model: &str) -> Result<(), PagerError> {
         let has_profile = self
             .models

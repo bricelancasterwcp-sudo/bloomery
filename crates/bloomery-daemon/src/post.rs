@@ -9,13 +9,23 @@
 //! itself [`posting`](crate::pager::Pager::set_posting) before the server
 //! starts, so unprofiled models are admitted while POST runs, and the flag
 //! drops the moment POST finishes — after which normal admission applies.
-//! Every provisional admission and every POST outcome is journaled, so a
-//! replay shows exactly which calls ran inside that window.
+//! The window is *bracketed* in the journal, not enumerated: the
+//! provisional admission is journaled once per model (`Degraded`), each
+//! probe's outcome is journaled (`Post`), and the `AgentCreated` rows
+//! between them are the agents admitted inside it. A replay can therefore
+//! bound the window and see what was admitted during it — it cannot tell
+//! which of those calls were assay's and which were a client's.
 //!
 //! **The profile is read from the file, never from stdout.** assay writes
 //! its result document to the `--json` path; stdout is a human-readable
 //! slice of it. Parsing stdout would make this daemon's admission depend on
-//! assay's *display* format rather than its documented artifact.
+//! assay's *display* format rather than its documented artifact. The path
+//! is deleted before the probe runs, so a document left by an earlier boot
+//! can never be read back as this one's measurement.
+//!
+//! **The subprocess is bounded.** A wedged assay would otherwise hold the
+//! provisional-admission window open for the life of the process — the one
+//! failure this module exists to prevent. See [`PROBE_TIMEOUT`].
 //!
 //! **A failed probe is an infrastructure failure with a name** — `Spawn`
 //! (assay could not be started), `NonZeroExit` (it ran and failed, with its
@@ -24,15 +34,33 @@
 //! profile-less success: the model simply stays unprofiled, which is a
 //! refusal under law 5, not a silent admission.
 
+use std::io::Read;
 use std::path::Path;
-use std::process::Output;
+use std::process::{Command, Output, Stdio};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use bloomery_core::profile::Profile;
 use bloomery_substrate::Substrate;
 
 use crate::config::Tier;
 use crate::pager::{Pager, PagerError};
+
+/// Wall-clock cap on one model's probe.
+///
+/// A `--quick` probe measured ~110 s per model on the enthusiast-16GB tier
+/// (2026-08-14, qwen2.5-coder:7b-q8_0 on an RTX 5080), so this is ~5×
+/// headroom: slow enough never to kill a working probe, short enough that a
+/// wedged one cannot hold the provisional-admission window open for the
+/// life of the daemon. On expiry the child is **killed**, and the timeout
+/// takes the same named-failure path as any other probe failure — the model
+/// stays unprofiled and `posting` still clears.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// How often the spawn layer checks whether the child has exited. Cheap
+/// (`waitpid(WNOHANG)`), and 500 ms is far below any interval that matters
+/// against a ~110 s probe.
+const PROBE_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 /// How a [`PostRunner`] actually runs a program: `(program, args) ->
 /// output`. The real one shells out via [`std::process::Command`]; tests
@@ -80,12 +108,13 @@ pub struct PostRunner {
 }
 
 impl PostRunner {
-    /// A runner that really spawns `{python} -m assay ...`.
+    /// A runner that really spawns `{python} -m assay ...`, bounded by
+    /// [`PROBE_TIMEOUT`].
     pub fn new(python: String) -> PostRunner {
         PostRunner {
             python,
             run: Box::new(|program: &str, args: &[String]| {
-                std::process::Command::new(program).args(args).output()
+                run_bounded(program, args, PROBE_TIMEOUT)
             }),
         }
     }
@@ -134,6 +163,17 @@ impl PostRunner {
         out: &Path,
     ) -> Result<Profile, PostError> {
         let args = argv(port, model, tier, out);
+        // Delete any document left by an earlier boot *before* running the
+        // probe. Without this, an assay that exits 0 having written nothing
+        // would have yesterday's measurements read back and attached as
+        // today's — a stale profile is indistinguishable from a fresh one
+        // once it is in the pager. Now that case lands in `BadProfile`
+        // (the file is simply not there), which is a named failure.
+        // A failure to remove is not swallowed silently: it either means
+        // the file was already absent (the common case, nothing to say) or
+        // that the path is unwritable, which assay is about to fail on
+        // anyway with its own error.
+        let _ = std::fs::remove_file(out);
         let output = (self.run)(&self.python, &args)
             .map_err(|e| PostError::Spawn(format!("{} {}: {e}", self.python, args.join(" "))))?;
         if !output.status.success() {
@@ -164,6 +204,75 @@ impl PostRunner {
         }
         Ok(profile)
     }
+}
+
+/// Runs `program args` and waits **at most** `timeout` for it, killing the
+/// child if it overstays.
+///
+/// This is `Command::output()` with a deadline. `output()` itself blocks
+/// forever, which for POST means a hung assay pins the daemon in
+/// provisional admission until someone restarts it — see [`PROBE_TIMEOUT`].
+///
+/// Three deliberate choices in the plumbing:
+///
+/// - **stdin is `/dev/null`.** A child that reads stdin gets EOF instead of
+///   blocking on a terminal that isn't there.
+/// - **stdout is discarded.** Nothing here ever parses it (the profile
+///   comes from the `--json` file, by design), and not piping it removes
+///   the only unbounded pipe a long-running probe could fill.
+/// - **stderr is piped** because `NonZeroExit` reports assay's own words.
+///   It is drained *after* exit rather than concurrently, so a pathological
+///   child writing >64 KiB of stderr would block on a full pipe — bounded,
+///   not unbounded: the timeout fires and kills it, which is exactly the
+///   named failure path.
+fn run_bounded(program: &str, args: &[String], timeout: Duration) -> std::io::Result<Output> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            let mut stderr = Vec::new();
+            if let Some(mut pipe) = child.stderr.take() {
+                pipe.read_to_end(&mut stderr)?;
+            }
+            return Ok(Output {
+                status,
+                stdout: Vec::new(),
+                stderr,
+            });
+        }
+        if started.elapsed() >= timeout {
+            // Kill, then reap: without the `wait` the child would be left a
+            // zombie for the life of the daemon.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("assay probe timed out after {}s", timeout.as_secs()),
+            ));
+        }
+        std::thread::sleep(PROBE_POLL_INTERVAL);
+    }
+}
+
+/// [`run_bounded`] under a test-chosen deadline.
+///
+/// The injectable [`CommandRunner`] replaces the whole subprocess, so it
+/// cannot exercise the spawn layer's timeout; this is the seam that lets a
+/// test drive the real one against a real child without waiting out the
+/// shipped [`PROBE_TIMEOUT`].
+#[cfg(any(test, feature = "test-support"))]
+pub fn run_bounded_for_test(
+    program: &str,
+    args: &[String],
+    timeout: Duration,
+) -> std::io::Result<Output> {
+    run_bounded(program, args, timeout)
 }
 
 /// The documented invocation, in one place. Split out so the argument list
