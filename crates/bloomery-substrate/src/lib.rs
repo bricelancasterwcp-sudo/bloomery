@@ -12,6 +12,15 @@ pub mod fake;
 #[cfg(feature = "llama")]
 pub mod llama;
 
+/// The substring every KV-image rejection carries in its
+/// [`SubstrateError::State`] message.
+///
+/// A cross-task contract, not decoration: the pager treats a state error
+/// containing this as *image invalidated* — cold-start the agent, do not fail
+/// the request. It is a `const` so both sides of that contract reference the
+/// same symbol instead of retyping a string that could silently drift apart.
+pub const STATE_SIZE_MISMATCH: &str = "size mismatch";
+
 /// Opaque handle to a loaded model, minted by [`Substrate::load_model`].
 pub type ModelHandle = u64;
 

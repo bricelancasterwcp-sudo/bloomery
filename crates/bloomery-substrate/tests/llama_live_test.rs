@@ -19,6 +19,9 @@
 #[ignore]
 fn live_infer_reports_stats_and_state_round_trips() {
     if std::env::var("BLOOMERY_LIVE").as_deref() != Ok("1") {
+        // Say so out loud: an env-gated test that silently returns reads as a
+        // pass, and a green suite that never ran the GPU is a false green.
+        eprintln!("SKIPPED: BLOOMERY_LIVE unset");
         return;
     }
     use bloomery_substrate::{llama::LlamaSubstrate, Substrate};

@@ -46,7 +46,7 @@ use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
 use llama_cpp_2::{LlamaStateSeqFlags, TokenToStringError};
 
-use crate::{CtxHandle, ModelHandle, Reply, Substrate, SubstrateError};
+use crate::{CtxHandle, ModelHandle, Reply, Substrate, SubstrateError, STATE_SIZE_MISMATCH};
 
 /// The single sequence every bloomery context uses. Phase 1 gives each agent
 /// its own context, so per-context state is exactly sequence 0's state.
@@ -212,6 +212,23 @@ impl Substrate for LlamaSubstrate {
     /// Continuation is automatic: the prompt gets a BOS only when the KV
     /// cache for this context is empty, so a context resumed from a saved
     /// image continues its conversation instead of restarting it.
+    ///
+    /// **Turn boundaries are the caller's job.** Two deliberate behaviours make
+    /// this substrate's output *not* directly re-feedable as conversation:
+    ///
+    /// - an end-of-generation token stops the loop and is **not** fed back, so
+    ///   it never enters the KV cache;
+    /// - control tokens are stripped from [`Reply::text`] (rendering is
+    ///   non-special), so the terminator is absent from the text too.
+    ///
+    /// A caller building a multi-turn conversation on one context must
+    /// therefore supply the turn terminator itself at the head of the next
+    /// prompt — see `tests/llama_semantic_test.rs`, which opens its follow-up
+    /// prompt with `<|im_end|>`. Omit it and the model sees its own answer
+    /// running straight into the next user turn.
+    ///
+    /// On failure the KV cache is rolled back to where this call found it, so
+    /// a failed `infer` leaves the context exactly as usable as before.
     fn infer(
         &mut self,
         c: CtxHandle,
@@ -252,15 +269,25 @@ impl Substrate for LlamaSubstrate {
                 .get_mut(&c)
                 .ok_or_else(|| SubstrateError::Context(format!("unknown context handle {c}")))?;
             let size = ctx.state_seq_get_size_ext(SEQ_ID, state_flags());
+            // The one way the SAFETY invariant below could be violated: a zero
+            // size makes `as_mut_ptr()` a dangling pointer with no capacity,
+            // while the crate's wrapper hands C a `usize::MAX` write budget.
+            // Refuse instead of pointing C at it.
+            if size == 0 {
+                return Err(SubstrateError::State(format!(
+                    "state {STATE_SIZE_MISMATCH} on save: state size reported as zero"
+                )));
+            }
             let mut image = vec![0u8; size];
-            // SAFETY: `image` is exactly `size` bytes, and `size` is the byte
-            // count llama.cpp just reported it will write for this sequence
-            // and flag set. The write is verified below.
+            // SAFETY: `image` is exactly `size` bytes and `size > 0`, so the
+            // pointer is valid for `size` writes; `size` is the byte count
+            // llama.cpp just reported it will write for this sequence and flag
+            // set. The write is verified below.
             let written =
                 unsafe { ctx.state_seq_get_data_ext(image.as_mut_ptr(), SEQ_ID, state_flags()) };
             if written != size {
                 return Err(SubstrateError::State(format!(
-                    "state seq size mismatch on save: expected {size}, actual {written}"
+                    "state seq {STATE_SIZE_MISMATCH} on save: expected {size}, actual {written}"
                 )));
             }
             Ok(image)
@@ -279,11 +306,18 @@ impl Substrate for LlamaSubstrate {
     /// Note what is *not* a mismatch: an image is a sequence's cells, not a
     /// window-shaped blob, so a short image captured under a 2048-token window
     /// restores happily into a 256-token one (measured, not assumed).
+    ///
+    /// **A failed load leaves the destination sequence unusable.** llama.cpp
+    /// clears sequence 0 before reading and abandons it wherever the read
+    /// stopped, so on error the context holds a partial, meaningless cache —
+    /// not the previous contents, and not nothing. Callers must treat a failed
+    /// load as a cold start (destroy the context, or overwrite it with a good
+    /// image); retrying in place, inferring, or saving from it are all wrong.
     fn load_state(&mut self, c: CtxHandle, bytes: &[u8]) -> Result<(), SubstrateError> {
         if bytes.is_empty() {
-            return Err(SubstrateError::State(
-                "state seq size mismatch on load: image is empty".to_string(),
-            ));
+            return Err(SubstrateError::State(format!(
+                "state seq {STATE_SIZE_MISMATCH} on load: image is empty"
+            )));
         }
         let arena = self.ctx_arena(c)?;
         arena.with_dependent_mut(|_, contexts| {
@@ -297,8 +331,9 @@ impl Substrate for LlamaSubstrate {
             let ok = unsafe { ctx.state_seq_set_data_ext(bytes, SEQ_ID, state_flags()) };
             if !ok {
                 return Err(SubstrateError::State(format!(
-                    "state seq size mismatch on load: llama.cpp rejected a {}-byte image \
-                     (context shape changed, or the image is truncated)",
+                    "state seq {STATE_SIZE_MISMATCH} on load: llama.cpp rejected a {}-byte image \
+                     (context shape changed, or the image is truncated); \
+                     sequence {SEQ_ID} is now partial — cold-start, do not retry in place",
                     bytes.len()
                 )));
             }
@@ -314,18 +349,70 @@ struct Generated {
     completion_tokens: u32,
 }
 
-/// Run one prompt to completion on `ctx`.
+/// Run one prompt to completion, leaving the KV cache untouched on failure.
+///
+/// A decode that fails partway through does **not** unwind itself: llama.cpp
+/// keeps whatever the successful chunks already wrote, and the next `infer` or
+/// `save_state` on this handle would silently build on that wreckage — a
+/// corrupt conversation and a corrupt image, with no error anywhere to explain
+/// it. So anything that fails after the first successful decode is followed by
+/// removing every cell this call added.
 fn generate(
     model: &LlamaModel,
     ctx: &mut LlamaContext<'_>,
     prompt: &str,
     max_tokens: u32,
 ) -> Result<Generated, SubstrateError> {
+    // Where this call found the cache: everything from here on is ours, so
+    // this is exactly the rollback point.
+    let entry_pos = ctx.kv_cache_seq_pos_max(SEQ_ID) + 1;
+    let mut wrote_cache = false;
+    match generate_from(model, ctx, prompt, max_tokens, entry_pos, &mut wrote_cache) {
+        Ok(generated) => Ok(generated),
+        Err(failure) if wrote_cache => Err(roll_back(ctx, entry_pos, failure)),
+        Err(failure) => Err(failure),
+    }
+}
+
+/// Drop every cell at or after `entry_pos`, returning the error to report.
+///
+/// A rollback that itself fails is worse than the original failure — the
+/// context is then holding a partial turn with no way to remove it — so it is
+/// reported as a `State` error naming both failures, telling the pager to
+/// destroy the context rather than reuse it.
+fn roll_back(
+    ctx: &mut LlamaContext<'_>,
+    entry_pos: i32,
+    failure: SubstrateError,
+) -> SubstrateError {
+    let from = u32::try_from(entry_pos).unwrap_or(0);
+    match ctx.kv_cache_seq_rm(SEQ_ID, Some(from), None) {
+        Ok(()) => failure,
+        Err(rollback_failure) => SubstrateError::State(format!(
+            "inference failed ({failure:?}) and the KV rollback of sequence {SEQ_ID} from \
+             position {from} also failed ({rollback_failure}) — the context holds a partial \
+             turn and must be destroyed, not reused"
+        )),
+    }
+}
+
+/// The body of [`generate`], starting from a known cache position.
+///
+/// Sets `wrote_cache` as soon as one decode has landed, which is what tells
+/// the caller a rollback is owed.
+fn generate_from(
+    model: &LlamaModel,
+    ctx: &mut LlamaContext<'_>,
+    prompt: &str,
+    max_tokens: u32,
+    entry_pos: i32,
+    wrote_cache: &mut bool,
+) -> Result<Generated, SubstrateError> {
     // Authoritative rather than remembered: whatever is in the KV cache right
     // now decides both the next position and whether a BOS is due. A context
     // restored from an image reports its restored length here, so
     // continuation needs no bookkeeping that could drift.
-    let mut pos = ctx.kv_cache_seq_pos_max(SEQ_ID) + 1;
+    let mut pos = entry_pos;
     let add_bos = if pos == 0 {
         AddBos::Always
     } else {
@@ -377,6 +464,9 @@ fn generate(
         }
         ctx.decode(&mut batch)
             .map_err(|e| SubstrateError::Infer(format!("decode prompt: {e}")))?;
+        // From here on this call owns cells in the cache: a later failure has
+        // something to roll back.
+        *wrote_cache = true;
         pos += i32::try_from(end - offset).unwrap_or(0);
         offset = end;
     }

@@ -22,9 +22,12 @@
 #[ignore]
 fn live_state_restore_preserves_semantics() {
     if std::env::var("BLOOMERY_LIVE").as_deref() != Ok("1") {
+        // Say so out loud: an env-gated test that silently returns reads as a
+        // pass, and a green suite that never ran the GPU is a false green.
+        eprintln!("SKIPPED: BLOOMERY_LIVE unset");
         return;
     }
-    use bloomery_substrate::{llama::LlamaSubstrate, Substrate};
+    use bloomery_substrate::{llama::LlamaSubstrate, Substrate, STATE_SIZE_MISMATCH};
 
     const PLANT: &str = "<|im_start|>user\nRemember this code word exactly: BLOOMERY-7. \
                          Reply with just: OK<|im_end|>\n<|im_start|>assistant\n";
@@ -69,15 +72,38 @@ fn live_state_restore_preserves_semantics() {
         guessed.text
     );
 
-    // A damaged image is refused as "size mismatch", which is Task 13's cue to
-    // cold-start rather than crash.
+    // A failed infer must leave the context exactly as it found it, so the
+    // next turn (or the next saved image) is not built on wreckage. Compared
+    // through save_state because the KV image is the only observable the trait
+    // exposes: same bytes ⇒ same cache.
+    //
+    // This exercises the pre-decode error path. The post-decode path — where
+    // `generate` rolls the cache back to entry_pos — cannot be reached through
+    // the public API, because the window check refuses every prompt that would
+    // make llama.cpp's decode fail; see the report.
+    let before = s.save_state(c2).unwrap();
+    assert!(s.infer(c2, &"word ".repeat(4000), 8).is_err());
+    let after = s.save_state(c2).unwrap();
+    assert_eq!(
+        before,
+        after,
+        "a failed infer changed the KV image ({} bytes -> {} bytes)",
+        before.len(),
+        after.len()
+    );
+    // And the context is still usable afterwards, not just unchanged.
+    assert!(s.infer(c2, RECALL, 8).unwrap().completion_tokens.unwrap() > 0);
+
+    // A damaged image is refused with the STATE_SIZE_MISMATCH marker, which is
+    // Task 13's cue to cold-start rather than crash. Asserting through the
+    // exported const means a reworded message cannot break Task 13 silently.
     let c3 = s.create_context(m, 2048).unwrap();
     let mut truncated = img.clone();
     truncated.truncate(img.len() / 2);
     let err = format!("{:?}", s.load_state(c3, &truncated).unwrap_err());
-    assert!(err.contains("size mismatch"), "{err}");
+    assert!(err.contains(STATE_SIZE_MISMATCH), "{err}");
     let err = format!("{:?}", s.load_state(c3, &[]).unwrap_err());
-    assert!(err.contains("size mismatch"), "{err}");
+    assert!(err.contains(STATE_SIZE_MISMATCH), "{err}");
 
     // Law 2: refuse rather than truncate. The window is read back from
     // llama.cpp (which pads it), never assumed from the request.
