@@ -9,6 +9,12 @@ edition = "2021"
 llama = ["bloomery-substrate/llama"]
 # Vulkan offload, forwarded the same way.
 vulkan = ["llama", "bloomery-substrate/vulkan"]
+# Compiles `src/test_support.rs` for consumers outside this crate (its own
+# `#[cfg(test)]` unit tests get it for free). Off by default so a plain
+# `cargo build` / `cargo build --workspace` never links test-only wiring
+# into a release binary; `tests/*.rs` and (later) `bloomery-bench` opt in
+# via the self dev-dependency below.
+test-support = []
 
 [dependencies]
 bloomery-core = { path = "../bloomery-core" }
@@ -18,3 +24,11 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 sha2 = { workspace = true }
+
+[dev-dependencies]
+# Self-dependency trick: integration test binaries under `tests/` link this
+# crate through `dev-dependencies` rather than the normal target, so this
+# entry — not the `[features]` table above — is what turns `test-support`
+# on for them, without ever turning it on for the library's own default
+# build (resolver = "2" keeps the two instances' features unmerged).
+bloomery-daemon = { path = ".", features = ["test-support"] }

@@ -66,6 +66,7 @@ name = "bloomery-daemon"
 version = "0.1.0"
 dependencies = [
  "bloomery-core",
+ "bloomery-daemon",
  "bloomery-substrate",
  "serde",
  "serde_json",
