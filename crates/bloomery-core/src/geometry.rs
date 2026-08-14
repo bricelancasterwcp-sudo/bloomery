@@ -70,11 +70,20 @@ pub struct GeometryInput {
 pub fn usable_window(i: &GeometryInput) -> Window {
     let mut candidates: Vec<(u32, BoundBy)> = vec![(i.training_ctx, BoundBy::TrainingCtx)];
 
-    if let Some(free_vram_bytes) = i.free_vram_bytes {
+    // kv_per_token == 0 would make the division below undefined. Zero cost
+    // per token also means VRAM can never be the binding constraint (there
+    // is nothing to divide free memory by), so the Vram candidate is
+    // skipped entirely rather than panicking or reporting a zero window.
+    // VRAM itself was still measured in that case, so `vram_unmeasured`
+    // (set below from `free_vram_bytes.is_none()`) is unaffected.
+    if let Some(free_vram_bytes) = i.free_vram_bytes.filter(|_| i.kv_per_token != 0) {
         let remaining = free_vram_bytes
             .saturating_sub(i.weights_bytes)
             .saturating_sub(i.overhead_bytes);
-        let vram_tokens = (remaining / i.kv_per_token) as u32;
+        // Saturate rather than truncate: an upstream units bug (e.g. bits
+        // instead of bytes) could otherwise produce a quotient larger than
+        // u32::MAX, which a raw `as u32` cast would silently wrap.
+        let vram_tokens = u32::try_from(remaining / i.kv_per_token).unwrap_or(u32::MAX);
         candidates.push((vram_tokens, BoundBy::Vram));
     }
 

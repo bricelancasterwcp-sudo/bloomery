@@ -60,6 +60,43 @@ fn unmeasured_vram_is_flagged_not_zeroed() {
 }
 
 #[test]
+fn vram_term_saturates_instead_of_wrapping_and_ties_favor_training_ctx() {
+    // A units-bug upstream (e.g. reporting bits instead of bytes) could hand
+    // us a huge free_vram_bytes / tiny kv_per_token combination whose raw
+    // quotient exceeds u32::MAX. The Vram candidate must saturate to
+    // u32::MAX rather than wrap, and since training_ctx is also u32::MAX
+    // here, the two candidates tie on tokens — the earlier-declared term
+    // (TrainingCtx) must win the tie, never the later one.
+    let i = GeometryInput {
+        training_ctx: u32::MAX,
+        kv_per_token: 1,
+        weights_bytes: 0,
+        free_vram_bytes: Some(u64::MAX),
+        overhead_bytes: 0,
+        user_cap: None,
+        measured_ceiling: None,
+    };
+    let w = usable_window(&i);
+    assert_eq!(w.tokens, u32::MAX);
+    assert_eq!(w.bound_by, BoundBy::TrainingCtx);
+}
+
+#[test]
+fn zero_kv_per_token_skips_vram_term_without_panicking() {
+    // kv_per_token == 0 makes the VRAM division undefined; zero cost per
+    // token means the VRAM term imposes no real constraint, so it must be
+    // skipped entirely rather than panicking or reporting a zero window.
+    // VRAM was still measured, so vram_unmeasured stays false.
+    let mut i = base();
+    i.kv_per_token = 0;
+    i.free_vram_bytes = Some(GIB);
+    let w = usable_window(&i);
+    assert_eq!(w.tokens, 32768);
+    assert_eq!(w.bound_by, BoundBy::TrainingCtx);
+    assert!(!w.vram_unmeasured);
+}
+
+#[test]
 fn kv_arithmetic_matches_measured_qwen() {
     use bloomery_core::gguf::GgufMeta;
     let m = GgufMeta {
