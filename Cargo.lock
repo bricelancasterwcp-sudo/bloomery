@@ -53,6 +53,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "bloomery-bench"
+version = "0.1.0"
+dependencies = [
+ "bloomery-core",
+ "serde_json",
+]
+
+[[package]]
 name = "bloomery-core"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,14 @@
+[package]
+name = "bloomery-bench"
+version = "0.1.0"
+edition = "2021"
+
+# Deliberately two crates in one package: `report`'s math is a library so the
+# gate's classification can be pinned by tests against synthetic journals
+# (`tests/report_test.rs`) without ever starting a daemon, and the binary is a
+# thin driver over it. The bench depends on `bloomery-core` for the journal
+# `Event` type it replays and on nothing that can talk to a GPU — it drives the
+# daemon over HTTP with `std::net::TcpStream` alone.
+[dependencies]
+bloomery-core = { path = "../bloomery-core" }
+serde_json = { workspace = true }

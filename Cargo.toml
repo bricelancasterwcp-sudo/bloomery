@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/bloomery-core", "crates/bloomery-substrate", "crates/bloomery-daemon"]
+members = [
+    "crates/bloomery-core",
+    "crates/bloomery-substrate",
+    "crates/bloomery-daemon",
+    "crates/bloomery-bench",
+]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
