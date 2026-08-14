@@ -1,0 +1,20 @@
+[package]
+name = "bloomery-daemon"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+# The real llama.cpp backend, forwarded straight through to bloomery-substrate
+# so the whole workspace stays GPU-free by default (see that crate's Cargo.toml).
+llama = ["bloomery-substrate/llama"]
+# Vulkan offload, forwarded the same way.
+vulkan = ["llama", "bloomery-substrate/vulkan"]
+
+[dependencies]
+bloomery-core = { path = "../bloomery-core" }
+bloomery-substrate = { path = "../bloomery-substrate" }
+tiny_http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+sha2 = { workspace = true }
