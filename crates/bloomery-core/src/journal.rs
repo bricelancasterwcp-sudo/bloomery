@@ -72,6 +72,22 @@ pub enum Event {
     ModelUnloaded {
         model: String,
     },
+    /// An agent left the table for good (not suspended — removed, e.g. the
+    /// `/v1` shim's ephemeral-agent cleanup). `reason` is a free-text
+    /// operator-facing note, not a machine-matched code.
+    AgentRemoved {
+        id: AgentId,
+        reason: String,
+    },
+    /// One step of a running task. Emitted by the 2b task loop; defined now
+    /// so the schema version is stable — 2a never appends this variant.
+    TaskStep {
+        id: AgentId,
+        step: u32,
+        verb: String,
+        outcome: String,
+        duration_ms: u64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]

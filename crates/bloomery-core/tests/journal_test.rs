@@ -60,3 +60,40 @@ fn replay_fails_loudly_on_corrupt_line() {
 
     assert!(replay(&path).is_err());
 }
+
+#[test]
+fn agent_removed_and_task_step_round_trip() {
+    let dir = std::env::temp_dir().join("bloomery-journal-2a");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("j2a.jsonl");
+    let _ = std::fs::remove_file(&path);
+    let mut j = Journal::open(&path).unwrap();
+    let e1 = Event::AgentRemoved {
+        id: "a1".into(),
+        reason: "ephemeral cleanup".into(),
+    };
+    let e2 = Event::TaskStep {
+        id: "a1".into(),
+        step: 3,
+        verb: "patch".into(),
+        outcome: "applied".into(),
+        duration_ms: 41,
+    };
+    j.append(&e1).unwrap();
+    j.append(&e2).unwrap();
+    assert_eq!(replay(&path).unwrap(), vec![e1, e2]);
+}
+
+#[test]
+fn committed_g2_journal_still_replays() {
+    // Backward-compatibility pin: schema changes must never orphan the
+    // committed evidence. Path is relative to the workspace root.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/superpowers/evidence/2026-08-14-g2-warm-journal.jsonl");
+    let events = replay(&path).unwrap();
+    assert!(
+        events.len() > 100,
+        "expected a real journal, got {} events",
+        events.len()
+    );
+}

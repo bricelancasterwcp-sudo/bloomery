@@ -181,6 +181,16 @@ pub(crate) fn degraded(j: &mut Journal, reason: String) -> Result<(), PagerError
     append(j, &Event::Degraded { reason })
 }
 
+pub(crate) fn agent_removed(j: &mut Journal, id: &str, reason: &str) -> Result<(), PagerError> {
+    append(
+        j,
+        &Event::AgentRemoved {
+            id: id.to_string(),
+            reason: reason.to_string(),
+        },
+    )
+}
+
 /// One POST outcome. `profile_path` is `Some` only when a profile was
 /// actually written and attached — a failed probe records `None` rather
 /// than the path assay was *asked* to write, which may not exist.

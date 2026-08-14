@@ -629,18 +629,19 @@ impl<S: Substrate> Pager<S> {
     /// let it accumulate in the table forever. Unlike [`Pager::suspend`],
     /// no image is *saved* on the way out: the context is being discarded,
     /// not paged out for a later resume, so persisting an image nobody will
-    /// ever `take` back would just be wasted work. No existing [`Event`]
-    /// variant fits "agent removed", so this journals nothing new — it is
-    /// bookkeeping cleanup, not a paging decision.
+    /// ever `take` back would just be wasted work. `reason` is journaled
+    /// verbatim via [`Event::AgentRemoved`] on the successful path only —
+    /// a refused removal (unknown id) leaves nothing to explain.
     ///
     /// [`Event`]: bloomery_core::journal::Event
-    pub fn remove_agent(&mut self, id: &str) -> Result<(), PagerError> {
+    pub fn remove_agent(&mut self, id: &str, reason: &str) -> Result<(), PagerError> {
         if self.table.get(id).is_none() {
             return Err(PagerError::UnknownAgent(id.to_string()));
         }
         self.destroy_context(id)?;
         self.images.drop_image(id);
         self.table.remove(id);
+        jrnl::agent_removed(&mut self.journal, id, reason)?;
         Ok(())
     }
 

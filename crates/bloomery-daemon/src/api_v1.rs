@@ -293,7 +293,7 @@ fn chat_completions<S: Substrate>(
         // failing) — the response can't carry two errors, so this is named
         // on stderr rather than swallowed: law 4's minimum is saying an
         // infrastructure failure, not guessing through it silently.
-        if let Err(cleanup_err) = p.remove_agent(&agent_id) {
+        if let Err(cleanup_err) = p.remove_agent(&agent_id, "ephemeral cleanup") {
             eprintln!(
                 "bloomery-daemon: ephemeral agent {agent_id} cleanup failed: \
                  {cleanup_err:?} — agent leaked until restart"
