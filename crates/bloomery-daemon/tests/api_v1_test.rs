@@ -341,3 +341,132 @@ fn x_bloomery_agent_header_naming_an_unknown_agent_is_404() {
     assert_eq!(v["error"]["code"], "agent_not_found");
     h.shutdown();
 }
+
+/// A header-bound agent belongs to whatever model it was created with — a
+/// request naming a *different* `model` is refused with `400
+/// model_mismatch` rather than silently run against the bound agent's real
+/// model while echoing back the caller's mismatched string. The same
+/// agent with the matching model still succeeds normally.
+#[test]
+fn header_agent_model_mismatch_is_refused_matching_model_passes() {
+    let (dir, pager) = bloomery_daemon::test_support::fake_pager_for_v1();
+    let id = {
+        let mut p = pager.lock().unwrap();
+        // A second model so there's something for "qwen" to mismatch
+        // against.
+        let gguf = dir.join("other.gguf");
+        std::fs::write(&gguf, b"other weights").unwrap();
+        let meta = bloomery_core::gguf::GgufMeta {
+            arch: "qwen2".into(),
+            layers: 28,
+            kv_heads: 4,
+            head_dim: 128,
+            training_ctx: 4096,
+            weights_bytes: 1000,
+        };
+        p.register_model("other", &gguf, meta, None).unwrap();
+        p.create_agent("qwen", 100, None, 200_000).unwrap().id
+    };
+
+    let (st, body) = bloomery_daemon::test_support::dispatch_v1_fake(
+        &pager,
+        "POST",
+        "/v1/chat/completions",
+        r#"{"model":"other","messages":[{"role":"user","content":"hi"}],"max_tokens":16}"#,
+        Some(&id),
+    );
+    assert_eq!(st, 400, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"]["type"], "invalid_request_error");
+    assert_eq!(v["error"]["code"], "model_mismatch");
+    assert_eq!(v["error"]["param"], "model");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(msg.contains(&id), "{msg}");
+    assert!(msg.contains("qwen"), "{msg}");
+    assert!(msg.contains("other"), "{msg}");
+
+    let (st, body) = bloomery_daemon::test_support::dispatch_v1_fake(
+        &pager,
+        "POST",
+        "/v1/chat/completions",
+        r#"{"model":"qwen","messages":[{"role":"user","content":"hi"}],"max_tokens":16}"#,
+        Some(&id),
+    );
+    assert_eq!(st, 200, "matching model must still succeed: {body}");
+}
+
+/// A `Contract` violation (the substrate replied without token stats)
+/// happens *after* the agent has gone `Resident` (`infer` pages it in
+/// before calling the substrate) — the harder case for ephemeral cleanup
+/// than a pre-residency refusal like `PromptTooLarge`/`Budget`. The
+/// ephemeral agent must still be gone afterward, same as any other outcome.
+#[test]
+fn contract_violation_still_cleans_up_the_resident_ephemeral_agent() {
+    let pager = pager_with_missing_stats_reply();
+
+    let (st, body) = bloomery_daemon::test_support::dispatch_v1_fake(
+        &pager,
+        "POST",
+        "/v1/chat/completions",
+        r#"{"model":"qwen","messages":[{"role":"user","content":"hi"}],"max_tokens":16}"#,
+        None,
+    );
+    assert_eq!(st, 500, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"]["type"], "server_error");
+    assert_eq!(v["error"]["code"], "contract_violation");
+
+    let p = pager.lock().unwrap();
+    assert!(
+        p.status().agents.is_empty(),
+        "ephemeral agent must be cleaned up even after going Resident \
+         and then hitting a Contract violation: {:?}",
+        p.status()
+    );
+}
+
+/// Builds a `Pager<FakeSubstrate>` with one `qwen`-like model and a single
+/// scripted reply that omits `prompt_tokens` — the one substrate-side
+/// condition `enforce_contract` classifies as `MissingStats`. Mirrors
+/// `api_native_test.rs::serve_with_missing_stats`, but returns a bare
+/// `Mutex<Pager<_>>` (no socket) so `dispatch_v1_fake` can drive it and the
+/// pager stays inspectable afterward.
+fn pager_with_missing_stats_reply(
+) -> std::sync::Mutex<bloomery_daemon::pager::Pager<bloomery_substrate::fake::FakeSubstrate>> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "bloomery-v1-contract-test-{}-{seq}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    let journal = bloomery_core::journal::Journal::open(&dir.join("j.jsonl")).unwrap();
+    let images = bloomery_daemon::agents::ImageStore::new(&dir.join("img")).unwrap();
+    let mut fake = bloomery_substrate::fake::FakeSubstrate::new();
+    fake.script_reply(bloomery_substrate::Reply {
+        text: "no stats".into(),
+        prompt_tokens: None,
+        completion_tokens: Some(4),
+        duration_ms: 1,
+    });
+    let mut pager = bloomery_daemon::pager::Pager::new(
+        fake,
+        journal,
+        images,
+        Box::new(|| Some(1024 * 1024 * 1024)),
+    );
+    let gguf = dir.join("qwen.gguf");
+    std::fs::write(&gguf, b"weights").unwrap();
+    let meta = bloomery_core::gguf::GgufMeta {
+        arch: "qwen2".into(),
+        layers: 28,
+        kv_heads: 4,
+        head_dim: 128,
+        training_ctx: 4096,
+        weights_bytes: 1000,
+    };
+    pager.register_model("qwen", &gguf, meta, None).unwrap();
+    std::sync::Mutex::new(pager)
+}

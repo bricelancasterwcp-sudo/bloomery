@@ -38,7 +38,19 @@
 //! [`crate::api_native::DEFAULT_BUDGET_TOKENS`], created, used once, and
 //! removed via [`Pager::remove_agent`] before the response is returned —
 //! Phase 1 has no session GC, so an anonymous call must never leave an
-//! agent behind.
+//! agent behind. If that removal itself fails (a real double-fault: the
+//! error that triggered cleanup, *plus* `destroy_context` failing), the
+//! response still can't carry two errors — the leak is named on stderr
+//! instead of swallowed (law 4's minimum honesty).
+//!
+//! A header-bound agent belongs to whatever model it was created with;
+//! a request naming a *different* `model` would otherwise be silently run
+//! against the bound agent's real model while the response echoed back
+//! the caller's string. That is exactly the kind of quiet dishonesty this
+//! module exists to refuse — see `model_mismatch` in [`map_error`]'s
+//! neighborhood (`chat_completions`'s own check, not a `PagerError`
+//! variant, since the pager has no opinion on this — it's a shim-level
+//! promise about `model` matching the id the caller gave it).
 
 use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -219,6 +231,38 @@ fn chat_completions<S: Substrate>(
         },
     };
 
+    // Honest refusal, not a silent-echo: a header-bound agent's model is
+    // whatever it was created with, not whatever `model` the caller typed
+    // this time. An ephemeral agent was just minted *from* `req.model`, so
+    // this can never fire for it — only the header path can disagree.
+    // `UnknownAgent` (header names an id that doesn't exist) is left to
+    // `infer` below, which already reports it as `agent_not_found`.
+    if !ephemeral {
+        let bound_model = p
+            .status()
+            .agents
+            .into_iter()
+            .find(|a| a.id == agent_id)
+            .map(|a| a.model);
+        if let Some(bound_model) = bound_model {
+            if bound_model != req.model {
+                return V1Result::json(
+                    400,
+                    error_envelope(
+                        "invalid_request_error",
+                        "model_mismatch",
+                        format!(
+                            "agent {agent_id} is bound to model {bound_model}; \
+                             request names {}",
+                            req.model
+                        ),
+                        Some("model"),
+                    ),
+                );
+            }
+        }
+    }
+
     let infer_result = p.infer(&agent_id, &prompt, max_tokens);
 
     // Needed only for an honest `PromptTooLarge` message's "(bound by
@@ -237,7 +281,17 @@ fn chat_completions<S: Substrate>(
     if ephemeral {
         // Best-effort cleanup regardless of outcome: an anonymous call must
         // never leave an agent behind, whether it succeeded or was refused.
-        let _ = p.remove_agent(&agent_id);
+        // A failure here is a real double-fault (whatever error `infer`
+        // already returned, *plus* `remove_agent`'s own `destroy_context`
+        // failing) — the response can't carry two errors, so this is named
+        // on stderr rather than swallowed: law 4's minimum is saying an
+        // infrastructure failure, not guessing through it silently.
+        if let Err(cleanup_err) = p.remove_agent(&agent_id) {
+            eprintln!(
+                "bloomery-daemon: ephemeral agent {agent_id} cleanup failed: \
+                 {cleanup_err:?} — agent leaked until restart"
+            );
+        }
     }
     drop(p);
 
