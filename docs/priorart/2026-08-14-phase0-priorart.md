@@ -226,6 +226,26 @@ wrap the modern non-seq trio at all — verified by
 `grep -rn "llama_state_get_size\|llama_state_get_data\|llama_state_set_data" src/`
 over the 0.1.154 tarball returning **no hits**.
 
+> **Correction to Correction 1 — 2026-08-14, Task 11 (implementation).**
+> `state_seq_get` / `state_seq_set` are **unusable for bloomery's pager**
+> (`SeqState` is opaque; images must serialize to NVMe). The size-checked
+> per-sequence `_ext` functions — `state_seq_get_size_ext` /
+> `state_seq_get_data_ext` with `written == size` verification /
+> `state_seq_set_data_ext`, which forwards `bytes.len()` — are the correct
+> path. The prohibition on `get_state_size` / `copy_state_data` /
+> `set_state_data` stands.
+>
+> Why: `SeqState` (`session.rs:661-690`) exposes only `byte_len()` and
+> `flags()` — private `bytes`, no `AsRef<[u8]>`, no serde, no constructor. So
+> `state_seq_get` cannot yield the bytes `save_state` must return, and
+> `state_seq_set` cannot be handed a `SeqState` rebuilt from the bytes
+> `load_state` receives. Spec §4.2 requires KV images as **bytes on NVMe**, so
+> where D1's symbol recommendation and the spec conflict, the spec governs.
+> The `_ext` path preserves the exact property the prohibition protects:
+> explicit sizes on both calls, `written == size` verified on save, and
+> `bytes.len()` forwarded to C on load. Ruled by the coordinator, 2026-08-14;
+> implemented in `crates/bloomery-substrate/src/llama.rs`.
+
 **Flags (`LlamaStateSeqFlags`, `session.rs:14-47`):**
 `empty()` = 0, `PARTIAL_ONLY` = 1, `ON_DEVICE` = 2.
 For bloomery's VRAM→RAM→NVMe paging the correct value is
@@ -240,7 +260,9 @@ an "agent" maps most naturally onto a `seq_id` and the KV image is that
 sequence's `SeqState`. Whether Phase 1 gives each agent its own `LlamaContext`
 (simplest; `state_seq_get(0, empty())`) or packs several agents as sequences
 inside one context (better VRAM reuse; needs `with_n_seq_max`) is left to
-Tasks 12–13 — both are reachable through the same two safe methods.
+Tasks 12–13 — both are reachable through the same pair of per-sequence calls
+(the `_ext` variants, per the 2026-08-14 correction above; Task 11 shipped
+one context per agent on `seq_id` 0).
 
 ### D1.5 Raw sys symbols are available if ever needed
 

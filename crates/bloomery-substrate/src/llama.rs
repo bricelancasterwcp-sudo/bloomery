@@ -158,6 +158,15 @@ impl Substrate for LlamaSubstrate {
         Ok(())
     }
 
+    /// Create a context on model `m` with a requested window of `n_ctx`.
+    ///
+    /// **The granted window may be larger than the request**: llama.cpp pads
+    /// `n_ctx` up (a request for 64 was granted 256 on this box), and there is
+    /// no channel on this trait to report the granted size back. Callers must
+    /// not assume they got exactly what they asked for — VRAM accounting
+    /// absorbs the difference in its overhead margin, and `infer`'s own
+    /// refusal check reads the real window back from llama.cpp rather than
+    /// trusting this argument.
     fn create_context(&mut self, m: ModelHandle, n_ctx: u32) -> Result<CtxHandle, SubstrateError> {
         let n_ctx = NonZeroU32::new(n_ctx)
             .ok_or_else(|| SubstrateError::Context("n_ctx must be non-zero".to_string()))?;
