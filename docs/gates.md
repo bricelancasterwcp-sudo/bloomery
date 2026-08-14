@@ -16,7 +16,7 @@ Adopted from the spec's provisional values; Task 1's prior-art pass found no fea
 
 **Protocol:** computable from `InferCompleted` + `AgentCreated` journal events alone.
 
-**Kill consequence:** If G1 fails, Phase 2 does not run. The policy comparison must be reproducible from the journal; no live instrumentation is added mid-stream.
+**Kill consequence:** v1 ships deterministic-only; LLM policy demoted to human-request granularity.
 
 ---
 
@@ -24,11 +24,11 @@ Adopted from the spec's provisional values; Task 1's prior-art pass found no fea
 
 **Commitment:** p95 **warm** agent switch (KV image in RAM, weights resident) ≤ 2000 ms; p95 **cold** switch (weights not resident, image on NVMe) ≤ 5000 ms.
 
-**Note:** Evidence report must present warm and cold results separately. Page-cache caveat for cold switches must be stated in the evidence doc.
+**Note:** Warm and cold results are presented separately in the evidence report (recorded obligation from Task 1's prior-art pass, docs/priorart/2026-08-14-phase0-priorart.md). Page-cache caveat for cold switches must be stated in the evidence doc.
 
 **Protocol:** ≥50 switches per class on the enthusiast-16GB tier (declared `--real-hardware`), model qwen2.5-coder:7b-instruct-q8_0, computed by `bloomery-bench report` from `PagerOp` journal events only.
 
-**Kill consequence:** If G2 fails on either warm or cold, this plan's core pacing assumption is invalidated. The pager is not deployed.
+**Kill consequence:** the process model is redesigned before anything is built on it.
 
 ---
 
@@ -36,7 +36,7 @@ Adopted from the spec's provisional values; Task 1's prior-art pass found no fea
 
 **Commitment:** semantic view beats grep/fd baseline by ≥15pp top-5 hit rate on a frozen task set.
 
-**Kill consequence:** If G3 fails, the semantic view feature does not ship until the gap is closed.
+**Kill consequence:** the view stays an app-level index and never gets syscall status.
 
 ---
 
@@ -44,6 +44,6 @@ Adopted from the spec's provisional values; Task 1's prior-art pass found no fea
 
 **Commitment:** per-model codec landing (applies-and-parses lens) ≥80% under the OS envelope, else demotion.
 
-**Kill consequence:** If G4 fails, the codec is demoted: further Phase 2 work treats it as best-effort, never as a hard requirement.
+**Kill consequence:** the model is demoted to a narrower verb set or refused for mutating roles.
 
 ---
