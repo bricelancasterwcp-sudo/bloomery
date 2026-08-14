@@ -381,6 +381,31 @@ impl<S: Substrate> Pager<S> {
         jrnl::model_unloaded(&mut self.journal, name)
     }
 
+    /// Removes `id` from the agent table entirely: destroys its resident
+    /// context if it has one, drops any KV image parked for it, then
+    /// forgets it.
+    ///
+    /// Nothing in the native API (Task 14) needed this — an agent is
+    /// suspended, not deleted — but Task 15's `/v1` shim mints an ephemeral
+    /// agent for every header-less `/v1/chat/completions` call and must not
+    /// let it accumulate in the table forever. Unlike [`Pager::suspend`],
+    /// no image is *saved* on the way out: the context is being discarded,
+    /// not paged out for a later resume, so persisting an image nobody will
+    /// ever `take` back would just be wasted work. No existing [`Event`]
+    /// variant fits "agent removed", so this journals nothing new — it is
+    /// bookkeeping cleanup, not a paging decision.
+    ///
+    /// [`Event`]: bloomery_core::journal::Event
+    pub fn remove_agent(&mut self, id: &str) -> Result<(), PagerError> {
+        if self.table.get(id).is_none() {
+            return Err(PagerError::UnknownAgent(id.to_string()));
+        }
+        self.destroy_context(id)?;
+        self.images.drop_image(id);
+        self.table.remove(id);
+        Ok(())
+    }
+
     /// A serializable snapshot of everything the pager is holding, sorted so
     /// two calls with the same state produce the same document.
     pub fn status(&self) -> StatusReport {

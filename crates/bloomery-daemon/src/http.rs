@@ -1,7 +1,9 @@
 //! Minimal HTTP plumbing shared by the daemon's native API (`api_native`,
-//! Task 14) and its future OpenAI-compatible surface (Task 15): parse a
-//! request's method and path into segments, read its body, and write JSON
-//! back.
+//! Task 14) and its OpenAI-compatible `/v1` surface (`api_v1`, Task 15):
+//! parse a request's method, path, and (for `/v1`) its `X-Bloomery-Agent`
+//! header into segments and a body, dispatch on the leading path segment,
+//! and write the response back — JSON for both surfaces, plus SSE for
+//! `/v1/chat/completions`'s `stream:true`.
 //!
 //! [`serve`] owns the whole request-serving story: bind, spin up a fixed
 //! worker pool sharing one `Arc<Mutex<Pager<S>>>`, and hand back a
@@ -18,6 +20,7 @@ use tiny_http::{Header, Request, Response, StatusCode};
 use bloomery_substrate::Substrate;
 
 use crate::api_native;
+use crate::api_v1::{self, V1Body, V1Result};
 use crate::pager::Pager;
 
 /// One GPU, one pager, serialized inference: Phase 1's coarse lock (see the
@@ -141,11 +144,25 @@ fn worker_loop<S: Substrate>(server: &tiny_http::Server, pager: &Mutex<Pager<S>>
                 return;
             }
         };
+        // Read before `read_request` consumes `request`'s body via a `&mut`
+        // reader — `headers()` only needs `&self`, so this borrow is over
+        // and done before that mutable one starts.
+        let agent_header = request
+            .headers()
+            .iter()
+            .find(|h| h.field.equiv("X-Bloomery-Agent"))
+            .map(|h| h.value.as_str().to_string());
         match read_request(&mut request) {
             Ok((method, segments, body)) => {
-                match api_native::dispatch(pager, &method, &segments, &body) {
-                    (status, Some(value)) => respond_json(request, status, &value),
-                    (status, None) => respond_empty(request, status),
+                if segments.first().map(String::as_str) == Some("v1") {
+                    let result =
+                        api_v1::dispatch(pager, &method, &segments, &body, agent_header.as_deref());
+                    respond_v1(request, result);
+                } else {
+                    match api_native::dispatch(pager, &method, &segments, &body) {
+                        (status, Some(value)) => respond_json(request, status, &value),
+                        (status, None) => respond_empty(request, status),
+                    }
                 }
             }
             Err(BodyTooLarge) => respond_json(
@@ -219,4 +236,35 @@ fn respond_json(req: Request, status: u16, value: &serde_json::Value) {
 /// Responds with `status` and an empty body (the `204`s).
 fn respond_empty(req: Request, status: u16) {
     let _ = req.respond(Response::empty(StatusCode(status)));
+}
+
+/// Writes a `/v1` response: JSON gets `Content-Type: application/json`
+/// exactly like the native API, SSE gets `Content-Type: text/event-stream`
+/// (Task 15's `stream:true`, D3) — this is the one place that content type
+/// is chosen, so a route can never send SSE framing under a JSON header or
+/// vice versa. Any headers the route asked for (`X-Bloomery-Template`) are
+/// layered on afterward.
+fn respond_v1(req: Request, result: V1Result) {
+    let (content_type, body) = match result.body {
+        V1Body::Json(value) => (
+            "application/json",
+            serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string()),
+        ),
+        V1Body::Sse(body) => ("text/event-stream", body),
+    };
+    let content_type = Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes())
+        .expect("static header is valid ASCII");
+    let mut response = Response::from_string(body)
+        .with_status_code(StatusCode(result.status))
+        .with_header(content_type);
+    for (name, value) in result.headers {
+        if let Ok(h) = Header::from_bytes(name.as_bytes(), value.as_bytes()) {
+            response = response.with_header(h);
+        }
+        // An invalid header value (non-ASCII) is dropped rather than
+        // failing the whole response — `X-Bloomery-Template` is always one
+        // of two static ASCII strings today, so this path is unreachable in
+        // practice, not a silent data loss risk.
+    }
+    let _ = req.respond(response);
 }

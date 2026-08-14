@@ -68,11 +68,13 @@ fn fresh_dir() -> std::path::PathBuf {
     dir
 }
 
-/// Builds a `Pager<FakeSubstrate>` with one registered `qwen`-like model,
+/// Builds the fixture `Pager<FakeSubstrate>` both [`serve_fake`] and
+/// [`fake_pager_for_v1`] share: one registered `qwen`-like model,
 /// [`SCRIPTED_REPLIES`] scripted successful replies, a tempdir journal and
-/// image store, and a generous static VRAM budget, then serves it on an
-/// ephemeral port (`serve(pager, 0)`).
-pub fn serve_fake() -> (u16, ServerHandle) {
+/// image store, and a generous static VRAM budget. Returns the scratch dir
+/// alongside it — the caller decides whether that's a `ServerHandle`'s to
+/// clean up or its own.
+fn build_fake_pager() -> (std::path::PathBuf, Pager<FakeSubstrate>) {
     let dir = fresh_dir();
     let journal = Journal::open(&dir.join("j.jsonl")).expect("journal opens");
     let images = ImageStore::new(&dir.join("img")).expect("image store opens");
@@ -96,10 +98,61 @@ pub fn serve_fake() -> (u16, ServerHandle) {
         .register_model("qwen", &gguf, qwen_like_meta(), None)
         .expect("register fixture model");
 
+    (dir, pager)
+}
+
+/// Builds a `Pager<FakeSubstrate>` with one registered `qwen`-like model,
+/// [`SCRIPTED_REPLIES`] scripted successful replies, a tempdir journal and
+/// image store, and a generous static VRAM budget, then serves it on an
+/// ephemeral port (`serve(pager, 0)`).
+pub fn serve_fake() -> (u16, ServerHandle) {
+    let (dir, pager) = build_fake_pager();
     let (port, mut handle) = serve(pager, 0);
     // Without this, every `serve_fake()` call litters the OS tempdir with a
     // journal/image/fixture directory that nothing else ever removes — a
     // stale `bloomery-http-test-*` per test run, forever.
     handle.set_scratch_dir(dir);
     (port, handle)
+}
+
+/// The same fixture as [`serve_fake`], but not served over a socket — it
+/// stays a bare `Mutex<Pager<FakeSubstrate>>`, the type every dispatch
+/// function in this crate already takes.
+///
+/// Exists for exactly one thing `serve_fake` cannot do: driving several
+/// `/v1` requests against the *same* pager and then inspecting
+/// `FakeSubstrate::ctx_history` on it afterward. Once a pager is handed to
+/// `http::serve` it is moved behind a socket-serving `Arc` with no way back
+/// out — there is no `ServerHandle::into_pager`, deliberately, since the
+/// real daemon never wants one either. The returned scratch dir is the
+/// caller's to remove (`std::fs::remove_dir_all`, best-effort) — there is
+/// no `ServerHandle` here to register it with.
+pub fn fake_pager_for_v1() -> (std::path::PathBuf, std::sync::Mutex<Pager<FakeSubstrate>>) {
+    let (dir, pager) = build_fake_pager();
+    (dir, std::sync::Mutex::new(pager))
+}
+
+/// Drives one `/v1` request through the exact `api_v1::dispatch` the real
+/// server calls, without opening a socket — the in-process counterpart to
+/// driving `serve_fake()` over `tests/common::http`. `path` is the full
+/// `/v1/...` path; `agent_header` stands in for an `X-Bloomery-Agent`
+/// header, the one header this crate's `/v1` surface reads.
+pub fn dispatch_v1_fake(
+    pager: &std::sync::Mutex<Pager<FakeSubstrate>>,
+    method: &str,
+    path: &str,
+    body: &str,
+    agent_header: Option<&str>,
+) -> (u16, String) {
+    let segments: Vec<String> = path
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect();
+    let result = crate::api_v1::dispatch(pager, method, &segments, body, agent_header);
+    let body = match result.body {
+        crate::api_v1::V1Body::Json(v) => v.to_string(),
+        crate::api_v1::V1Body::Sse(s) => s,
+    };
+    (result.status, body)
 }

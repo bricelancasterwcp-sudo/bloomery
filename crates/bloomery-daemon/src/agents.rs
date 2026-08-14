@@ -217,6 +217,21 @@ impl ImageStore {
         Ok(())
     }
 
+    /// Best-effort removes any RAM or NVMe image parked for `id`, deleting
+    /// the backing spill file if one exists. Errors deleting that file are
+    /// ignored, matching [`ImageStore::put_ram`]'s existing convention —
+    /// this is litter cleanup, not the source of truth.
+    ///
+    /// Used by [`crate::pager::Pager::remove_agent`] (Task 15's `/v1` shim
+    /// deletes its ephemeral agents outright rather than suspending them),
+    /// so a stray image never outlives the agent id it was tagged for.
+    pub fn drop_image(&mut self, id: &str) {
+        self.ram.remove(id);
+        if let Some(spilled) = self.spilled.remove(id) {
+            let _ = std::fs::remove_file(&spilled.path);
+        }
+    }
+
     /// Fetches `id`'s image, verified against `expect_digest`.
     ///
     /// Checks the RAM tier first, then NVMe. A digest mismatch in either

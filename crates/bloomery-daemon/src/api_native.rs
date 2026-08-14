@@ -20,8 +20,13 @@ use crate::pager::{Pager, PagerError};
 /// (100, 200 000) but are not imported from there: `serve()` takes a bare
 /// `Pager<S>`, not a `Config`, so the HTTP layer has no config to read a
 /// caller's default from — only the request body's optional fields.
-const DEFAULT_PRIORITY: u8 = 100;
-const DEFAULT_BUDGET_TOKENS: u64 = 200_000;
+///
+/// `pub(crate)` because Task 15's `/v1` shim (`api_v1.rs`) creates the same
+/// kind of ephemeral, default-priority/budget agent for a header-less
+/// `/v1/chat/completions` call and reuses these constants rather than
+/// retyping the numbers.
+pub(crate) const DEFAULT_PRIORITY: u8 = 100;
+pub(crate) const DEFAULT_BUDGET_TOKENS: u64 = 200_000;
 
 /// `dispatch`'s result: `None` for a body-less response (the `204`s),
 /// `Some(value)` for a JSON one.
@@ -86,7 +91,11 @@ fn bad_request(e: serde_json::Error) -> ApiResult {
 /// design — every request on every worker gets the same named 500 until the
 /// daemon is restarted, rather than some requests succeeding against
 /// state nobody can reason about.
-fn lock_pager<S: Substrate>(
+///
+/// `pub(crate)` so `api_v1.rs` (Task 15) shares this same sticky-poison
+/// handling rather than re-implementing it against a second, drifting
+/// spelling of the same failure.
+pub(crate) fn lock_pager<S: Substrate>(
     pager: &Mutex<Pager<S>>,
 ) -> Result<MutexGuard<'_, Pager<S>>, ApiResult> {
     pager.lock().map_err(|_| {

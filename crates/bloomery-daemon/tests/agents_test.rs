@@ -130,6 +130,35 @@ fn put_ram_invalidates_previously_spilled_entry_for_same_id() {
     }
 }
 
+/// `drop_image` (Task 15's `Pager::remove_agent` cleanup): removes a RAM
+/// image outright, and removes a spilled image's index entry *and* its
+/// backing file, so neither tier can resurrect it for a later `take`.
+#[test]
+fn drop_image_removes_ram_and_spilled_entries_and_the_spill_file() {
+    let dir = std::env::temp_dir().join("bloomery-img-test-drop");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut st = ImageStore::new(&dir).unwrap();
+
+    st.put_ram("a1", "digestX", vec![1, 2, 3]);
+    st.drop_image("a1");
+    assert!(matches!(st.take("a1", "digestX"), ImageFetch::Missing));
+
+    st.put_ram("a2", "digestX", vec![4, 5, 6]);
+    st.spill("a2").unwrap();
+    let spilled_path = dir.join("a2.digestX.kvimg");
+    assert!(spilled_path.exists());
+
+    st.drop_image("a2");
+    assert!(matches!(st.take("a2", "digestX"), ImageFetch::Missing));
+    assert!(
+        !spilled_path.exists(),
+        "drop_image must delete the spill file, not just forget it"
+    );
+
+    // Dropping an id with no image at all is a no-op, not an error.
+    st.drop_image("nobody");
+}
+
 #[test]
 fn agent_table_insert_get_remove_and_residents() {
     use bloomery_core::budget::Budget;
