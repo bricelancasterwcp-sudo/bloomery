@@ -74,8 +74,9 @@ struct ProfileData {
 /// A capability profile from an external `assay` tool.
 ///
 /// Contains measured capabilities and verdicts for a model.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Profile {
+    #[serde(flatten)]
     data: ProfileData,
 }
 
@@ -84,14 +85,14 @@ impl Profile {
     ///
     /// Returns `Err(ProfileError::UnsupportedSchema)` if the schema version is < 2.
     pub fn from_json(s: &str) -> Result<Profile, ProfileError> {
-        let data: ProfileData =
+        let profile: Profile =
             serde_json::from_str(s).map_err(|e| ProfileError::Parse(e.to_string()))?;
 
-        if data.assay_profile_version < 2 {
-            return Err(ProfileError::UnsupportedSchema(data.assay_profile_version));
+        if profile.schema_version() < 2 {
+            return Err(ProfileError::UnsupportedSchema(profile.schema_version()));
         }
 
-        Ok(Profile { data })
+        Ok(profile)
     }
 
     /// Get the schema version of this profile.

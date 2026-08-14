@@ -36,3 +36,9 @@ fn old_schema_rejected_by_name() {
         Err(bloomery_core::profile::ProfileError::UnsupportedSchema(1))
     ));
 }
+
+#[test]
+fn profile_derives_deserialize_directly() {
+    let p: Profile = serde_json::from_str(FIXTURE).unwrap();
+    assert_eq!(p.model_name(), "qwen2.5-coder:7b-instruct-q8_0");
+}
