@@ -67,11 +67,21 @@ fn vram_term_saturates_instead_of_wrapping_and_ties_favor_training_ctx() {
     // u32::MAX rather than wrap, and since training_ctx is also u32::MAX
     // here, the two candidates tie on tokens — the earlier-declared term
     // (TrainingCtx) must win the tie, never the later one.
+    //
+    // free_vram_bytes = 2^32 is the deliberately discriminating input: the
+    // raw quotient is exactly 4_294_967_296, one past u32::MAX. A truncating
+    // `as u32` cast wraps that to 0 (bound_by = Vram, tokens = 0); the
+    // saturating fix instead clamps it to u32::MAX, which then ties with
+    // training_ctx and correctly resolves to TrainingCtx by the tie rule.
+    // (An earlier version of this test used free_vram_bytes = u64::MAX,
+    // whose low 32 bits are coincidentally all 1s — i.e. `u64::MAX as u32
+    // == u32::MAX` too — so it passed under both the buggy and fixed code
+    // and did not actually guard the regression.)
     let i = GeometryInput {
         training_ctx: u32::MAX,
         kv_per_token: 1,
         weights_bytes: 0,
-        free_vram_bytes: Some(u64::MAX),
+        free_vram_bytes: Some(4_294_967_296), // 2^32
         overhead_bytes: 0,
         user_cap: None,
         measured_ceiling: None,
