@@ -1,12 +1,18 @@
-//! Live llama.cpp substrate test.
+//! Live llama.cpp substrate test: lifecycle and the stats contract.
 //!
-//! This is the only test in the workspace that needs a GPU, a real GGUF and
-//! the `llama` feature; everything else stays GPU-free. It is `#[ignore]`d
-//! *and* env-gated so neither `cargo test` nor `cargo test -- --ignored`
-//! can run it by accident.
+//! This and `llama_semantic_test.rs` are the only tests in the workspace that
+//! need a GPU, a real GGUF and the `llama` feature; everything else stays
+//! GPU-free. Both are `#[ignore]`d *and* env-gated so neither `cargo test` nor
+//! `cargo test -- --ignored` can run them by accident.
 //!
 //! Requires: `BLOOMERY_LIVE=1`, `BLOOMERY_TEST_GGUF=/path/to/model.gguf`,
 //! and `--features llama` (add `,vulkan` for GPU offload).
+//!
+//! The semantic test lives in a *separate* file on purpose: `LlamaBackend`
+//! initialisation is process-global, so two live tests in one binary race and
+//! the loser gets `BackendAlreadyInitialized`. Cargo runs each integration
+//! test binary as its own process, sequentially, which sidesteps that (and
+//! frees the model's VRAM between the two).
 #![cfg(feature = "llama")]
 
 #[test]
