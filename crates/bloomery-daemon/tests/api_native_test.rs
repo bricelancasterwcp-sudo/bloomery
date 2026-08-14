@@ -151,6 +151,122 @@ fn infer_on_unknown_agent_returns_404() {
     handle.shutdown();
 }
 
+/// 404: creating an agent against a model that was never registered.
+#[test]
+fn create_agent_with_unknown_model_returns_404() {
+    let (port, handle) = bloomery_daemon::test_support::serve_fake();
+    let addr = format!("127.0.0.1:{port}");
+    let (st, body) = http(&addr, "POST", "/agents", r#"{"model":"does-not-exist"}"#);
+    assert_eq!(st, 404, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"], "unknown_model");
+    assert_eq!(v["model"], "does-not-exist");
+    handle.shutdown();
+}
+
+/// 400: a body that isn't valid JSON gets a named error, not a panic or a
+/// route-level 5xx.
+#[test]
+fn malformed_json_body_returns_400() {
+    let (port, handle) = bloomery_daemon::test_support::serve_fake();
+    let addr = format!("127.0.0.1:{port}");
+    let (st, body) = http(&addr, "POST", "/agents", "{not valid json");
+    assert_eq!(st, 400, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"], "bad_request");
+    assert!(v["message"].as_str().is_some(), "{body}");
+    handle.shutdown();
+}
+
+/// 413: a body over `http::MAX_BODY_BYTES` (1 MiB) is refused before it
+/// ever reaches route handling, regardless of what `Content-Length`
+/// claimed.
+#[test]
+fn oversized_body_returns_413() {
+    let (port, handle) = bloomery_daemon::test_support::serve_fake();
+    let addr = format!("127.0.0.1:{port}");
+    let huge = format!(
+        r#"{{"model":"qwen","padding":"{}"}}"#,
+        "x".repeat(2 * 1024 * 1024)
+    );
+    let (st, body) = http(&addr, "POST", "/agents", &huge);
+    assert_eq!(st, 413, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"], "body_too_large");
+    assert_eq!(v["max_bytes"], 1_048_576);
+    handle.shutdown();
+}
+
+/// 502: a substrate reply that omits token stats is an infrastructure
+/// failure (project law 4), never a model failure — and its `kind` matches
+/// the journal's own spelling ("MissingStats") rather than a HTTP-layer
+/// paraphrase, so the two are grep-able as the same fact.
+#[test]
+fn infer_with_missing_stats_returns_502_with_journal_spelling() {
+    let (port, handle, id) = serve_with_missing_stats();
+    let addr = format!("127.0.0.1:{port}");
+    let (st, body) = http(
+        &addr,
+        "POST",
+        &format!("/agents/{id}/infer"),
+        r#"{"prompt":"hi","max_tokens":16}"#,
+    );
+    assert_eq!(st, 502, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"], "contract_violation");
+    assert_eq!(v["kind"], "MissingStats");
+    assert!(v["detail"].as_str().is_some(), "{body}");
+    handle.shutdown();
+}
+
+/// Builds and serves a `Pager<FakeSubstrate>` with one scripted reply that
+/// omits `prompt_tokens` — the one substrate-side condition that trips
+/// `enforce_contract`'s `MissingStats` violation. Separate from
+/// `test_support::serve_fake` (whose script is all clean replies) but built
+/// from the same public pieces.
+fn serve_with_missing_stats() -> (u16, bloomery_daemon::http::ServerHandle, String) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "bloomery-contract-test-{}-{seq}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    let journal = bloomery_core::journal::Journal::open(&dir.join("j.jsonl")).unwrap();
+    let images = bloomery_daemon::agents::ImageStore::new(&dir.join("img")).unwrap();
+    let mut fake = bloomery_substrate::fake::FakeSubstrate::new();
+    fake.script_reply(bloomery_substrate::Reply {
+        text: "no stats".into(),
+        prompt_tokens: None,
+        completion_tokens: Some(4),
+        duration_ms: 1,
+    });
+    let mut pager = bloomery_daemon::pager::Pager::new(
+        fake,
+        journal,
+        images,
+        Box::new(|| Some(1024 * 1024 * 1024)),
+    );
+    let gguf = dir.join("qwen.gguf");
+    std::fs::write(&gguf, b"weights").unwrap();
+    let meta = bloomery_core::gguf::GgufMeta {
+        arch: "qwen2".into(),
+        layers: 28,
+        kv_heads: 4,
+        head_dim: 128,
+        training_ctx: 4096,
+        weights_bytes: 1000,
+    };
+    pager.register_model("qwen", &gguf, meta, None).unwrap();
+    let info = pager.create_agent("qwen", 100, None, 200_000).unwrap();
+
+    let (port, mut handle) = bloomery_daemon::http::serve(pager, 0);
+    handle.set_scratch_dir(dir);
+    (port, handle, info.id)
+}
+
 /// 204/204: suspend then resume round-trips an agent, and it is still
 /// usable afterward.
 #[test]
@@ -332,7 +448,8 @@ fn serve_panicking() -> (u16, bloomery_daemon::http::ServerHandle, String) {
         .create_agent("panic-model", 100, None, 200_000)
         .unwrap();
 
-    let (port, handle) = bloomery_daemon::http::serve(pager, 0);
+    let (port, mut handle) = bloomery_daemon::http::serve(pager, 0);
+    handle.set_scratch_dir(dir);
     (port, handle, info.id)
 }
 

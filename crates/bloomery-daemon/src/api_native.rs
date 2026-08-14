@@ -199,7 +199,7 @@ fn status<S: Substrate>(pager: &Mutex<Pager<S>>) -> ApiResult {
 /// | `Refused` | 409 | `{error, needed, free, reclaimable}` |
 /// | `PromptTooLarge` | 413 | `{error, needed_tokens, window_tokens}` |
 /// | `Budget` | 402 | `{error, remaining, requested}` |
-/// | `Contract` | 502 | `{error, kind}` |
+/// | `Contract` | 502 | `{error, kind, detail}` |
 /// | `Substrate` | 500 | `{error, message}` |
 fn map_error(e: &PagerError) -> ApiResult {
     let (status, body) = match e {
@@ -241,7 +241,18 @@ fn map_error(e: &PagerError) -> ApiResult {
                 "requested": requested,
             }),
         ),
-        PagerError::Contract(kind) => (502, json!({"error": "contract_violation", "kind": kind})),
+        PagerError::Contract(kind) => (
+            502,
+            json!({
+                "error": "contract_violation",
+                // `kind` is the pager's own spelling — currently always
+                // "MissingStats", kept identical to the journal's
+                // `ContractViolation`/`kind` field (pager.rs) rather than
+                // reworded here, so the two are grep-able as the same fact.
+                "kind": kind,
+                "detail": "substrate reply omitted token stats",
+            }),
+        ),
         PagerError::Substrate(message) => {
             (500, json!({"error": "substrate_error", "message": message}))
         }

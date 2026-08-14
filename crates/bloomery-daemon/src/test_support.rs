@@ -96,5 +96,10 @@ pub fn serve_fake() -> (u16, ServerHandle) {
         .register_model("qwen", &gguf, qwen_like_meta(), None)
         .expect("register fixture model");
 
-    serve(pager, 0)
+    let (port, mut handle) = serve(pager, 0);
+    // Without this, every `serve_fake()` call litters the OS tempdir with a
+    // journal/image/fixture directory that nothing else ever removes — a
+    // stale `bloomery-http-test-*` per test run, forever.
+    handle.set_scratch_dir(dir);
+    (port, handle)
 }

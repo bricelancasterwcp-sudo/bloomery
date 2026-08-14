@@ -317,9 +317,12 @@ impl<S: Substrate> Pager<S> {
             Ok(v) => v,
             Err(ContractViolation::MissingStats) => {
                 jrnl::contract_violation(&mut self.journal, id, "MissingStats")?;
-                return Err(PagerError::Contract(
-                    "substrate reply omitted token stats".to_string(),
-                ));
+                // The same spelling the journal just used: `PagerError::Contract`
+                // carries the machine-readable violation kind (Task 14's HTTP
+                // layer forwards this verbatim as the `kind` field of a `502`;
+                // it attaches its own human sentence separately rather than
+                // this crate inventing one that could drift from the journal's).
+                return Err(PagerError::Contract("MissingStats".to_string()));
             }
         };
         let charged =
