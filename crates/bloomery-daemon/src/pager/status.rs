@@ -22,7 +22,8 @@ pub struct AgentInfo {
 /// A whole-pager snapshot: agents sorted by id, models sorted by name.
 #[derive(Debug, serde::Serialize)]
 pub struct StatusReport {
-    /// The live VRAM probe at snapshot time; `None` = unmeasured, not zero.
+    /// bloomery's static VRAM budget (see `Pager::new`), not a live driver
+    /// read; `None` = unmeasured, not zero.
     pub free_vram_bytes: Option<u64>,
     /// Sum of the KV footprints the pager believes are currently resident.
     pub resident_kv_bytes: u64,

@@ -61,6 +61,13 @@ const DEFAULT_N_GPU_LAYERS: u32 = u32::MAX;
 /// Conservative chars-per-token floor for the pre-tokenization prompt gate.
 const CHARS_PER_TOKEN: u64 = 3;
 
+/// Source of bloomery's static VRAM budget — see [`Pager::new`].
+///
+/// `Send + Sync` from the start: Task 14 shares one pager across request
+/// threads behind a lock, and adding the bounds later would be a breaking
+/// change to every caller that built one.
+pub type FreeVramFn = Box<dyn Fn() -> Option<u64> + Send + Sync>;
+
 /// A registered model: its file, geometry, blob identity, optional profile,
 /// and the substrate handle once its weights are actually loaded.
 struct ModelEntry {
@@ -78,7 +85,8 @@ pub struct Pager<S: Substrate> {
     images: ImageStore,
     table: AgentTable,
     models: HashMap<String, ModelEntry>,
-    free_vram: Box<dyn Fn() -> Option<u64>>,
+    /// bloomery's static VRAM budget — see [`Pager::new`].
+    free_vram: FreeVramFn,
     overhead_bytes: u64,
     n_gpu_layers: u32,
     /// Monotonic: agent ids are the pager's to keep unique, because
@@ -88,11 +96,23 @@ pub struct Pager<S: Substrate> {
 }
 
 impl<S: Substrate> Pager<S> {
+    /// Builds a pager.
+    ///
+    /// `free_vram` returns **bloomery's static VRAM budget** — the pool this
+    /// daemon is allowed to fill, e.g. driver-reported free VRAM measured
+    /// once at boot. It is reservation accounting: the pager subtracts its
+    /// own residents from this number itself.
+    ///
+    /// It must **not** be a live driver read. A live read already excludes
+    /// the contexts the pager allocated, so subtracting residents from it
+    /// would count every resident twice and shrink the usable pool with each
+    /// admission. `None` means unmeasured (never zero) and drops the pager
+    /// to a residency-count cap of one.
     pub fn new(
         substrate: S,
         journal: Journal,
         image_store: ImageStore,
-        free_vram: Box<dyn Fn() -> Option<u64>>,
+        free_vram: FreeVramFn,
     ) -> Pager<S> {
         Pager {
             substrate,
@@ -287,7 +307,12 @@ impl<S: Substrate> Pager<S> {
 
         let ctx = self.ensure_resident(id)?;
         jrnl::infer_started(&mut self.journal, id, prompt)?;
-        let reply = self.substrate.infer(ctx, prompt, max_tokens).map_err(sub)?;
+        let reply = match self.substrate.infer(ctx, prompt, max_tokens) {
+            Ok(reply) => reply,
+            Err(e) => {
+                return Err(self.classify_infer_error(id, e, needed_tokens, window_tokens)?)
+            }
+        };
         let verified = match enforce_contract(reply) {
             Ok(v) => v,
             Err(ContractViolation::MissingStats) => {

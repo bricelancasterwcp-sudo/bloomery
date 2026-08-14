@@ -21,6 +21,19 @@ pub mod llama;
 /// same symbol instead of retyping a string that could silently drift apart.
 pub const STATE_SIZE_MISMATCH: &str = "size mismatch";
 
+/// The substring every *window* refusal carries in its
+/// [`SubstrateError::Infer`] message.
+///
+/// The same kind of cross-task contract as [`STATE_SIZE_MISMATCH`], for law
+/// 2 rather than law 3. The kernel gates on a pre-tokenization estimate; a
+/// substrate that knows the real tokenization and the real (post-padding)
+/// window is the backstop that catches what the estimate let through. That
+/// backstop is still a *refusal*, so it has to survive the trip across the
+/// trait boundary as one instead of decaying into a generic infer failure —
+/// the pager matches on this marker to keep it classified as
+/// "too large for the window", never "the model broke".
+pub const WINDOW_EXCEEDED: &str = "exceed the window";
+
 /// Opaque handle to a loaded model, minted by [`Substrate::load_model`].
 pub type ModelHandle = u64;
 

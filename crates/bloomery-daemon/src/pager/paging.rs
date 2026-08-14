@@ -12,7 +12,9 @@ use std::time::Instant;
 
 use bloomery_core::journal::PagerOpKind;
 use bloomery_core::scheduler::{plan_residency, Placement, ResidencyRequest};
-use bloomery_substrate::{CtxHandle, ModelHandle, Substrate, STATE_SIZE_MISMATCH};
+use bloomery_substrate::{
+    CtxHandle, ModelHandle, Substrate, SubstrateError, STATE_SIZE_MISMATCH, WINDOW_EXCEEDED,
+};
 
 use crate::agents::{AgentState, ImageFetch};
 
@@ -28,9 +30,9 @@ impl<S: Substrate> Pager<S> {
             .fold(0u64, |acc, r| acc.saturating_add(r.kv_bytes))
     }
 
-    /// The live VRAM probe. `None` is unmeasured, never zero — and it is said
-    /// once, so a machine with no working probe doesn't drown its own
-    /// journal in the same sentence.
+    /// Reads bloomery's static VRAM budget (see [`Pager::new`]). `None` is
+    /// unmeasured, never zero — and it is said once, so a machine with no
+    /// working probe doesn't drown its own journal in the same sentence.
     pub(super) fn probe_free_vram(&mut self) -> Result<Option<u64>, PagerError> {
         let free = (self.free_vram)();
         if free.is_none() && !self.vram_unmeasured_logged {
@@ -64,12 +66,17 @@ impl<S: Substrate> Pager<S> {
 
     /// Pre-checks memory for `id` and evicts whatever the planner names.
     ///
-    /// Free VRAM is modelled conservatively as `probe − Σ resident kv_bytes`:
-    /// the probe may not yet reflect contexts this pager created, so counting
-    /// them twice errs toward refusing rather than toward an OOM. When the
-    /// probe is unmeasured there is no honest arithmetic left, so residency
-    /// falls back to a count cap of one — planned as zero free bytes, which
-    /// makes any second resident a priority decision or a refusal.
+    /// Free VRAM is `budget − Σ resident kv_bytes`, which is reservation
+    /// accounting, not a second measurement: `free_vram` returns bloomery's
+    /// *static* budget (see [`Pager::new`]), so the pager is the only thing
+    /// tracking what it has spent out of that pool. A live driver read would
+    /// already have the resident contexts subtracted from it and would make
+    /// this double-count.
+    ///
+    /// When the budget is unmeasured there is no honest arithmetic left, so
+    /// residency falls back to a count cap of one — planned as zero free
+    /// bytes, which makes any second resident a priority decision or a
+    /// refusal.
     ///
     /// Nothing in this function touches the substrate on the refusal path.
     /// That is the point: memory pressure is decided from measured numbers
@@ -165,9 +172,28 @@ impl<S: Substrate> Pager<S> {
             .ok_or(PagerError::UnknownModel(model))?;
 
         let started = Instant::now();
-        let bytes = self.substrate.save_state(ctx).map_err(|e| {
-            PagerError::Substrate(format!("save_state for {id}: {}", substrate_msg(&e)))
-        })?;
+        let bytes = match self.substrate.save_state(ctx) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                // The `SchedulerDecision` that named this victim is already
+                // in the journal. Without this record, a replay shows an
+                // eviction that was decided and then simply never happened —
+                // an orphaned decision the reader has to guess about.
+                let detail = substrate_msg(&e);
+                let what = match op {
+                    PagerOpKind::EvictSave => "eviction",
+                    PagerOpKind::SuspendSave => "suspend",
+                    PagerOpKind::ResumeLoad => "resume",
+                };
+                jrnl::degraded(
+                    &mut self.journal,
+                    format!("{what} of {id} aborted: save_state failed: {detail}"),
+                )?;
+                return Err(PagerError::Substrate(format!(
+                    "save_state for {id}: {detail}"
+                )));
+            }
+        };
         let len = bytes.len() as u64;
         self.images.put_ram(id, &digest, bytes);
         let mut tier = "ram";
@@ -228,9 +254,53 @@ impl<S: Substrate> Pager<S> {
                 )?;
                 Ok(ctx)
             }
-            ImageFetch::Ram(bytes) => self.restore_image(id, ctx, bytes, "ram"),
-            ImageFetch::Nvme(bytes) => self.restore_image(id, ctx, bytes, "nvme"),
+            ImageFetch::Ram(bytes) => self.restore_image(id, ctx, bytes, "ram", &digest),
+            ImageFetch::Nvme(bytes) => self.restore_image(id, ctx, bytes, "nvme", &digest),
         }
+    }
+
+    /// Classifies a failure returned by `substrate.infer`.
+    ///
+    /// The substrate is law 2's backstop: it knows the real tokenization and
+    /// the real (post-padding) window, so it catches what the kernel's
+    /// pre-tokenization estimate let through. That is still a *refusal*, and
+    /// it has to stay one on this side of the boundary — an operator who
+    /// sees `Substrate` goes looking for a broken backend, when the honest
+    /// answer is "the prompt did not fit".
+    ///
+    /// Field provenance: `needed_tokens` is the **pager's** conservative
+    /// estimate (`prompt.len()/3 + max_tokens`) and `window_tokens` is the
+    /// window the pager computed and asked for — deliberately *not* the
+    /// substrate's exact token count or its padded window, which it reports
+    /// only inside its message. That message is journaled verbatim in the
+    /// `Refusal`'s `detail`, so the exact numbers are recoverable while the
+    /// typed fields stay in the same units the caller was quoted at
+    /// `create_agent` time.
+    ///
+    /// The outer `Err` is reserved for a failed journal write; the classified
+    /// refusal comes back as `Ok`.
+    pub(super) fn classify_infer_error(
+        &mut self,
+        id: &str,
+        e: SubstrateError,
+        needed_tokens: u64,
+        window_tokens: u32,
+    ) -> Result<PagerError, PagerError> {
+        let detail = substrate_msg(&e);
+        if !detail.contains(WINDOW_EXCEEDED) {
+            return Ok(PagerError::Substrate(detail));
+        }
+        jrnl::refusal(
+            &mut self.journal,
+            id,
+            needed_tokens,
+            window_tokens,
+            format!("substrate backstop refused the real tokenization: {detail}"),
+        )?;
+        Ok(PagerError::PromptTooLarge {
+            needed_tokens,
+            window_tokens,
+        })
     }
 
     /// Restores an image into a just-created context.
@@ -241,12 +311,22 @@ impl<S: Substrate> Pager<S> {
     /// that is invalidation, handled exactly like a stale digest — journal
     /// the degradation and cold-start on a fresh context. Any other failure
     /// is a real substrate fault and is surfaced.
+    ///
+    /// `ImageStore::take` is destructive, so anything short of invalidation
+    /// puts the bytes **back** before the error propagates. Otherwise a
+    /// transient fault (a substrate hiccup, a context that couldn't be
+    /// created that instant) would silently consume the only copy of a
+    /// conversation: the request fails, the operator retries, and the agent
+    /// comes back cold with no record that anything was lost. An invalidated
+    /// image is the one case that must *not* go back — it would fail
+    /// identically forever.
     fn restore_image(
         &mut self,
         id: &str,
         ctx: CtxHandle,
         bytes: Vec<u8>,
         tier: &str,
+        digest: &str,
     ) -> Result<CtxHandle, PagerError> {
         let started = Instant::now();
         let len = bytes.len() as u64;
@@ -265,6 +345,10 @@ impl<S: Substrate> Pager<S> {
             Err(e) => substrate_msg(&e),
         };
 
+        if !failure.contains(STATE_SIZE_MISMATCH) {
+            self.images.put_ram(id, digest, bytes);
+        }
+
         if let Err(destroy) = self.substrate.destroy_context(ctx) {
             let detail = substrate_msg(&destroy);
             jrnl::degraded(
@@ -282,7 +366,10 @@ impl<S: Substrate> Pager<S> {
         if !failure.contains(STATE_SIZE_MISMATCH) {
             jrnl::degraded(
                 &mut self.journal,
-                format!("image restore failed for {id}: {failure}; context destroyed"),
+                format!(
+                    "image restore failed for {id}: {failure}; context destroyed, \
+                     image kept for retry"
+                ),
             )?;
             return Err(PagerError::Substrate(failure));
         }

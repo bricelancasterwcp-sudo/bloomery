@@ -435,12 +435,16 @@ fn generate_from(
     // the backstop that knows the real tokenization and the real window.
     // Read the window back rather than trusting what was requested: llama.cpp
     // pads it (a request for 64 came back as 256 on this box).
+    //
+    // The message carries `WINDOW_EXCEEDED` so the refusal survives the trip
+    // across the trait boundary *as a refusal* — see that const's docs.
     let window = ctx.n_ctx();
     let needed = u64::try_from(pos).unwrap_or(0) + u64::from(prompt_tokens) + u64::from(max_tokens);
     if needed > u64::from(window) {
         return Err(SubstrateError::Infer(format!(
             "refusing: {pos} cached + {prompt_tokens} prompt + {max_tokens} requested tokens \
-             exceed the {window}-token window"
+             {} of {window} tokens",
+            crate::WINDOW_EXCEEDED
         )));
     }
 
