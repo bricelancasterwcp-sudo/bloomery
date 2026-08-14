@@ -6,7 +6,7 @@
 //! JSON shape, so a refusal is always structured JSON with the arithmetic
 //! that produced it, never a truncated success (law 2).
 
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 use serde_json::{json, Value};
 
@@ -73,12 +73,42 @@ fn bad_request(e: serde_json::Error) -> ApiResult {
     )
 }
 
+/// Locks `pager`, turning a poisoned mutex into a named 500 instead of a
+/// panic cascade.
+///
+/// A poisoned pager mutex means some earlier request's worker thread
+/// panicked while holding it — the pager's internal state (agent table,
+/// image store, substrate handles) was left mid-mutation in a condition
+/// nothing here can vouch for. `.into_inner()` is deliberately not used to
+/// paper over that and keep serving: law 4 is "an infrastructure failure is
+/// said, not guessed through", and a pager that might have half-applied a
+/// mutation is not degraded, it's untrustworthy. So poison is sticky by
+/// design — every request on every worker gets the same named 500 until the
+/// daemon is restarted, rather than some requests succeeding against
+/// state nobody can reason about.
+fn lock_pager<S: Substrate>(
+    pager: &Mutex<Pager<S>>,
+) -> Result<MutexGuard<'_, Pager<S>>, ApiResult> {
+    pager.lock().map_err(|_| {
+        (
+            500,
+            Some(json!({
+                "error": "internal",
+                "detail": "pager state poisoned by a prior panic; restart the daemon",
+            })),
+        )
+    })
+}
+
 fn create_agent<S: Substrate>(pager: &Mutex<Pager<S>>, body: &str) -> ApiResult {
     let req: CreateAgentReq = match serde_json::from_str(body) {
         Ok(r) => r,
         Err(e) => return bad_request(e),
     };
-    let mut p = pager.lock().expect("pager mutex poisoned");
+    let mut p = match lock_pager(pager) {
+        Ok(p) => p,
+        Err(poisoned) => return poisoned,
+    };
     match p.create_agent(
         &req.model,
         req.priority.unwrap_or(DEFAULT_PRIORITY),
@@ -98,7 +128,10 @@ fn infer<S: Substrate>(pager: &Mutex<Pager<S>>, id: &str, body: &str) -> ApiResu
         Ok(r) => r,
         Err(e) => return bad_request(e),
     };
-    let mut p = pager.lock().expect("pager mutex poisoned");
+    let mut p = match lock_pager(pager) {
+        Ok(p) => p,
+        Err(poisoned) => return poisoned,
+    };
     match p.infer(id, &req.prompt, req.max_tokens) {
         Ok(reply) => (
             200,
@@ -114,7 +147,10 @@ fn infer<S: Substrate>(pager: &Mutex<Pager<S>>, id: &str, body: &str) -> ApiResu
 }
 
 fn suspend<S: Substrate>(pager: &Mutex<Pager<S>>, id: &str) -> ApiResult {
-    let mut p = pager.lock().expect("pager mutex poisoned");
+    let mut p = match lock_pager(pager) {
+        Ok(p) => p,
+        Err(poisoned) => return poisoned,
+    };
     match p.suspend(id) {
         Ok(()) => (204, None),
         Err(e) => map_error(&e),
@@ -122,7 +158,10 @@ fn suspend<S: Substrate>(pager: &Mutex<Pager<S>>, id: &str) -> ApiResult {
 }
 
 fn resume<S: Substrate>(pager: &Mutex<Pager<S>>, id: &str) -> ApiResult {
-    let mut p = pager.lock().expect("pager mutex poisoned");
+    let mut p = match lock_pager(pager) {
+        Ok(p) => p,
+        Err(poisoned) => return poisoned,
+    };
     match p.resume(id) {
         Ok(()) => (204, None),
         Err(e) => map_error(&e),
@@ -130,7 +169,10 @@ fn resume<S: Substrate>(pager: &Mutex<Pager<S>>, id: &str) -> ApiResult {
 }
 
 fn unload<S: Substrate>(pager: &Mutex<Pager<S>>, name: &str) -> ApiResult {
-    let mut p = pager.lock().expect("pager mutex poisoned");
+    let mut p = match lock_pager(pager) {
+        Ok(p) => p,
+        Err(poisoned) => return poisoned,
+    };
     match p.unload_model(name) {
         Ok(()) => (204, None),
         Err(e) => map_error(&e),
@@ -138,7 +180,10 @@ fn unload<S: Substrate>(pager: &Mutex<Pager<S>>, name: &str) -> ApiResult {
 }
 
 fn status<S: Substrate>(pager: &Mutex<Pager<S>>) -> ApiResult {
-    let p = pager.lock().expect("pager mutex poisoned");
+    let p = match lock_pager(pager) {
+        Ok(p) => p,
+        Err(poisoned) => return poisoned,
+    };
     (
         200,
         Some(serde_json::to_value(p.status()).expect("StatusReport serializes")),

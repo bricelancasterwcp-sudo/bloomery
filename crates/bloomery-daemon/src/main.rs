@@ -9,22 +9,17 @@
 //! the daemon refuses to start with a named reason rather than silently
 //! serving a `Pager` that can never load a model.
 //!
-//! **The `llama` build currently refuses to start too — this is a real,
-//! discovered gap, not a stub.** `bloomery_daemon::http::serve` requires
-//! `S: Substrate + Send + 'static` (fixed by the Task 14 brief, and needed
-//! for real: the worker pool shares `Pager<S>` behind an `Arc<Mutex<_>>`
-//! across threads). `bloomery_substrate::llama::LlamaSubstrate` is not
-//! `Send` — verified with `cargo check -p bloomery-daemon --features
-//! llama`, which fails: `LlamaContext` holds `NonNull<llama_context>` and
-//! `*mut llama_sampler`, both raw pointers, so `HashMap<_, LlamaContext<'_>>`
-//! (inside `ModelCell`, inside `LlamaSubstrate`) isn't `Send` either. A
-//! `Pager<LlamaSubstrate>` genuinely cannot be moved into `serve`'s
-//! `Arc<Mutex<_>>` as either type stands today. Fixing this belongs to
-//! whoever owns `LlamaSubstrate` (Task 11) or Task 16's boot wiring — most
-//! likely a reviewed, justified `unsafe impl Send for LlamaSubstrate` (the
-//! daemon's coarse pager `Mutex` already guarantees a context is never
-//! touched by two threads at once, which is the property that would make
-//! it sound) — not something to bolt on here without that sign-off.
+//! **`LlamaSubstrate` itself is not `Send`** (`LlamaContext` holds raw FFI
+//! pointers — `NonNull<llama_context>`, `*mut llama_sampler` — both
+//! conservatively `!Send`), which would otherwise block `Pager<S>` from
+//! moving into `http::serve`'s `Arc<Mutex<_>>` (`S: Substrate + Send +
+//! 'static`, fixed by the Task 14 brief). The `llama` build below serves
+//! `Pager<llama_send::SendLlama>` instead: a daemon-owned newtype that
+//! delegates every `Substrate` method to `LlamaSubstrate` and asserts
+//! `Send` (never `Sync`) under a documented safety argument — see
+//! `llama_send`'s module doc for the full justification. That keeps the
+//! soundness obligation next to the `Mutex` that actually discharges it,
+//! rather than folding it into `bloomery-substrate`'s own contract.
 
 use std::path::PathBuf;
 
@@ -77,19 +72,58 @@ fn main() {
     run(config, journal);
 }
 
-/// Refuses to start: `LlamaSubstrate` is not `Send` (see the module doc),
-/// so `Pager<LlamaSubstrate>` cannot be moved into `http::serve`'s
-/// `Arc<Mutex<_>>` worker pool. `config` and `journal` are otherwise ready
-/// to build a real pager the moment that's fixed — this function is where
-/// that wiring goes back in.
+/// Builds a real `Pager<SendLlama>` (no models registered — see the module
+/// doc) and serves it forever.
 #[cfg(feature = "llama")]
-fn run(_config: Config, _journal: Journal) -> ! {
-    fail(
-        "built with the `llama` feature, but bloomery_substrate::llama::LlamaSubstrate is not \
-         `Send` (LlamaContext holds raw FFI pointers), so it cannot be shared across \
-         http::serve's worker pool as Pager<S: Substrate + Send + 'static> requires; this is a \
-         known gap for Task 11/16 to close, not yet a servable build",
-    )
+fn run(config: Config, journal: Journal) -> ! {
+    use std::process::Command;
+
+    use bloomery_core::vram::free_vram_bytes;
+    use bloomery_daemon::agents::ImageStore;
+    use bloomery_daemon::http::serve;
+    use bloomery_daemon::llama_send::SendLlama;
+    use bloomery_daemon::pager::Pager;
+
+    let substrate = SendLlama::new()
+        .unwrap_or_else(|e| fail(format!("failed to initialize the llama backend: {e:?}")));
+
+    let images_dir = config.data_dir.join("images");
+    let images = ImageStore::new(&images_dir)
+        .unwrap_or_else(|e| fail(format!("failed to open image store: {e}")));
+
+    // One-shot boot-time read: the `free_vram` closure `Pager::new` takes is
+    // a STATIC budget, measured once and closed over, never a live
+    // per-placement probe (Task 13's pinned convention — a live read would
+    // already exclude this pager's own residents and double-count them).
+    let probe = free_vram_bytes(|cmd, args| {
+        let output = Command::new(cmd).args(args).output()?;
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    });
+    if probe.is_none() {
+        eprintln!(
+            "bloomery-daemon: warning: could not measure free VRAM (nvidia-smi missing or its \
+             output was unparseable); residency will be capped at one resident agent"
+        );
+    }
+
+    let mut pager = Pager::new(substrate, journal, images, Box::new(move || probe));
+    // Binding obligation carried from Task 13: `Pager`'s own default
+    // overhead is zero, and this is the daemon's real construction path, so
+    // it must wire the operator's configured overhead itself.
+    pager.set_overhead_bytes(config.overhead_mib.saturating_mul(1024 * 1024));
+
+    let (bound_port, _handle) = serve(pager, config.port);
+    println!(
+        "bloomery-daemon serving on 127.0.0.1:{bound_port} (data_dir={}; no models registered \
+         yet — Task 16 wires config.models)",
+        config.data_dir.display()
+    );
+    // `_handle`'s workers do the actual serving; the main thread just needs
+    // to stay alive for the process to keep running. `park()` can wake
+    // spuriously, hence the loop.
+    loop {
+        std::thread::park();
+    }
 }
 
 /// Without the `llama` feature there is no real substrate to serve
