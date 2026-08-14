@@ -7,11 +7,14 @@
 //! out of the code rather than assumed:
 //!
 //! 1. **The residency planner only evicts *strictly lower priority* idle
-//!    residents** (`bloomery_core::scheduler::plan_residency`). Equal-priority
-//!    peers are never evicted — they are refused. So a naive round-robin over
-//!    N same-priority agents does not switch, it 409s. The workers here
-//!    therefore carry strictly ascending priorities and are always visited in
-//!    that order, so every step is a legal eviction.
+//!    residents** (`bloomery_core::scheduler::plan_residency`). A naive
+//!    round-robin over N same-priority agents therefore does not switch at
+//!    planning time; since Phase 2a an equal-priority refusal that has waited
+//!    out the time-sharing quantum is retried as an eviction of the LRU peer,
+//!    but a bench that leaned on that would be measuring the quantum's clock,
+//!    not a switch. The workers here carry strictly ascending priorities and
+//!    are always visited in that order, so every step is an ordinary planner
+//!    eviction and the time-sharing path never fires.
 //!
 //! 2. **A RAM-tier KV image can only be produced by an eviction.**
 //!    `Pager::suspend` always spills to NVMe, so it can never set up a warm
@@ -35,8 +38,22 @@
 //! The bench measures nothing itself; it only issues requests. Every number
 //! the gate is read from was recorded by the pager, in the daemon, around the
 //! operation it names, and lives in the journal.
+//!
+//! # The sample check
+//!
+//! A run that switched nothing still exits zero and still leaves a journal
+//! `report` will happily read — as `n: 0` with `null` percentiles, which is
+//! honest but easy to skim past. So the driver reads the daemon's journal
+//! itself, before and after the laps, and refuses to end successfully unless
+//! the run delivered the switches its own pressure arithmetic said it would.
+//! See [`crate::pressure`] for that arithmetic and for the Phase 1 preflight
+//! rule this replaced.
+
+use std::path::{Path, PathBuf};
 
 use crate::http::Client;
+use crate::pressure::{Budget, Observed, Pressure};
+use crate::report::compute_report;
 
 /// Priority of the single-use reset agent. Above every worker so it can
 /// always evict the incumbent; below `u8::MAX` for no reason but taste.
@@ -56,7 +73,10 @@ pub struct SwitchOpts {
     pub cold: bool,
     pub prime_chars: usize,
     pub max_tokens: u32,
-    pub allow_measured_vram: bool,
+    /// The daemon's journal for this boot. Required: it is the only place the
+    /// driver can see whether the workload actually switched anything, and a
+    /// run that cannot be checked is a run that can report `n = 0` in silence.
+    pub journal: PathBuf,
 }
 
 struct Agent {
@@ -64,17 +84,38 @@ struct Agent {
     window_tokens: u32,
 }
 
-/// Runs the whole protocol. Returns the number of switch samples the run is
-/// expected to have produced, so the operator can cross-check it against what
-/// `report` actually found in the journal — a mismatch means switches were
-/// refused or served from somewhere unexpected, not that the daemon is fast.
-pub fn run(client: &Client, opts: &SwitchOpts) -> Result<usize, String> {
+/// Runs the whole protocol and returns the switch samples *this run* added to
+/// the journal, split by class.
+///
+/// The count is the run's own delta, not the journal's total: a second bench
+/// run against the same daemon boot would otherwise inherit the first one's
+/// samples and could pass the check on them alone.
+pub fn run(client: &Client, opts: &SwitchOpts) -> Result<Observed, String> {
     validate(opts)?;
     preflight(client, opts)?;
 
     let workers = create_workers(client, opts)?;
     let prime = prime_prompt(opts.prime_chars);
     prime_workers(client, opts, &workers, &prime)?;
+
+    // Measured only now: the weights are loaded (the priming inferences
+    // loaded them) and every worker's KV footprint is a number the daemon has
+    // committed to, so the arithmetic runs on facts rather than on the
+    // operator's expectations about the card.
+    let pressure = measure_pressure(client, opts, &workers)?;
+    println!("pressure:\n{}", pressure.arithmetic());
+    if !pressure.has_pressure() {
+        return Err(format!(
+            "no residency pressure: {} contexts fit alongside the weights, which is more than \
+             the {} workers plus the reset agent this run creates. The planner will place every \
+             agent and evict none, and the laps would finish clean having measured nothing. \
+             Raise --window or --agents, or give the daemon a smaller budget.\n{}",
+            pressure.capacity_contexts,
+            opts.agents,
+            pressure.arithmetic()
+        ));
+    }
+    let baseline = count_samples(&opts.journal)?;
 
     for lap in 0..opts.rounds {
         if !opts.cold {
@@ -97,7 +138,89 @@ pub fn run(client: &Client, opts: &SwitchOpts) -> Result<usize, String> {
         }
     }
 
-    Ok(opts.rounds * opts.agents)
+    let after = count_samples(&opts.journal)?;
+    let observed = Observed {
+        warm: after.warm.saturating_sub(baseline.warm),
+        cold: after.cold.saturating_sub(baseline.cold),
+    };
+    crate::pressure::check(&pressure, &observed, &status_line(client)?)?;
+    Ok(observed)
+}
+
+/// Reads the pressure arithmetic off the daemon: its static budget, the
+/// weights it currently holds, and the KV footprint it assigned this run's
+/// agents.
+///
+/// The per-agent footprint is the largest one among the workers, not the mean:
+/// the capacity that matters is how many of the *biggest* contexts fit, and
+/// the window law can hand different agents different windows if the binding
+/// term moves under them.
+fn measure_pressure(
+    client: &Client,
+    opts: &SwitchOpts,
+    workers: &[Agent],
+) -> Result<Pressure, String> {
+    let status = client.expect("GET", "/status", "", 200)?.json()?;
+    let weights_bytes = status["loaded_weights_bytes"].as_u64().ok_or_else(|| {
+        format!(
+            "/status has no loaded_weights_bytes; this daemon predates the reservation-budget \
+             accounting the pressure arithmetic rests on: {status}"
+        )
+    })?;
+    let kv_bytes_per_agent = status["agents"]
+        .as_array()
+        .map(|agents| {
+            agents
+                .iter()
+                .filter(|a| {
+                    a["id"]
+                        .as_str()
+                        .is_some_and(|id| workers.iter().any(|w| w.id == id))
+                })
+                .filter_map(|a| a["kv_bytes"].as_u64())
+                .max()
+                .unwrap_or(0)
+        })
+        .unwrap_or(0);
+    Pressure::compute(
+        budget(&status),
+        weights_bytes,
+        kv_bytes_per_agent,
+        opts.agents,
+        opts.rounds,
+        opts.cold,
+    )
+}
+
+/// `/status`'s `free_vram_bytes`: `null` there is unmeasured, never zero.
+fn budget(status: &serde_json::Value) -> Budget {
+    match status["free_vram_bytes"].as_u64() {
+        Some(bytes) => Budget::Measured(bytes),
+        None => Budget::Unmeasured,
+    }
+}
+
+/// The three supply-side numbers of the reservation budget, as one line for
+/// the operator and for any failure that has to explain a sample count.
+fn status_line(client: &Client) -> Result<String, String> {
+    let status = client.expect("GET", "/status", "", 200)?.json()?;
+    Ok(format!(
+        "free_vram_bytes={} loaded_weights_bytes={} resident_kv_bytes={}",
+        status["free_vram_bytes"], status["loaded_weights_bytes"], status["resident_kv_bytes"]
+    ))
+}
+
+/// Counts the switch samples in the daemon's journal with the same arithmetic
+/// `report` uses — the check and the published number must never be able to
+/// disagree about what a sample is.
+fn count_samples(path: &Path) -> Result<Observed, String> {
+    let events = bloomery_core::journal::replay(path)
+        .map_err(|e| format!("reading the daemon's journal at {}: {e}", path.display()))?;
+    let report = compute_report(&events);
+    Ok(Observed {
+        warm: report.warm.n,
+        cold: report.cold.n,
+    })
 }
 
 fn validate(opts: &SwitchOpts) -> Result<(), String> {
@@ -120,16 +243,18 @@ fn validate(opts: &SwitchOpts) -> Result<(), String> {
     Ok(())
 }
 
-/// Checks the daemon is serving what we think it is *before* committing the
-/// run: the model is registered, and — for the warm class — the residency
-/// pressure that makes eviction happen at all actually exists.
+/// Checks the daemon is serving what we think it is, and that the journal the
+/// exit check will read is the one this daemon is writing.
 ///
-/// The pressure check is not a formality. The planner's reservation
-/// accounting tracks KV bytes only and never subtracts the weights, so on a
-/// 16 GB card with a measured budget it would report `Fits` for every agent
-/// this bench creates and never evict one — the run would finish clean and
-/// report zero warm samples. Refusing up front is the difference between a
-/// named precondition failure and ten minutes spent producing nothing.
+/// It no longer has an opinion about *how* residency pressure is arranged.
+/// Phase 1's preflight refused the warm class outright against a measured VRAM
+/// budget, because the planner charged KV bytes only and would have placed
+/// every agent and evicted none; Phase 2a charges the weights too, so a
+/// measured budget is now the natural way to run this bench. The pressure
+/// question moved to where it can be answered with measured numbers instead of
+/// a proxy — [`measure_pressure`], after the workers exist and the weights are
+/// loaded — and to the exit check that will not let a run without pressure
+/// report success.
 fn preflight(client: &Client, opts: &SwitchOpts) -> Result<(), String> {
     let status = client.expect("GET", "/status", "", 200)?.json()?;
 
@@ -151,23 +276,16 @@ fn preflight(client: &Client, opts: &SwitchOpts) -> Result<(), String> {
     }
 
     println!(
-        "preflight: daemon {} tier={} free_vram_bytes={}",
+        "preflight: daemon {} tier={} free_vram_bytes={} loaded_weights_bytes={}",
         client.addr(),
         status["tier"],
-        status["free_vram_bytes"]
+        status["free_vram_bytes"],
+        status["loaded_weights_bytes"]
     );
 
-    if !opts.cold && !opts.allow_measured_vram && !status["free_vram_bytes"].is_null() {
-        return Err(format!(
-            "warm switches need residency pressure, and this daemon reports a measured VRAM \
-             budget of {} bytes. The planner does not charge model weights against that budget, \
-             so it will place every agent and evict none, and the run would report 0 warm \
-             samples. Boot the daemon with no working VRAM probe (residency then caps at one \
-             resident agent, journaled as a degradation), or pass --allow-measured-vram if you \
-             have arranged pressure some other way.",
-            status["free_vram_bytes"]
-        ));
-    }
+    // Read now rather than at the end: an unreadable journal must cost the
+    // operator a second, not the whole run.
+    count_samples(&opts.journal)?;
     Ok(())
 }
 

@@ -21,9 +21,12 @@ use bloomery_bench::switch::{self, SwitchOpts};
 const USAGE: &str = "usage:
   bloomery-bench switch --daemon <url> --model <name> --agents <n> --rounds <r> \
 --window <tokens>
-                        [--cold] [--prime-chars <n>] [--max-tokens <n>] \
-[--allow-measured-vram]
-  bloomery-bench report --journal <path>";
+                        --journal <path> [--cold] [--prime-chars <n>] [--max-tokens <n>]
+  bloomery-bench report --journal <path>
+
+  --journal is the daemon's journal for this boot (<data_dir>/journal/boot-<ts>.jsonl).
+  `switch` reads it to check the run actually produced the switches its pressure
+  arithmetic predicted; `report` reads it to compute the gate numbers.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -54,7 +57,7 @@ fn run_switch(args: &[String]) -> Result<(), String> {
         cold: flag(args, "--cold"),
         prime_chars: optional(args, "--prime-chars")?.unwrap_or(3000),
         max_tokens: optional(args, "--max-tokens")?.unwrap_or(8),
-        allow_measured_vram: flag(args, "--allow-measured-vram"),
+        journal: PathBuf::from(required(args, "--journal")?),
     };
     let client = Client::new(required(args, "--daemon")?)?;
     println!(
@@ -66,10 +69,13 @@ fn run_switch(args: &[String]) -> Result<(), String> {
         opts.prime_chars,
         opts.max_tokens
     );
-    let expected = switch::run(&client, &opts)?;
+    let observed = switch::run(&client, &opts)?;
     println!(
-        "done: expected {expected} {} switch samples in the daemon's journal",
-        if opts.cold { "cold" } else { "warm" }
+        "done: this run added {} switch samples to {} (warm {} + cold {})",
+        observed.total(),
+        opts.journal.display(),
+        observed.warm,
+        observed.cold
     );
     Ok(())
 }
