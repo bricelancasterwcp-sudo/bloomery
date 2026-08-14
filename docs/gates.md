@@ -30,6 +30,8 @@ Adopted from the spec's provisional values; Task 1's prior-art pass found no fea
 
 **Kill consequence:** the process model is redesigned before anything is built on it.
 
+**Clarification (2026-08-14, recorded at the final review, before any re-run):** G2's protocol line says 'computed ... from PagerOp journal events only'; the pre-registered sample definition (plan Task 17) and the shipped `bloomery-bench report` also consume `ModelLoaded` events for cold-class attribution. Both texts predate the instrument and the measurement; this note reconciles the wording — the sample definition governs. No number was affected.
+
 ---
 
 ## G3 — semantic view precision (future)

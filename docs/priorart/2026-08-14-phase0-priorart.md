@@ -644,6 +644,8 @@ No plan amendment is required, and the dependency allowlist
 (`llama-cpp-2` + `llama-cpp-sys-2` w/ `vulkan`, `tiny_http`, `serde`,
 `serde_json`, `toml`, `sha2`) is unchanged — `hyper` is **not** added.
 
+**Correction (2026-08-14, final whole-branch review):** the statement above is superseded — Task 11 added `self_cell = "1"` to bloomery-substrate, outside the original allowlist. Reason: the model/context arena needs a self-referential struct (contexts borrow their model); `self_cell` makes that ownership machine-checked (`#[covariant]`) instead of hand-written unsafe. The alternative was bespoke unsafe code, which this project treats as the worse dependency. Recorded here because the allowlist rule requires a plan amendment for any addition, and this record previously claimed none existed.
+
 Two **corrections within a confirmed default** (D1 stands; the symbols Task 11
 calls change):
 
