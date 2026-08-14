@@ -23,3 +23,9 @@ fn garbage_output_is_none() {
     let out = free_vram_bytes(|_, _| Ok("N/A\n".to_string()));
     assert_eq!(out, None);
 }
+
+#[test]
+fn overflow_mib_is_none() {
+    let out = free_vram_bytes(|_, _| Ok("18446744073709551615\n".to_string()));
+    assert_eq!(out, None);
+}

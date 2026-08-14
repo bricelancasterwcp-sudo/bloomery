@@ -17,6 +17,6 @@ pub fn free_vram_bytes<R: Fn(&str, &[&str]) -> std::io::Result<String>>(run: R) 
     // Take first line and trim
     let first_line = output.lines().next()?.trim();
 
-    // Parse as u64 MiB, multiply by 1024*1024 to get bytes
-    first_line.parse::<u64>().ok().map(|mib| mib * 1024 * 1024)
+    // Parse as u64 MiB, multiply by 1024*1024 to get bytes (checked for overflow)
+    first_line.parse::<u64>().ok()?.checked_mul(1024 * 1024)
 }
