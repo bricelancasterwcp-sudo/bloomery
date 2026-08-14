@@ -76,6 +76,14 @@ impl<S: Substrate> Pager<S> {
             .get_mut(id)
             .expect("agent existence checked at entry")
             .state = AgentState::Resident { ctx };
+        // The first of `last_use`'s two write points (see the field doc on
+        // `Pager`): the transition to `Resident` itself, covering `resume`
+        // (which never calls `infer` at all) as well as an ordinary
+        // placement-before-infer. Without this, a just-resumed agent would
+        // read back as `unwrap_or(0)` in `try_time_share` — indistinguishable
+        // from an agent nobody has touched in ages — and be the first thing
+        // evicted the moment any equal-priority contest reached the quantum.
+        self.last_use.insert(id.to_string(), (self.clock)());
         Ok(ctx)
     }
 
@@ -149,15 +157,20 @@ impl<S: Substrate> Pager<S> {
             kv_bytes: demand,
         };
         let budget = self.probe_free_vram()?;
+        // Shared with `try_time_share` below: the `None` (unmeasured)
+        // fallback plans against a flat `0` free bytes (the residency-
+        // count-cap-of-one), so `avail` is `0` there too — same number,
+        // computed once, rather than a second `0` literal that could drift.
+        let avail = match budget {
+            Some(budget) => budget
+                .saturating_sub(loaded_weights)
+                .saturating_sub(resident_kv),
+            None => 0,
+        };
         let placement = match budget {
-            Some(budget) => {
-                let avail = budget
-                    .saturating_sub(loaded_weights)
-                    .saturating_sub(resident_kv);
-                plan_residency(&residents, &req, avail)
-            }
+            Some(_) => plan_residency(&residents, &req, avail),
             None if residents.is_empty() => Placement::Fits,
-            None => plan_residency(&residents, &req, 0),
+            None => plan_residency(&residents, &req, avail),
         };
 
         let outcome = match placement {
@@ -177,7 +190,9 @@ impl<S: Substrate> Pager<S> {
                 free,
                 reclaimable,
             } => {
-                if let Some((victim, waited_ms)) = self.try_time_share(id, priority, &residents) {
+                if let Some((victim, waited_ms)) =
+                    self.try_time_share(id, priority, &residents, demand, avail)
+                {
                     jrnl::scheduler_decision(
                         &mut self.journal,
                         id,
@@ -238,6 +253,15 @@ impl<S: Substrate> Pager<S> {
         // forever and make some future, otherwise-ordinary refusal look
         // like it had already waited a full quantum the instant it started
         // (pinned by `pager_timeshare_test.rs::successful_placement_clears_the_waiting_tracker`).
+        //
+        // This clears on `place`'s own success alone — it has no visibility
+        // into whether `ensure_resident`'s next step, `open_context`, then
+        // goes on to fail. A failure there leaves the mark already cleared,
+        // so a retry starts a brand-new quantum from zero rather than
+        // resuming any elapsed wait. That is the conservative direction (an
+        // extra wait in a rare failure case, never a spurious eviction from
+        // stale elapsed time), so it is left as is rather than threaded
+        // through `open_context`'s own error paths.
         if outcome.is_ok() {
             self.waiting_since.remove(id);
         }
@@ -252,20 +276,40 @@ impl<S: Substrate> Pager<S> {
     /// two equal-priority agents contending for the same room is therefore
     /// a refusal the planner alone can never resolve, no matter how long
     /// either one waits. This helper is the pager's own layer on top: when
-    /// a refusal is *purely* equal-priority (every resident blocking it is
-    /// idle *and* exactly the request's own priority — a single
-    /// higher-priority or busy resident anywhere in the mix disqualifies
-    /// it, and it stays a plain refusal forever), the first such refusal
-    /// for `id` starts a clock (`waiting_since`); once a later attempt has
-    /// waited at least `time_share_quantum_ms`, this returns the
-    /// least-recently-used equal-priority resident as the victim — last-use
-    /// being the clock reading at that resident's most recent successful
-    /// `infer` completion (`last_use`), ties broken by lexical id — so
-    /// `place` can evict it through the exact same `evict` path
-    /// `Placement::Evict` uses (same `EvictSave` journal shape). This is a
-    /// *single*-victim tiebreak, not `plan_residency`'s iterative
-    /// accumulation: the spec names "the" LRU resident, and every scenario
-    /// this was built against is satisfied by freeing exactly one.
+    /// a refusal is *purely* equal-priority (every OTHER resident — `id`
+    /// itself is filtered out of the candidate set, structurally impossible
+    /// though self-eviction already is here — is idle *and* exactly the
+    /// request's own priority; a single higher-priority or busy resident
+    /// anywhere in the mix disqualifies it, and it stays a plain refusal
+    /// forever), the first such refusal for `id` starts a clock
+    /// (`waiting_since`); once a later attempt has waited at least
+    /// `time_share_quantum_ms`, this picks the least-recently-used
+    /// equal-priority resident as the *candidate* victim — last-use being
+    /// the clock reading at that resident's most recent "use" (`last_use`;
+    /// see the field doc on [`Pager`] for its two write points — a
+    /// just-resumed, never-inferred resident is NOT the oldest thing on the
+    /// table), ties broken by lexical id for a result that never depends on
+    /// `AgentTable`'s `HashMap`-derived iteration order.
+    ///
+    /// **Sufficiency, not just eligibility.** Naming a victim is not enough
+    /// on its own: this only returns `Some` when evicting that *specific*
+    /// candidate would actually cover the request (`avail + victim.kv_bytes
+    /// >= demand`). A cold model's weights are part of `demand` but are
+    /// never freed by evicting a KV context, and an unequal `window_cap`
+    /// can make the LRU resident the *smallest* one on the table — so the
+    /// LRU pick can legitimately be too small to help. When it is, this
+    /// returns `None` rather than either (a) evicting anyway and
+    /// overcommitting the budget, or (b) silently substituting some other,
+    /// larger resident in its place — the spec names "the" LRU resident,
+    /// singular, so an insufficient LRU pick is a plain refusal, not a
+    /// license to pick a different one. `waiting_since` is left untouched
+    /// on this path (already recorded by an earlier qualifying refusal, or
+    /// about to be by `place`'s own refusal branch) — the wait keeps
+    /// accumulating toward a quantum that, on its own, can never make the
+    /// LRU resident's `kv_bytes` any larger.
+    ///
+    /// This is a *single*-victim tiebreak, not `plan_residency`'s iterative
+    /// accumulation, by the same "the LRU resident" reading.
     ///
     /// **Determinism.** Every timestamp this function reads comes from
     /// `self.clock` (see [`ClockFn`](super::ClockFn)) — never a bare
@@ -273,15 +317,24 @@ impl<S: Substrate> Pager<S> {
     /// deterministically-updated maps. So the same sequence of clock
     /// readings, fed through the same sequence of calls, always produces
     /// the same tiebreak decision: replayable in tests with a fake clock,
-    /// and never dependent on real wall-clock jitter in production.
+    /// and never dependent on real wall-clock jitter or `HashMap` iteration
+    /// order in production.
     fn try_time_share(
         &mut self,
         id: &str,
         req_priority: u8,
         residents: &[Resident],
+        demand: u64,
+        avail: u64,
     ) -> Option<(AgentId, u64)> {
-        let qualifies = !residents.is_empty()
-            && residents
+        // `id` can never actually appear in `residents` today (`place` is
+        // only reached from `ensure_resident` when `id` is NOT already
+        // `Resident`), but filtering it out of the candidate set makes that
+        // impossibility structural rather than an invariant a future
+        // caller has to remember to preserve.
+        let candidates: Vec<&Resident> = residents.iter().filter(|r| r.id != id).collect();
+        let qualifies = !candidates.is_empty()
+            && candidates
                 .iter()
                 .all(|r| !r.busy && r.priority == req_priority);
         if !qualifies {
@@ -293,14 +346,20 @@ impl<S: Substrate> Pager<S> {
         if waited_ms < self.time_share_quantum_ms {
             return None;
         }
-        residents
-            .iter()
-            .min_by(|a, b| {
-                let a_use = self.last_use.get(&a.id).copied().unwrap_or(0);
-                let b_use = self.last_use.get(&b.id).copied().unwrap_or(0);
-                a_use.cmp(&b_use).then_with(|| a.id.cmp(&b.id))
-            })
-            .map(|victim| (victim.id.clone(), waited_ms))
+        let victim = candidates.into_iter().min_by(|a, b| {
+            let a_use = self.last_use.get(&a.id).copied().unwrap_or(0);
+            let b_use = self.last_use.get(&b.id).copied().unwrap_or(0);
+            a_use.cmp(&b_use).then_with(|| a.id.cmp(&b.id))
+        })?;
+        if avail.saturating_add(victim.kv_bytes) < demand {
+            // The LRU pick can't actually cover the request (a cold
+            // model's weights on the demand side, or a smaller
+            // `window_cap` on the victim's side). Refuse rather than
+            // overcommit or substitute a different, larger resident —
+            // `waiting_since` stays exactly where it was.
+            return None;
+        }
+        Some((victim.id.clone(), waited_ms))
     }
 
     /// Evicts a victim: its image goes to RAM (cheapest to page back in),

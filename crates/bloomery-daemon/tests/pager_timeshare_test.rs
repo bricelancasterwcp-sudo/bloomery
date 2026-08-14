@@ -189,12 +189,18 @@ fn after_the_quantum_the_lru_equal_priority_resident_is_evicted() {
         .expect("quantum elapsed: time-share evicts a1, freeing room for a2");
 
     let events = replay(&jpath).unwrap();
-    let decision_idx = events.iter().position(|e| matches!(e,
+    // Exact string, not just a prefix: a1 was refused at t=0 and the
+    // quantum fires at exactly t=30_000, so `waited_ms` is deterministically
+    // `30_000` here — nothing about this scenario leaves it approximate.
+    let decision_idx = events.iter().position(|e| {
+        matches!(e,
         Event::SchedulerDecision { id, decision, evicted }
-            if id == &a2.id && decision.starts_with("evict_timeshare(") && evicted == &vec![a1.id.clone()]));
+            if id == &a2.id && decision == "evict_timeshare(waited_30000ms)"
+                && evicted == &vec![a1.id.clone()])
+    });
     assert!(
         decision_idx.is_some(),
-        "expected an evict_timeshare SchedulerDecision naming a1: {events:?}"
+        "expected an evict_timeshare(waited_30000ms) SchedulerDecision naming a1: {events:?}"
     );
     let evict_idx = events.iter().position(|e| {
         matches!(e,
@@ -407,5 +413,201 @@ fn successful_placement_clears_the_waiting_tracker() {
                     && evicted == &vec![a3.id.clone()])),
         "the fresh wait must end in a3 (the only, LRU resident) being time-share evicted: \
          {events:?}"
+    );
+}
+
+/// (Review fix, CRITICAL) Two residents at UNEQUAL `window_cap`s: a1 (LRU,
+/// older last-use) has the SMALLER context (256 tokens, 14 MiB); a2 (newer
+/// last-use) has the larger one (1024 tokens, 56 MiB). a3 (same priority,
+/// also a 1024-token context) is refused at t=20_000. Even past the
+/// quantum, evicting the LRU victim a1 alone would only free
+/// `avail (30 MiB) + a1's kv (14 MiB) = 44 MiB`, still short of a3's 56 MiB
+/// demand — so the pager must NOT evict a1 (and must not fall back to the
+/// larger, sufficient a2 either): the request stays refused, on every
+/// attempt, indefinitely — the shortfall never resolves on its own.
+#[test]
+fn insufficient_lru_eviction_stays_refused_past_the_quantum() {
+    let dir = fresh_dir("bloomery-pager-timeshare-insufficient");
+    let budget = 300 * MIB;
+    let clock = Arc::new(AtomicU64::new(0));
+    let (mut p, jpath, _) = pager_in(&dir, 2, Some(budget));
+    p.set_clock(test_clock(Arc::clone(&clock)));
+    p.set_time_share_quantum_ms(30_000);
+    let gguf = write_gguf(&dir, "qwen.gguf", b"weights");
+    p.register_model("qwen", &gguf, meta(WEIGHTS), None)
+        .unwrap();
+    let a1 = p.create_agent("qwen", 100, Some(256), 10_000).unwrap(); // small ctx: 14 MiB
+    let a2 = p
+        .create_agent("qwen", 100, Some(WINDOW_CAP), 10_000)
+        .unwrap(); // 56 MiB
+    let a3 = p
+        .create_agent("qwen", 100, Some(WINDOW_CAP), 10_000)
+        .unwrap(); // 56 MiB
+
+    p.infer(&a1.id, "hello from a1", 16).unwrap();
+    // last-use a1 = 0; resident, 14 MiB: weights(200)+kv(14)=214 <= 300: fits
+
+    clock.store(10_000, Ordering::SeqCst);
+    p.infer(&a2.id, "hello from a2", 16)
+        .expect("avail 86 MiB fits a2's 56 MiB ctx beside a1: both resident");
+    // last-use a2 = 10_000
+
+    clock.store(20_000, Ordering::SeqCst);
+    match p.infer(&a3.id, "hello from a3", 16) {
+        Err(PagerError::Refused { .. }) => {} // avail 30 MiB < kv 56 MiB
+        other => panic!("expected Refused: {other:?}"),
+    }
+
+    clock.store(50_000, Ordering::SeqCst); // 30_000ms past a3's refusal: quantum elapsed
+    match p.infer(&a3.id, "hello from a3 again", 16) {
+        Err(PagerError::Refused { .. }) => {}
+        other => panic!(
+            "evicting the LRU victim a1 (14 MiB) would still leave avail+14 = 44 MiB < \
+             a3's 56 MiB demand: must stay refused, not evict a1 or substitute a2: {other:?}"
+        ),
+    }
+
+    clock.store(200_000, Ordering::SeqCst); // several quantums later: still deterministic
+    match p.infer(&a3.id, "hello from a3 yet again", 16) {
+        Err(PagerError::Refused { .. }) => {}
+        other => panic!("insufficiency never resolves on its own: expected Refused: {other:?}"),
+    }
+
+    let events = replay(&jpath).unwrap();
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::SchedulerDecision { decision, .. }
+                if decision.starts_with("evict_timeshare"))),
+        "no time-share eviction should ever fire when the LRU victim can't cover demand: \
+         {events:?}"
+    );
+    assert!(
+        !events.iter().any(|e| matches!(e,
+            Event::PagerOp { id, op: PagerOpKind::EvictSave, .. } if id == &a1.id)),
+        "a1 must never have been evicted: {events:?}"
+    );
+}
+
+/// (Review fix, Important) Two residents whose most recent successful
+/// `infer` completed at the EXACT same clock reading (same last-use): the
+/// lexically-first id must be picked, deterministically. Without the
+/// `.then_with(|| a.id.cmp(&b.id))` tiebreak inside `try_time_share`'s
+/// comparator, `Iterator::min_by` would fall back to whichever candidate
+/// `AgentTable::residents()`'s `HashMap`-derived (unspecified) iteration
+/// order happened to visit first — this pins the comparator's own tiebreak,
+/// not an accident of insertion order.
+#[test]
+fn lru_ties_on_last_use_break_lexically_by_id() {
+    let dir = fresh_dir("bloomery-pager-timeshare-lexical-tiebreak");
+    let budget = 330 * MIB;
+    let clock = Arc::new(AtomicU64::new(0));
+    let (mut p, jpath, _) = pager_in(&dir, 3, Some(budget));
+    p.set_clock(test_clock(Arc::clone(&clock)));
+    p.set_time_share_quantum_ms(30_000);
+    let gguf = write_gguf(&dir, "qwen.gguf", b"weights");
+    p.register_model("qwen", &gguf, meta(WEIGHTS), None)
+        .unwrap();
+    let a1 = p
+        .create_agent("qwen", 100, Some(WINDOW_CAP), 10_000)
+        .unwrap();
+    let a2 = p
+        .create_agent("qwen", 100, Some(WINDOW_CAP), 10_000)
+        .unwrap();
+    let a3 = p
+        .create_agent("qwen", 100, Some(WINDOW_CAP), 10_000)
+        .unwrap();
+
+    // a1 and a2 both complete their most recent inference at t=0 — tied.
+    p.infer(&a1.id, "hello from a1", 16).unwrap();
+    p.infer(&a2.id, "hello from a2", 16)
+        .expect("avail 74 MiB fits a2's 56 MiB ctx beside a1: both resident, tied last-use=0");
+
+    clock.store(20_000, Ordering::SeqCst);
+    match p.infer(&a3.id, "hello from a3", 16) {
+        Err(PagerError::Refused { .. }) => {}
+        other => panic!("expected Refused (avail 18 MiB < kv 56 MiB): {other:?}"),
+    }
+
+    clock.store(50_000, Ordering::SeqCst);
+    p.infer(&a3.id, "hello from a3 again", 16)
+        .expect("quantum elapsed: time-share evicts the lexically-first tied resident");
+
+    let events = replay(&jpath).unwrap();
+    assert!(
+        events.iter().any(|e| matches!(e,
+            Event::SchedulerDecision { id, decision, evicted }
+                if id == &a3.id && decision.starts_with("evict_timeshare(")
+                    && evicted == &vec![a1.id.clone()])),
+        "tied last-use (both 0) must break lexically: a1 (\"a1\" < \"a2\"), never a2: {events:?}"
+    );
+}
+
+/// (Review fix, Important — RULING) `last_use` is set at BOTH the
+/// transition to `Resident` (a successful placement — covers `resume` as
+/// well as a fresh placement before `infer`) AND a completed `infer` —
+/// never left at the `unwrap_or(0)` map default for an agent that has never
+/// inferred. a1 infers once at t=10_000 (real last-use 10_000) and then
+/// sits idle; a2 is created and only ever `resume`d (never `infer`s), at
+/// t=20_000 — which must record its OWN last-use as 20_000, more recent
+/// than a1's, not the default `0` a never-inferred agent would otherwise
+/// read as. a3 (same priority) is refused at t=30_000 and, past the
+/// quantum at t=60_000, must evict a1 — the genuinely older resident —
+/// never a2, which a last-use-only-set-by-`infer` implementation would
+/// have wrongly treated as the oldest thing on the table (default `0`) and
+/// evicted on sight despite having just been resumed.
+#[test]
+fn a_just_resumed_never_inferred_resident_counts_as_recently_used() {
+    let dir = fresh_dir("bloomery-pager-timeshare-resume-last-use");
+    let budget = 330 * MIB;
+    let clock = Arc::new(AtomicU64::new(0));
+    let (mut p, jpath, _) = pager_in(&dir, 2, Some(budget));
+    p.set_clock(test_clock(Arc::clone(&clock)));
+    p.set_time_share_quantum_ms(30_000);
+    let gguf = write_gguf(&dir, "qwen.gguf", b"weights");
+    p.register_model("qwen", &gguf, meta(WEIGHTS), None)
+        .unwrap();
+    let a1 = p
+        .create_agent("qwen", 100, Some(WINDOW_CAP), 10_000)
+        .unwrap();
+    let a2 = p
+        .create_agent("qwen", 100, Some(WINDOW_CAP), 10_000)
+        .unwrap();
+    let a3 = p
+        .create_agent("qwen", 100, Some(WINDOW_CAP), 10_000)
+        .unwrap();
+
+    clock.store(10_000, Ordering::SeqCst);
+    p.infer(&a1.id, "hello from a1", 16).unwrap();
+    // last-use a1 = 10_000 (its only inference)
+
+    clock.store(20_000, Ordering::SeqCst);
+    p.resume(&a2.id)
+        .expect("avail 74 MiB fits a2's 56 MiB ctx beside a1: resumed, never inferred");
+    // last-use a2 = 20_000 (placement, not inference)
+
+    clock.store(30_000, Ordering::SeqCst);
+    match p.infer(&a3.id, "hello from a3", 16) {
+        Err(PagerError::Refused { .. }) => {}
+        other => panic!("expected Refused (avail 18 MiB < kv 56 MiB): {other:?}"),
+    }
+
+    clock.store(60_000, Ordering::SeqCst);
+    p.infer(&a3.id, "hello from a3 again", 16)
+        .expect("quantum elapsed: time-share evicts the genuinely older resident");
+
+    let events = replay(&jpath).unwrap();
+    assert!(
+        events.iter().any(|e| matches!(e,
+            Event::SchedulerDecision { id, decision, evicted }
+                if id == &a3.id && decision.starts_with("evict_timeshare(")
+                    && evicted == &vec![a1.id.clone()])),
+        "a1 (real last-use 10_000) must be the victim, never a2 (resumed at 20_000, more \
+         recent, despite never having inferred): {events:?}"
+    );
+    assert!(
+        !events.iter().any(|e| matches!(e,
+            Event::PagerOp { id, op: PagerOpKind::EvictSave, .. } if id == &a2.id)),
+        "a2 must never have been evicted: {events:?}"
     );
 }

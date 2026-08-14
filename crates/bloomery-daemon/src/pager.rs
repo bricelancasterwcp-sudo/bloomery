@@ -159,9 +159,14 @@ pub struct Pager<S: Substrate> {
     /// can never make a later, unrelated refusal look like it has already
     /// waited a full quantum.
     waiting_since: HashMap<String, u64>,
-    /// `agent id -> clock reading at that agent's most recent successful
-    /// `infer` completion` (Task 4). The LRU tiebreak's ordering key —
-    /// never touched by placement itself, only by a completed inference.
+    /// `agent id -> clock reading at that agent's most recent "use"`
+    /// (Task 4), the LRU tiebreak's ordering key. **Set at two points, by
+    /// ruling:** (1) the transition to `Resident` — a successful placement,
+    /// whether via `resume` or via `infer` paging an agent in — and (2) a
+    /// completed `infer`. Point (1) is what keeps a just-resumed-but-never-
+    /// inferred agent from reading as "oldest" at the `unwrap_or(0)` map
+    /// default and being picked as the instant victim; point (2) then keeps
+    /// it accurate for an agent that goes on to actually do work.
     last_use: HashMap<String, u64>,
 }
 
@@ -288,6 +293,13 @@ impl<S: Substrate> Pager<S> {
     /// (`config.time_share_quantum_secs`, default 30s / 30_000ms) — how
     /// long a qualifying refusal must wait before
     /// `paging::try_time_share` evicts the LRU resident anyway.
+    ///
+    /// `0` is a valid, if extreme, setting: it degrades the wait to nothing,
+    /// so the LRU equal-priority resident is evicted on the very *first*
+    /// qualifying refusal rather than after any wait at all — a pure
+    /// round-robin escape hatch, not this module's default
+    /// wait-one-quantum semantics. Intentional, not a special case in the
+    /// implementation: `waited_ms (0) < quantum_ms (0)` is simply false.
     pub fn set_time_share_quantum_ms(&mut self, ms: u64) {
         self.time_share_quantum_ms = ms;
     }
@@ -633,11 +645,13 @@ impl<S: Substrate> Pager<S> {
             .budget
             .charge(charged);
         jrnl::infer_completed(&mut self.journal, id, &verified)?;
-        // The Task 4 LRU tiebreak's ordering key: the clock reading at this
-        // agent's most recent *successful* inference, read through the
-        // pager's own clock (never `Instant::now()` ad hoc) so the
-        // eviction decision built from it stays deterministic under a
-        // fake clock.
+        // The second of `last_use`'s two write points (see the field doc):
+        // a completed inference. `ensure_resident` (in `paging`) already
+        // recorded the first write when this agent was placed, moments ago
+        // in this same call — this one supersedes it with the more precise
+        // "actually did work" timestamp. Read through the pager's own
+        // clock (never `Instant::now()` ad hoc) so the eviction decision
+        // built from it stays deterministic under a fake clock.
         self.last_use.insert(id.to_string(), (self.clock)());
         Ok(verified)
     }
