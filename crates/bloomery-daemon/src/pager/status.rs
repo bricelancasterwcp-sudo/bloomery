@@ -27,6 +27,14 @@ pub struct StatusReport {
     pub free_vram_bytes: Option<u64>,
     /// Sum of the KV footprints the pager believes are currently resident.
     pub resident_kv_bytes: u64,
+    /// Sum of `weights_bytes` over every model whose weights are currently
+    /// loaded into the substrate — the weights term of the reservation
+    /// budget (Task 3: `avail = budget − Σ loaded weights − Σ resident kv`,
+    /// see the accounting rule on `Pager::place`). Derived from the loaded
+    /// set on every call rather than tracked as a counter, so `unload_model`
+    /// crediting weights back is just this sum recomputing; `0` when
+    /// nothing is loaded.
+    pub loaded_weights_bytes: u64,
     /// The operator-declared hardware tier every profile here is marked
     /// with. `None` = the daemon was never told one, never a guessed name.
     pub tier: Option<TierStatus>,

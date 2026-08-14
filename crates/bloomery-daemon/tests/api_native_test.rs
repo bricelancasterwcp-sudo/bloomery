@@ -84,6 +84,14 @@ fn infer_over_budget_returns_402_with_arithmetic() {
 /// number that overflows a 1 GiB budget at that size: four fit with
 /// 134 217 728 B left over, and the fifth — no higher priority than any
 /// resident, so nothing is evictable for it — cannot fit in what's left.
+///
+/// `FREE_VRAM_BYTES` deliberately stays `1024 * 1024 * 1024`, *not*
+/// `test_support::FIXTURE_FREE_VRAM_BYTES` (Task 3 bumped that private
+/// constant by `+ 1000`, `qwen_like_meta`'s `weights_bytes`, so weights
+/// entering the reservation budget don't change what `qwen` alone can
+/// place). That `+ 1000` is exactly offset by the `− 1000` the real budget
+/// now carries for `qwen`'s loaded weights, so the *observed* `free` this
+/// test asserts against lands back on the original, unbumped number.
 #[test]
 fn infer_residency_refusal_returns_409_with_arithmetic() {
     const KV_PER_TOKEN: u64 = 57_344;

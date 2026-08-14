@@ -681,6 +681,7 @@ impl<S: Substrate> Pager<S> {
         StatusReport {
             free_vram_bytes: (self.free_vram)(),
             resident_kv_bytes: self.resident_kv_bytes(),
+            loaded_weights_bytes: self.loaded_weights_bytes(),
             tier: self.tier.clone(),
             posting: self.posting,
             agents,

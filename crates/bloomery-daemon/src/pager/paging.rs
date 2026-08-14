@@ -30,6 +30,21 @@ impl<S: Substrate> Pager<S> {
             .fold(0u64, |acc, r| acc.saturating_add(r.kv_bytes))
     }
 
+    /// Sum of `weights_bytes` over every model whose handle is currently
+    /// loaded — the weights term of the reservation budget (Task 3, see
+    /// `Pager::place`'s doc comment for the accounting rule).
+    ///
+    /// Derived from the loaded set on every call rather than tracked as a
+    /// running counter: `unload_model` dropping a handle is then the whole
+    /// story for crediting its bytes back, with no separate decrement to
+    /// forget.
+    pub(super) fn loaded_weights_bytes(&self) -> u64 {
+        self.models
+            .values()
+            .filter(|m| m.handle.is_some())
+            .fold(0u64, |acc, m| acc.saturating_add(m.meta.weights_bytes))
+    }
+
     /// Reads bloomery's static VRAM budget (see [`Pager::new`]). `None` is
     /// unmeasured, never zero — and it is said once, so a machine with no
     /// working probe doesn't drown its own journal in the same sentence.
@@ -66,12 +81,24 @@ impl<S: Substrate> Pager<S> {
 
     /// Pre-checks memory for `id` and evicts whatever the planner names.
     ///
-    /// Free VRAM is `budget − Σ resident kv_bytes`, which is reservation
-    /// accounting, not a second measurement: `free_vram` returns bloomery's
-    /// *static* budget (see [`Pager::new`]), so the pager is the only thing
-    /// tracking what it has spent out of that pool. A live driver read would
-    /// already have the resident contexts subtracted from it and would make
-    /// this double-count.
+    /// **The reservation-budget accounting rule (Task 3).** Free VRAM is
+    /// `budget − Σ loaded_models.weights_bytes − Σ resident kv_bytes`, all
+    /// `saturating_sub`. This is still reservation accounting, not a second
+    /// measurement: `free_vram` returns bloomery's *static* budget (see
+    /// [`Pager::new`]), so the pager is the only thing tracking what it has
+    /// spent out of that pool — weights now spend from the same pool KV
+    /// does, because both sit in the VRAM the static budget promised. A live
+    /// driver read would already have both the resident contexts *and* the
+    /// loaded weights subtracted from it and would make this double-count.
+    ///
+    /// When `id`'s model is not yet loaded, loading it is part of satisfying
+    /// this request, so its `weights_bytes` is added to the *demand* side
+    /// (alongside `id`'s own `kv_bytes`) before planning — the planner then
+    /// evicts or refuses against the true cost of admitting this agent, not
+    /// just its KV footprint. Once a model is loaded its weights stay
+    /// charged against `loaded_weights_bytes` until an explicit
+    /// [`Pager::unload_model`] call credits them back; there is **no**
+    /// automatic eviction of weights in 2a — only KV contexts are evicted.
     ///
     /// When the budget is unmeasured there is no honest arithmetic left, so
     /// residency falls back to a count cap of one — planned as zero free
@@ -80,24 +107,47 @@ impl<S: Substrate> Pager<S> {
     ///
     /// Nothing in this function touches the substrate on the refusal path.
     /// That is the point: memory pressure is decided from measured numbers
-    /// before allocation, never inferred from an allocation that blew up.
+    /// before allocation, never inferred from an allocation that blew up —
+    /// in particular, a weights-refusal never calls `load_model`.
     fn place(&mut self, id: &str) -> Result<(), PagerError> {
-        let (priority, kv_bytes, window_tokens) = {
+        let (priority, kv_bytes, window_tokens, model) = {
             let a = self
                 .table
                 .get(id)
                 .ok_or_else(|| PagerError::UnknownAgent(id.to_string()))?;
-            (a.priority, a.kv_bytes, a.window.tokens)
+            (a.priority, a.kv_bytes, a.window.tokens, a.model.clone())
         };
+        let (model_loaded, weights_bytes) = {
+            let entry = self
+                .models
+                .get(&model)
+                .ok_or_else(|| PagerError::UnknownModel(model.clone()))?;
+            (entry.handle.is_some(), entry.meta.weights_bytes)
+        };
+        // Loading is part of satisfying this request when the model is
+        // cold: the demand side carries its weights alongside this agent's
+        // own KV footprint. An already-loaded model contributes nothing
+        // extra here — its weights are already charged via
+        // `loaded_weights_bytes` on the supply side below.
+        let weights_term = if model_loaded { 0 } else { weights_bytes };
+        let demand = kv_bytes.saturating_add(weights_term);
+
         let residents = self.table.residents();
         let resident_kv = self.resident_kv_bytes();
+        let loaded_weights = self.loaded_weights_bytes();
         let req = ResidencyRequest {
             id: id.to_string(),
             priority,
-            kv_bytes,
+            kv_bytes: demand,
         };
-        let placement = match self.probe_free_vram()? {
-            Some(free) => plan_residency(&residents, &req, free.saturating_sub(resident_kv)),
+        let budget = self.probe_free_vram()?;
+        let placement = match budget {
+            Some(budget) => {
+                let avail = budget
+                    .saturating_sub(loaded_weights)
+                    .saturating_sub(resident_kv);
+                plan_residency(&residents, &req, avail)
+            }
             None if residents.is_empty() => Placement::Fits,
             None => plan_residency(&residents, &req, 0),
         };
@@ -119,14 +169,23 @@ impl<S: Substrate> Pager<S> {
                 jrnl::scheduler_decision(&mut self.journal, id, "refuse", &[])?;
                 // `Refusal` is token-shaped, so the residency arithmetic (in
                 // bytes) rides in `detail` rather than being rounded into a
-                // token field it doesn't belong in.
+                // token field it doesn't belong in. The weights/kv/budget
+                // breakdown is spelled out explicitly (law 2: the
+                // arithmetic, printed) rather than left implicit in
+                // `needed`/`free`/`reclaimable` alone, which cannot show
+                // *why* — a reader should not have to re-derive that a cold
+                // model's weights were the reason this refused.
                 jrnl::refusal(
                     &mut self.journal,
                     id,
                     u64::from(window_tokens),
                     window_tokens,
                     format!(
-                        "residency: needed {needed} B, free {free} B, reclaimable {reclaimable} B"
+                        "residency: weights {weights_term} B + kv {kv_bytes} B vs budget \
+                         {budget_display} B − loaded {loaded_weights} B − resident \
+                         {resident_kv} B (needed {needed} B, free {free} B, reclaimable \
+                         {reclaimable} B)",
+                        budget_display = budget.unwrap_or(0),
                     ),
                 )?;
                 Err(PagerError::Refused {
