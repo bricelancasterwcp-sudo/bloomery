@@ -308,29 +308,70 @@ fn attaching_a_profile_lifts_the_gate_without_allow_unprofiled() {
     let (mut p, _j, _dir) = unprofiled_pager("attach");
     p.set_allow_unprofiled(false);
     assert!(p.create_agent("qwen", 100, None, 1000).is_err());
-    p.attach_profile("qwen", profile_with_ceiling("qwen", 512))
+    p.attach_profile("qwen", profile_with_ceiling("qwen", 512), true)
         .expect("attach to a registered model");
     p.create_agent("qwen", 100, None, 1000)
         .expect("a profiled model is admitted");
 }
 
-/// `attach_profile` is not cosmetic: the attached ceiling has to reach the
+/// An **externally** measured ceiling is not cosmetic: it has to reach the
 /// window law, or a "profiled" model would be admitted on geometry nobody
-/// measured.
+/// measured. (The self-measured case is the opposite — see below.)
 #[test]
-fn an_attached_ceiling_binds_the_window() {
+fn an_external_ceiling_binds_the_window() {
     let (mut p, _j, _dir) = unprofiled_pager("ceiling");
-    p.attach_profile("qwen", profile_with_ceiling("qwen", 512))
+    p.attach_profile("qwen", profile_with_ceiling("qwen", 512), false)
         .unwrap();
     let info = p.create_agent("qwen", 100, None, 1000).unwrap();
     assert_eq!(info.window_tokens, 512);
     assert_eq!(info.bound_by, "measured_ceiling");
 }
 
+/// The anti-ratchet rule (controller ruling, Task 16). A profile this
+/// daemon produced by probing *itself* measured its own refusal gate, not
+/// the model: feeding that ceiling back into the window law double-applies
+/// the same conservatism, and each re-probe would measure a lower ceiling
+/// than the last. So a self-measured ceiling is ignored by the geometry —
+/// while everything else in the profile (verdicts, and the fact that the
+/// model counts as profiled at all) is kept.
+#[test]
+fn a_self_measured_ceiling_does_not_clamp_the_window() {
+    let (mut p, _j, _dir) = unprofiled_pager("self-ceiling");
+    p.set_allow_unprofiled(false);
+    p.attach_profile("qwen", profile_with_ceiling("qwen", 512), true)
+        .unwrap();
+    let info = p.create_agent("qwen", 100, None, 1000).unwrap();
+    assert_eq!(
+        info.bound_by, "training_ctx",
+        "a self-probe's ceiling must not bind the window law"
+    );
+    assert_eq!(info.window_tokens, 4096);
+}
+
+/// A profile supplied at registration comes from outside this daemon (an
+/// operator, a previous run's externally-validated document), so it keeps
+/// the clamping behavior — the `register_model` half of the same rule.
+#[test]
+fn a_profile_supplied_at_registration_is_external_and_binds() {
+    let (mut p, _j, dir) = unprofiled_pager("register-external");
+    let gguf = dir.join("granite.gguf");
+    std::fs::write(&gguf, b"weights").unwrap();
+    p.register_model(
+        "granite",
+        &gguf,
+        meta(),
+        Some(profile_with_ceiling("granite", 512)),
+    )
+    .unwrap();
+    let info = p.create_agent("granite", 100, None, 1000).unwrap();
+    assert_eq!(info.bound_by, "measured_ceiling");
+    assert_eq!(info.window_tokens, 512);
+}
+
 #[test]
 fn attaching_a_profile_to_an_unregistered_model_is_named() {
     let (mut p, _j, _dir) = unprofiled_pager("attach-unknown");
-    match p.attach_profile("nope", profile_with_ceiling("nope", 512)) {
+    match p.attach_profile("nope", profile_with_ceiling("nope", 512), false) {
         Err(PagerError::UnknownModel(m)) => assert_eq!(m, "nope"),
         other => panic!("expected UnknownModel, got {other:?}"),
     }
@@ -356,7 +397,7 @@ fn status_reports_the_tier_the_posting_flag_and_which_models_are_profiled() {
     assert!(s.posting);
     assert!(!s.models[0].profiled);
 
-    p.attach_profile("qwen", profile_with_ceiling("qwen", 512))
+    p.attach_profile("qwen", profile_with_ceiling("qwen", 512), true)
         .unwrap();
     p.set_posting(false);
     let s = p.status();
@@ -428,9 +469,13 @@ fn post_attaches_each_profile_journals_ok_and_closes_the_window() {
     assert!(!status.posting, "the provisional window closes with POST");
     assert!(status.models[0].profiled);
     // Law 5 is back in force *and* satisfied: admission now succeeds on the
-    // profile, not on the suspension.
+    // profile, not on the suspension. The window is NOT clamped by the
+    // ceiling POST just measured (2048, below this fixture's 4096 training
+    // context): that ceiling is this daemon measuring its own refusal gate,
+    // and clamping by it would ratchet the window down on every re-probe.
     let info = p.create_agent("qwen", 100, None, 1000).unwrap();
-    assert_eq!(info.bound_by, "measured_ceiling");
+    assert_eq!(info.bound_by, "training_ctx");
+    assert_eq!(info.window_tokens, 4096);
 
     let events = replay(&jpath).unwrap();
     assert!(

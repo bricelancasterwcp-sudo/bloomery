@@ -244,7 +244,11 @@ fn probe_each<S: Substrate>(
         let out = profiles_dir.join(format!("{model}.json"));
         match runner.probe(port, model, tier, &out) {
             Ok(profile) => with_pager(pager, |p| {
-                p.attach_profile(model, profile)?;
+                // `true`: this daemon measured itself, so the profile's
+                // ceiling must not clamp its own geometry (the anti-ratchet
+                // rule on `Pager::create_agent`). Everything else in the
+                // document — verdicts, and being profiled at all — counts.
+                p.attach_profile(model, profile, true)?;
                 p.journal_post(model, "ok", Some(out.display().to_string()))
             })?,
             Err(e) => with_pager(pager, |p| {

@@ -86,6 +86,10 @@ struct ModelEntry {
     meta: GgufMeta,
     digest: String,
     profile: Option<Profile>,
+    /// True when `profile` came from this daemon probing **itself** (the
+    /// boot POST). Such a profile's ceiling is not a model property — see
+    /// the anti-ratchet rule in [`Pager::create_agent`].
+    profile_self_measured: bool,
     kv_per_token: u64,
     handle: Option<ModelHandle>,
     /// Whether this model's provisional (POST-window) admission and its
@@ -233,12 +237,24 @@ impl<S: Substrate> Pager<S> {
     /// creation; the profile's ceiling binds every agent created *after*
     /// this. Re-quoting a live agent's window would silently change a number
     /// its caller was already told.
-    pub fn attach_profile(&mut self, name: &str, profile: Profile) -> Result<(), PagerError> {
+    /// `self_measured` says where the profile came from: `true` for the
+    /// boot POST (this daemon probing itself — [`crate::post`]), `false`
+    /// for any externally supplied document. It decides one thing only,
+    /// the ceiling's effect on geometry — see the anti-ratchet rule in
+    /// [`Pager::create_agent`]. Verdicts, and the fact that the model
+    /// counts as profiled at all, are kept either way.
+    pub fn attach_profile(
+        &mut self,
+        name: &str,
+        profile: Profile,
+        self_measured: bool,
+    ) -> Result<(), PagerError> {
         let entry = self
             .models
             .get_mut(name)
             .ok_or_else(|| PagerError::UnknownModel(name.to_string()))?;
         entry.profile = Some(profile);
+        entry.profile_self_measured = self_measured;
         Ok(())
     }
 
@@ -314,6 +330,11 @@ impl<S: Substrate> Pager<S> {
                 meta,
                 digest,
                 profile,
+                // A profile handed to `register_model` came from outside
+                // this daemon (an operator, an externally validated
+                // document), so it keeps the clamping behavior. Only
+                // `attach_profile` can mark one self-measured.
+                profile_self_measured: false,
                 handle: None,
                 provisional_logged: false,
                 unprofiled_logged: false,
@@ -326,6 +347,18 @@ impl<S: Substrate> Pager<S> {
     /// agent starts `Fresh` and only becomes resident when it first infers.
     ///
     /// Admission is profile-gated (law 5) — see [`Pager::admit`].
+    ///
+    /// **Anti-ratchet rule.** A ceiling measured by this daemon probing
+    /// itself is skipped by the window law. The prompt gate in
+    /// [`Pager::infer`] already applies a conservative estimate at request
+    /// time; a self-probe hits that gate and records *its* limit as the
+    /// model's ceiling, so feeding that number back into the geometry
+    /// applies the same conservatism twice — and every re-probe would then
+    /// measure a lower ceiling than the last, ratcheting the window down.
+    /// (Measured live on 2026-08-14: a 32 768-token window self-probed to
+    /// `max_verified: 14336`, which would have halved it.) Externally
+    /// measured ceilings still bind: they are the model's property, not
+    /// ours.
     pub fn create_agent(
         &mut self,
         model: &str,
@@ -342,7 +375,14 @@ impl<S: Substrate> Pager<S> {
                 entry.kv_per_token,
                 entry.meta.training_ctx,
                 entry.meta.weights_bytes,
-                entry.profile.as_ref().and_then(|p| p.measured_ceiling()),
+                // The anti-ratchet rule, in one expression: a self-probe
+                // measures our own refusal gate, so clamping by it would
+                // ratchet the window down on every re-probe.
+                entry
+                    .profile
+                    .as_ref()
+                    .filter(|_| !entry.profile_self_measured)
+                    .and_then(|p| p.measured_ceiling()),
             )
         };
         self.admit(model)?;
