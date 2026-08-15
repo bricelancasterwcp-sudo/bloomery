@@ -80,3 +80,20 @@ fn parse_patch_body_direct_missing_search_marker() {
         other => panic!("{other:?}"),
     }
 }
+
+/// Regression: a `replace` payload that itself contains a line equal to
+/// `>>>>>>> REPLACE` must not be silently truncated at that inner line — the
+/// rightmost (outer) marker is the true terminator, so everything up to and
+/// including "second" below must survive into `replace`.
+#[test]
+fn replace_content_containing_a_replace_marker_line_is_captured_in_full() {
+    let body = "<<<<<<< SEARCH\nold\n=======\nfirst\n>>>>>>> REPLACE\nsecond\n>>>>>>> REPLACE";
+    let parsed = parse_patch_body(body, PatchCodec::SearchReplace).unwrap();
+    assert_eq!(
+        parsed,
+        PatchBody::SearchReplace {
+            search: "old".into(),
+            replace: "first\n>>>>>>> REPLACE\nsecond".into(),
+        }
+    );
+}

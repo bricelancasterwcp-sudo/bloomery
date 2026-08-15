@@ -38,10 +38,22 @@ pub fn parse_patch_body(body: &str, codec: PatchCodec) -> Result<PatchBody, Acti
 }
 
 /// Parses the `<<<<<<< SEARCH` / `=======` / `>>>>>>> REPLACE` conflict-marker
-/// grammar. Each marker must appear as its own line, in order; text before
-/// the search marker, between the markers, and after the replace marker is
-/// otherwise unconstrained (the search/replace text may itself be empty or
-/// span multiple lines).
+/// grammar. Each marker must appear as its own line, in order: `<<<<<<<
+/// SEARCH` is matched at its *first* (leftmost) own-line occurrence,
+/// `=======` at its first own-line occurrence after that, and `>>>>>>>
+/// REPLACE` at its *last* (rightmost) own-line occurrence in the remainder —
+/// so the outermost replace marker wins and a `replace` payload that itself
+/// contains a nested `>>>>>>> REPLACE` line is captured in full rather than
+/// truncated at the first such line.
+///
+/// This is an unescaped-marker grammar (same family as robigo's), which
+/// carries one inherent, accepted limitation: the `search` text must not
+/// contain a line equal to `=======`, and the `replace` text must not
+/// contain a line equal to `=======` either — either would be misread as
+/// the divider and mis-split the body. (`replace` *may* safely contain
+/// `>>>>>>> REPLACE` lines; rightmost-wins handles that case.) Escaping is
+/// out of scope; callers whose payload might collide with `=======` must
+/// pick a different codec (e.g. `WholeFile`) or avoid the collision.
 fn parse_search_replace(body: &str) -> Result<PatchBody, ActionError> {
     let search_line_start =
         find_line(body, SEARCH_MARKER).ok_or(ActionError::PatchNoSearchMarker {
@@ -62,7 +74,12 @@ fn parse_search_replace(body: &str) -> Result<PatchBody, ActionError> {
     let replace_start =
         after_divider.saturating_add(usize::from(body[after_divider..].starts_with('\n')));
 
-    let replace_marker_start = find_line(&body[replace_start..], REPLACE_MARKER)
+    // Rightmost, not leftmost: a `replace` payload may itself contain a line
+    // equal to `>>>>>>> REPLACE` (e.g. a patch whose replacement text is
+    // itself an example of this codec's grammar). Taking the last own-line
+    // occurrence as the true terminator means the outer marker wins and
+    // nothing after an inner, nested-looking marker is silently dropped.
+    let replace_marker_start = find_last_line(&body[replace_start..], REPLACE_MARKER)
         .map(|rel| replace_start + rel)
         .ok_or(ActionError::PatchNoReplaceMarker {
             expected: REPLACE_MARKER,
@@ -81,7 +98,21 @@ fn parse_search_replace(body: &str) -> Result<PatchBody, ActionError> {
 /// ending at the end of `text` or immediately before a `\n`. Returns the
 /// first such match.
 fn find_line(text: &str, marker: &str) -> Option<usize> {
-    text.match_indices(marker).find_map(|(start, _)| {
+    is_own_line_match(text, marker).next()
+}
+
+/// As [`find_line`], but returns the *last* complete-line match instead of
+/// the first. Used for the replace marker so an outer `>>>>>>> REPLACE`
+/// wins over any nested-looking marker line inside the replace payload
+/// itself.
+fn find_last_line(text: &str, marker: &str) -> Option<usize> {
+    is_own_line_match(text, marker).last()
+}
+
+/// Yields the byte offset of every complete-line occurrence of `marker` in
+/// `text`, in order — see [`find_line`] for what "complete line" means.
+fn is_own_line_match<'a>(text: &'a str, marker: &'a str) -> impl Iterator<Item = usize> + 'a {
+    text.match_indices(marker).filter_map(move |(start, _)| {
         let line_start = start == 0 || text[..start].ends_with('\n');
         let end = start + marker.len();
         let line_end = end == text.len() || text[end..].starts_with('\n');
