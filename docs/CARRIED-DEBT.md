@@ -209,14 +209,26 @@ above. Branch `feat/phase2bc-p4-codec-gate`.
    `GeometryInput` growth, but only the single-model half of that growth
    shipped this round — `create_agent` still sizes a window from only
    its own model's `weights_bytes`, blind to any other loaded model or
-   resident sibling. Pinned as still-refusable in
+   resident sibling. Pinned directly (fixed on review 2026-08-15: an
+   earlier version of this note pointed at
+   `a_second_agents_reservation_not_just_its_kv_is_what_refuses_it`, but
+   that test gives both agents an explicit `window_cap` small enough that
+   `UserCap` binds regardless of what the window law knows about
+   residency — it exercises placement's already-correct whole-reservation
+   subtraction across two agents, not the window law's sibling-blindness,
+   and its doc comment now says so) —
    `pager_reservation_test.rs`'s
-   `a_second_agents_reservation_not_just_its_kv_is_what_refuses_it`,
-   which the 2026-08-15 delivery rewrote from a single-agent to a
-   two-agent scenario for exactly this reason: a first, otherwise-alone
-   agent's reservation can no longer overflow its own budget (that's
-   what closed), but a second agent sized blind to a resident sibling
-   still can (that's what's left).
+   `a_sibling_blind_automatic_window_still_refuses_item_7_third_half`
+   gives **both** agents no `window_cap` and asserts `a2.window_tokens`
+   and `a2.bound_by` directly: a2's automatic window law runs after a1 is
+   already resident and computes the *identical* oversized, `Vram`-bound
+   window a1 got, as if a2 were alone — the sibling-blindness itself,
+   asserted, not merely inferred from a refusal that could have another
+   cause. Placement's separate, already-correct whole-reservation
+   subtraction then finds nothing left (`avail = 0`) and refuses. A first,
+   otherwise-alone agent's reservation can no longer overflow its own
+   budget (that's what closed); a second agent's window, sized blind to a
+   resident sibling, still can be wrong (that's what's left).
 
 9. **Recorded scoring edges (protocol §3), item (b) of the 2026-08-15
    batch.** Two landing-score edge cases are pinned by test, not by

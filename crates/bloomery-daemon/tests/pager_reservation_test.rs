@@ -103,16 +103,22 @@ fn write_gguf(dir: &Path, name: &str) -> PathBuf {
 /// first agent's window to whatever the reservation can actually afford,
 /// so it never gets the chance to ask for more.
 ///
-/// What survives is exactly item 7's still-open "third half" (see
-/// `CARRIED-DEBT.md`): the window law sizes a *new* agent against the
-/// whole static budget, blind to what a resident **sibling** already
-/// holds. Two agents, same model, same explicit `window_cap`: the first
-/// becomes resident and reserves `KV_BYTES + ctx_overhead`; the second's
-/// own window law computes room fine (it has no notion of the first
-/// agent's residency), but its *placement* correctly subtracts the first
-/// agent's whole reservation — not just its KV — from what's left, and
-/// that whole-reservation subtraction is what tips the second agent into
-/// a refusal a KV-only charge would not have produced.
+/// **Scope, precisely** (narrowed after review — this does *not* pin item
+/// 7's still-open "third half"; see
+/// `a_sibling_blind_automatic_window_still_refuses_item_7_third_half`
+/// below for that). Both agents here pass an explicit `Some(WINDOW_CAP)`:
+/// a2's own sibling-blind VRAM candidate is `(320 − 200 − 32) MiB /
+/// 57 344 B ≈ 1609 tokens`, far above `WINDOW_CAP` (1024), so `UserCap`
+/// binds regardless of what the window law knows about a1's residency —
+/// the window law's blindness never actually drives this outcome. What
+/// this test *does* show: two agents, same model, same explicit
+/// `window_cap`; the first becomes resident and reserves `KV_BYTES +
+/// ctx_overhead`; the second's *placement* correctly subtracts the
+/// first's whole reservation — not just its KV — from what's left, and
+/// that whole-reservation subtraction (already delivered in Phase 2a,
+/// item 1) is what tips the second agent into a refusal a KV-only charge
+/// would not have produced. A multi-agent regression check on already-
+/// delivered behavior, not a pin of item 7's remaining gap.
 #[test]
 fn a_second_agents_reservation_not_just_its_kv_is_what_refuses_it() {
     let dir = fresh_dir("bloomery-pager-reservation-refuse");
@@ -417,4 +423,126 @@ fn a_vram_bound_window_is_placeable_item_7_regression() {
 
     p.infer(&a1.id, "hello", 16)
         .expect("a VRAM-bound window must be placeable by construction (item 7 closed)");
+}
+
+/// **Item 7's still-open "third half," pinned directly** (added on review —
+/// see `a_second_agents_reservation_not_just_its_kv_is_what_refuses_it`
+/// above, which was found not to exercise this after all: both its agents
+/// use an explicit `window_cap` small enough that `UserCap` binds
+/// regardless of what the window law knows about residency, so the window
+/// law's sibling-blindness was never actually what drove that test's
+/// refusal).
+///
+/// This test gives **both** agents no `window_cap`, so each one's own
+/// window law runs the automatic `Vram` candidate — and that candidate is
+/// computed from `budget − <this model's> weights − overhead −
+/// ctx_overhead` alone (`crates/bloomery-core/src/geometry.rs`), with no
+/// term for what a resident sibling already holds. `budget` is chosen so
+/// a1 alone consumes it exactly: `budget = weights + a1_tokens ×
+/// kv_per_token + ctx_overhead`, i.e. `a1`'s own automatic window (500
+/// tokens) reserves the *entire* budget with nothing left over.
+///
+/// `a2` is created after `a1` is already resident. Because the window law
+/// reads only `budget` and `qwen`'s own `weights_bytes` — the same two
+/// numbers it read for `a1`, with no notion that `a1` is now resident —
+/// it runs the identical arithmetic and lands on the identical answer:
+/// `a2` is also sized to 500 tokens, `Vram`-bound, **exactly as if it were
+/// the only agent**, despite `a1` already holding everything there is to
+/// hold. That identical, sibling-blind 500-token answer is the defect
+/// item 7's third half names, asserted directly below (not inferred from
+/// a refusal that could have another cause).
+///
+/// Placement then does the correct, already-delivered thing: it subtracts
+/// `a1`'s whole reservation from `budget`, leaving **zero** bytes free,
+/// so `a2`'s demand (`a2`'s own reservation, weights already loaded)
+/// refuses outright. A sibling-aware window law would have sized `a2` to
+/// `⌊avail / kv_per_token⌋ = ⌊0 / 57_344⌋ = 0` tokens instead of 500 —
+/// this test pins the current, honest gap between what the window law
+/// *does* compute (500, oversized) and what a fix would have to compute
+/// (0, correctly starved) so that a future third-half fix must
+/// consciously change this test's `a2.window_tokens` assertion, not just
+/// its refusal.
+#[test]
+fn a_sibling_blind_automatic_window_still_refuses_item_7_third_half() {
+    let dir = fresh_dir("bloomery-pager-reservation-item7-third-half");
+    let weights = 200 * MIB;
+    let kv_per_token = 57_344u64;
+    let ctx_overhead = 32 * MIB;
+    let a1_tokens = 500u64;
+    // Chosen so a1's own automatic window reserves the budget exactly,
+    // leaving nothing for a2 to find even if a2's window law were somehow
+    // right — the point is that it never gets the chance to be right,
+    // because it never looks.
+    let budget = weights + a1_tokens * kv_per_token + ctx_overhead;
+
+    let (mut p, jpath) = pager_in(&dir, 2, Some(budget));
+    p.set_ctx_overhead_bytes(ctx_overhead);
+    let gguf = write_gguf(&dir, "qwen.gguf");
+    p.register_model("qwen", &gguf, meta(weights), None)
+        .unwrap();
+
+    // a1 outranks a2 so it can never be evicted to make room for it.
+    let a1 = p.create_agent("qwen", 100, None, 10_000).unwrap();
+    assert_eq!(
+        (a1.window_tokens, a1.bound_by.as_str()),
+        (a1_tokens as u32, "vram"),
+        "a1, alone against the whole budget, must land on the automatic Vram term"
+    );
+    p.infer(&a1.id, "hello from a1", 16).unwrap();
+    let a1_reserved = a1_tokens * kv_per_token + ctx_overhead;
+    assert_eq!(
+        p.status().resident_kv_bytes,
+        a1_reserved,
+        "a1 must be resident, holding its whole reservation, before a2 is even created"
+    );
+
+    // The defect, asserted directly: a2's own window law, run after a1 is
+    // already resident, computes the SAME 500-token Vram-bound answer a1
+    // did — sibling-blind, as if a2 were alone.
+    let a2 = p.create_agent("qwen", 50, None, 10_000).unwrap();
+    assert_eq!(
+        (a2.window_tokens, a2.bound_by.as_str()),
+        (a1_tokens as u32, "vram"),
+        "a2's window law is blind to a1's residency: it computes the identical, \
+         oversized 500-token window a1 got, not a sibling-aware smaller one"
+    );
+
+    // The consequence: placement's whole-reservation subtraction (already
+    // correct since Phase 2a's item 1) finds nothing left at all.
+    let a2_reserved = a1_tokens * kv_per_token + ctx_overhead;
+    let avail = budget - weights - a1_reserved;
+    assert_eq!(
+        avail, 0,
+        "precondition: a1's automatic window was sized to consume the whole \
+         budget exactly, or this test doesn't isolate the sibling-blindness"
+    );
+
+    match p.infer(&a2.id, "hello from a2", 16) {
+        Err(PagerError::Refused {
+            needed,
+            free,
+            reclaimable,
+        }) => {
+            assert_eq!(
+                needed, a2_reserved,
+                "a2's demand is its whole (oversized) reservation; qwen is already loaded"
+            );
+            assert_eq!(free, avail, "avail is exactly zero: a1 left nothing");
+            assert_eq!(reclaimable, 0, "a1 outranks a2, so nothing is reclaimable");
+        }
+        other => panic!("expected Refused, got {other:?}"),
+    }
+
+    let expected_detail = format!(
+        "residency: weights 0 B + reserved {a2_reserved} B (kv {kv} B + ctx overhead \
+         {ctx_overhead} B) vs budget {budget} B − overhead 0 B − loaded {weights} B − \
+         resident {a1_reserved} B (needed {a2_reserved} B, free {avail} B, reclaimable 0 B)",
+        kv = a1_tokens * kv_per_token,
+    );
+    let events = replay(&jpath).unwrap();
+    assert!(
+        events.iter().any(|e| matches!(e,
+            Event::Refusal { id, detail, .. } if id == &a2.id && detail == &expected_detail)),
+        "expected detail {expected_detail:?} not found in {events:?}"
+    );
 }
