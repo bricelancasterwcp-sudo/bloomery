@@ -11,8 +11,10 @@ use super::GrantViolation;
 /// An empty `argv` is rejected with `CommandNotAllowed`. No granted prefix
 /// match is also rejected with `CommandNotAllowed{argv}`.
 ///
-/// **Invariant**: All prefixes are non-empty; this is enforced by
-/// [`Grant::from_json`](super::Grant::from_json) at construction time.
+/// **Invariant**: All prefixes are non-empty; this is enforced for every
+/// construction path by `Grant`'s `TryFrom<GrantWire>` impl (both
+/// [`Grant::from_json`](super::Grant::from_json) and the derived
+/// `Deserialize` impl route through it).
 pub fn check_command(prefixes: &[Vec<String>], argv: &[String]) -> Result<(), GrantViolation> {
     // Empty argv is always rejected.
     if argv.is_empty() {

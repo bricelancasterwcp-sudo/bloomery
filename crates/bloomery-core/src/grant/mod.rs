@@ -39,16 +39,41 @@ pub mod path;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// A capability grant: read/write filesystem roots, allowed command prefixes, and network access.
+/// Wire format for [`Grant`]: the raw, unvalidated shape deserialized from
+/// JSON before validation runs.
 ///
-/// All fields are private; `from_json` is the only constructor.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// This is the *only* type serde ever deserializes directly. `Grant` itself
+/// deserializes via `#[serde(try_from = "GrantWire")]`, so every
+/// deserialization path — `Grant::from_json` and any other call that
+/// deserializes a `Grant` (directly or nested in a larger structure, e.g. a
+/// task-request body) — is forced through [`Grant::try_from`] and its
+/// validation. There is no way to obtain a `Grant` that skipped validation.
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Grant {
+struct GrantWire {
     read_roots: Vec<PathBuf>,
     write_roots: Vec<PathBuf>,
     commands: Vec<Vec<String>>,
     #[serde(default)]
+    network: bool,
+}
+
+/// A capability grant: read/write filesystem roots, allowed command prefixes, and network access.
+///
+/// All fields are private. Every construction path funnels through
+/// `TryFrom<GrantWire> for Grant`: `from_json` parses to `GrantWire` then
+/// calls `Grant::try_from` directly (so callers keep the exact `GrantError`
+/// variant), and `#[serde(try_from = "GrantWire")]` routes the derived
+/// `Deserialize` impl — used by any other deserialization path, e.g.
+/// `serde_json::from_str::<Grant>(..)` or a `Grant` field nested in a larger
+/// deserialized struct — through the same `TryFrom::try_from`. No path
+/// yields an unvalidated `Grant`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "GrantWire")]
+pub struct Grant {
+    read_roots: Vec<PathBuf>,
+    write_roots: Vec<PathBuf>,
+    commands: Vec<Vec<String>>,
     network: bool,
 }
 
@@ -64,6 +89,25 @@ pub enum GrantError {
     /// JSON parse error.
     Parse(String),
 }
+
+impl std::fmt::Display for GrantError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GrantError::NetworkNotSupported => {
+                write!(f, "network access is not supported in v1 grants")
+            }
+            GrantError::NonAbsoluteRoot { root } => {
+                write!(f, "grant root is not absolute: {root}")
+            }
+            GrantError::EmptyCommandPrefix => {
+                write!(f, "grant command prefix must not be empty")
+            }
+            GrantError::Parse(msg) => write!(f, "failed to parse grant: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for GrantError {}
 
 /// A grant violation detected by path or command validation (Tasks 2–3 produce these).
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -94,8 +138,17 @@ impl Grant {
 
     /// Parse JSON and validate according to v1 rules.
     ///
-    /// Validation order:
-    /// 1. Parse JSON (failure → `Parse`)
+    /// Parses into the private `GrantWire` intermediate first — JSON syntax
+    /// errors or unknown fields become `GrantError::Parse` — then calls
+    /// `Grant::try_from(wire)`, the same validation the derived
+    /// `Deserialize` impl uses. Going through `try_from` directly (rather
+    /// than `serde_json::from_str::<Grant>`) means `from_json` surfaces the
+    /// exact `GrantError` variant (`NetworkNotSupported` /
+    /// `NonAbsoluteRoot` / `EmptyCommandPrefix`) instead of a generic
+    /// parse-wrapped string, preserving its existing error contract.
+    ///
+    /// Validation order (in [`Grant::try_from`]):
+    /// 1. Parse JSON into `GrantWire` (failure → `Parse`)
     /// 2. If `network == true` → `NetworkNotSupported`
     /// 3. Any read/write root where `!is_absolute()` → `NonAbsoluteRoot`
     /// 4. Any commands entry that is empty → `EmptyCommandPrefix`
@@ -103,30 +156,9 @@ impl Grant {
     /// An empty commands *list* is valid (no commands granted).
     /// Only an empty commands *prefix* (empty Vec<String>) is rejected.
     pub fn from_json(s: &str) -> Result<Grant, GrantError> {
-        // Step 1: Parse JSON
-        let grant: Grant = serde_json::from_str(s).map_err(|e| GrantError::Parse(e.to_string()))?;
-
-        // Step 2: Check network
-        if grant.network {
-            return Err(GrantError::NetworkNotSupported);
-        }
-
-        // Step 3: Check absolute roots (read_roots first, then write_roots)
-        if let Some(root) = Self::first_non_absolute(&grant.read_roots) {
-            return Err(GrantError::NonAbsoluteRoot { root });
-        }
-        if let Some(root) = Self::first_non_absolute(&grant.write_roots) {
-            return Err(GrantError::NonAbsoluteRoot { root });
-        }
-
-        // Step 4: Check for empty command prefixes
-        for cmd in &grant.commands {
-            if cmd.is_empty() {
-                return Err(GrantError::EmptyCommandPrefix);
-            }
-        }
-
-        Ok(grant)
+        let wire: GrantWire =
+            serde_json::from_str(s).map_err(|e| GrantError::Parse(e.to_string()))?;
+        Grant::try_from(wire)
     }
 
     /// Read-permitted roots.
@@ -171,5 +203,47 @@ impl Grant {
     /// reorder the prefix. No shell interpretation — argv is exec'd directly.
     pub fn check_command(&self, argv: &[String]) -> Result<(), GrantViolation> {
         command::check_command(&self.commands, argv)
+    }
+}
+
+/// The single validation gate for every `Grant` construction path.
+///
+/// `#[serde(try_from = "GrantWire")]` on `Grant` routes the derived
+/// `Deserialize` impl through here, so `serde_json::from_str::<Grant>(..)`
+/// (and any deserialization of a `Grant` nested in a larger struct, such as
+/// a task-request body's `grants` field) validates exactly as `from_json`
+/// does. `from_json` also calls this directly, after parsing to `GrantWire`
+/// itself, so it can return the precise `GrantError` variant rather than a
+/// serde-wrapped string.
+impl std::convert::TryFrom<GrantWire> for Grant {
+    type Error = GrantError;
+
+    fn try_from(wire: GrantWire) -> Result<Self, GrantError> {
+        // Step 1: Check network.
+        if wire.network {
+            return Err(GrantError::NetworkNotSupported);
+        }
+
+        // Step 2: Check absolute roots (read_roots first, then write_roots).
+        if let Some(root) = Grant::first_non_absolute(&wire.read_roots) {
+            return Err(GrantError::NonAbsoluteRoot { root });
+        }
+        if let Some(root) = Grant::first_non_absolute(&wire.write_roots) {
+            return Err(GrantError::NonAbsoluteRoot { root });
+        }
+
+        // Step 3: Check for empty command prefixes.
+        for cmd in &wire.commands {
+            if cmd.is_empty() {
+                return Err(GrantError::EmptyCommandPrefix);
+            }
+        }
+
+        Ok(Grant {
+            read_roots: wire.read_roots,
+            write_roots: wire.write_roots,
+            commands: wire.commands,
+            network: wire.network,
+        })
     }
 }

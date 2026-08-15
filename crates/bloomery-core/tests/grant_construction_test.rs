@@ -72,3 +72,52 @@ fn an_unknown_field_is_rejected() {
         Err(GrantError::Parse(_))
     ));
 }
+
+// --- Derived-Deserialize path: closes the bypass where
+// `serde_json::from_str::<Grant>(..)` (the path P3 uses to deserialize a
+// `grants` field nested in a larger task-request body) constructed a Grant
+// without running `from_json`'s validation. A `[[]]` commands entry is an
+// empty prefix, and `argv.starts_with(&[])` is always true, so an
+// unvalidated Grant built this way allow-lists every command — a total
+// allowlist bypass. These assert the derive path now rejects it, same as
+// `from_json`.
+
+#[test]
+fn derived_deserialize_also_validates() {
+    // The empty-prefix allowlist-bypass body: previously deserialized Ok
+    // via the derived impl even though `from_json` rejects it.
+    let bypass =
+        serde_json::from_str::<Grant>(r#"{"read_roots":[],"write_roots":[],"commands":[[]]}"#);
+    assert!(bypass.is_err(), "empty command prefix must not deserialize");
+
+    // network:true must also be rejected via the derive path, not just from_json.
+    let network = serde_json::from_str::<Grant>(
+        r#"{"read_roots":[],"write_roots":[],"commands":[],"network":true}"#,
+    );
+    assert!(network.is_err(), "network:true must not deserialize");
+
+    // A relative root must also be rejected via the derive path.
+    let relative_root = serde_json::from_str::<Grant>(
+        r#"{"read_roots":["relative/dir"],"write_roots":[],"commands":[]}"#,
+    );
+    assert!(relative_root.is_err(), "relative root must not deserialize");
+
+    // A valid grant still deserializes fine via the derive path.
+    let ok = serde_json::from_str::<Grant>(OK);
+    assert!(ok.is_ok(), "a valid grant must still deserialize");
+}
+
+#[test]
+fn an_empty_prefix_grant_cannot_be_constructed_by_any_path() {
+    let body = r#"{"read_roots":[],"write_roots":[],"commands":[[]]}"#;
+
+    assert_eq!(
+        Grant::from_json(body),
+        Err(GrantError::EmptyCommandPrefix),
+        "from_json must reject the empty-prefix bypass"
+    );
+    assert!(
+        serde_json::from_str::<Grant>(body).is_err(),
+        "the derived Deserialize impl must also reject the empty-prefix bypass"
+    );
+}
