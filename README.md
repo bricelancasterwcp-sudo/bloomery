@@ -108,6 +108,20 @@ Limits after Phase 2a, all known and none hidden:
   need a different number. Setting it too low is how the
   [2a natural-pressure run](docs/superpowers/evidence/2026-08-14-2a-natural-pressure.md#attempt-1--aborted-oom-and-the-accounting-gap-it-found)
   OOM'd a GPU the planner believed had room.
+* **The per-model declared weights charge is configured, not measured.** The
+  `weights_vram_mib` field (spec §2–§5) declares an upper bound on a model's
+  VRAM charge; the effective charge is `min(declared, measured_weights_bytes)`
+  — declared absent means the file's full measured weight. The declared value,
+  when present, is used by placement budget and the window law's VRAM term (one
+  value, both places, per spec §3). Like `ctx_overhead_mib`, bloomery never
+  reads this number back from the substrate. Setting `weights_vram_mib` too low
+  is an OOM, not a refusal: the pager budgets against it, but admission will fail
+  at the substrate's own memory limit if the declared value underestimates.
+* **KV images stay fully charged to VRAM under partial offload.** llama.cpp
+  places KV for CPU-resident layers in host RAM, so charging the full KV cache
+  to the VRAM budget overcounts need — a conservative direction (smaller windows,
+  earlier refusals). This never causes an OOM; it only makes admission stricter.
+  Recorded here as a known honest limit, not changed in this slice.
 * **A VRAM-bound window is un-placeable by exactly that reservation.** The
   window law subtracts `weights` and `overhead_mib` from free VRAM, but not
   `ctx_overhead_mib`; placement charges it. So an agent whose window is bound
@@ -317,8 +331,25 @@ find_result_cap = 100              # task loop: max matches a single `find` retu
 run_output_cap_bytes = 65536       # task loop: max bytes a `run` step's output returns
 run_timeout_secs = 120             # task loop: wall-clock cap on a `run` step's subprocess
 
+# Per-model tuning (spec §2–§5): Each entry can be either a bare path string (today's shape)
+# or a table with `path`, optional `n_gpu_layers`, and optional `weights_vram_mib`.
+# `n_gpu_layers` overrides the global default, enabling partial offload.
+# `weights_vram_mib` declares the model's VRAM charge as a ceiling, clamped to the file's
+# measured weights (effective_weights = min(declared, weights_bytes)). Both fields optional;
+# omitting both is byte-for-byte today's behavior. Declared weights charge feeds placement
+# budget and the window law's VRAM term. Setting declared too low is an OOM, not a refusal.
+# KV images stay fully charged to VRAM under partial offload — a conservative (smaller
+# windows, earlier refusals) overcount that never breaks admission; recorded as honest limit.
+
 [models]
-"qwen2.5-coder:7b-instruct-q8_0" = "/path/to/model.gguf"
+# today's shape — unchanged, still valid
+"qwen3:14b" = "/mnt/extra/ollama-models/blobs/sha256-…"
+
+# new shape — per-model tuning
+[models."qwen3.8:27b"]
+path = "/mnt/extra/ollama-models/blobs/sha256-f5f1dd89…"
+n_gpu_layers = 28          # optional; omitted = full offload
+weights_vram_mib = 11264   # optional; omitted = charge full weights
 
 [tier]
 name = "enthusiast-16gb"

@@ -268,6 +268,17 @@ above. Branch `feat/phase2bc-p4-codec-gate`.
     exactly: this is a *consequence* of boots-only measurement, recorded
     separately because "unmeasured on this boot" and "demoted forever" are
     easy to conflate and the two must never be.
+12. **KV is fully charged to VRAM under partial offload, recorded 2026-08-15
+    (partial-offload + G4 capability-window task 4).** When `n_gpu_layers` is
+    tuned to offload some model layers to CPU, llama.cpp places KV cache for
+    those layers in host RAM, not VRAM. The pager conservatively charges the
+    full KV cache against the VRAM budget anyway — the safe direction
+    (overcount begets smaller windows, earlier refusals) and never an OOM.
+    A measured read would require per-layer KV tracking; charging conservatively
+    is simpler and recorded here as an honest limit, not deferred. The
+    `weights_vram_mib` declared-charge field (Task 3) enables partial offload
+    (smaller windows work with smaller declared weights); KV's full charge
+    is the companion honest limit showing where the bounds come from.
 
 ## Smaller items (fine as-is; fix opportunistically)
 
