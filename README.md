@@ -108,15 +108,22 @@ Limits after Phase 2a, all known and none hidden:
   need a different number. Setting it too low is how the
   [2a natural-pressure run](docs/superpowers/evidence/2026-08-14-2a-natural-pressure.md#attempt-1--aborted-oom-and-the-accounting-gap-it-found)
   OOM'd a GPU the planner believed had room.
-* **The per-model declared weights charge is configured, not measured.** The
-  `weights_vram_mib` field (spec §2–§5) declares an upper bound on a model's
-  VRAM charge; the effective charge is `min(declared, measured_weights_bytes)`
-  — declared absent means the file's full measured weight. The declared value,
-  when present, is used by placement budget and the window law's VRAM term (one
-  value, both places, per spec §3). Like `ctx_overhead_mib`, bloomery never
-  reads this number back from the substrate. Setting `weights_vram_mib` too low
-  is an OOM, not a refusal: the pager budgets against it, but admission will fail
-  at the substrate's own memory limit if the declared value underestimates.
+* **The per-model weights charge is derived once, then declared with headroom.**
+  The `weights_vram_mib` field (spec §2–§5) declares an upper bound on a model's
+  VRAM charge; the effective charge is `min(declared, measured_weights_bytes)` —
+  declared absent means the file's full measured weight. The **default** is derived
+  once per model according to spec §5's procedure: (1) Load the model once at the
+  chosen `n_gpu_layers` (a scratch data_dir with `allow_unprofiled` is fine);
+  (2) read llama.cpp's buffer-size log lines and the nvidia-smi delta;
+  (3) declare `weights_vram_mib` with headroom above the observed number;
+  (4) commit the log excerpt as evidence. The **active value is configured, not
+  measured per run**, and bloomery never reads it back from the substrate, so a
+  different model, hardware, or offload strategy can need a different number.
+  Like `ctx_overhead_mib`, the declared value, when present, is used by placement
+  budget and the window law's VRAM term (one value, both places, per spec §3).
+  Setting `weights_vram_mib` too low is an OOM, not a refusal: the pager budgets
+  against it, but admission will fail at the substrate's own memory limit if the
+  declared value underestimates.
 * **KV images stay fully charged to VRAM under partial offload.** llama.cpp
   places KV for CPU-resident layers in host RAM, so charging the full KV cache
   to the VRAM budget overcounts need — a conservative direction (smaller windows,
