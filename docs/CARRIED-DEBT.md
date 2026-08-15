@@ -10,6 +10,15 @@ delivered and moved to the section below, struck through with the text
 they were recorded under. Nothing is deleted — the record of what was
 carried, and for how long, is the point of this file.
 
+**Amended 2026-08-15** (Phase 2b/2c P4, the G4 codec-landing gate): the
+"Profile has NO codec field" ruling — recorded informally in the README's
+task-surface prose (Phase 2b/2c P3) and in this same P4 sub-phase's own
+implementation plan, never previously given a numbered entry in this file —
+is delivered and recorded below as item 8, struck through on arrival. Four
+new items are also recorded: (a) extends item 6 in place (the codec probe
+is boots-only too); (b)–(d) are new items 9–11. P4 closes one debt and
+opens others, same as every slice before it.
+
 ## Delivered in Phase 2a (2026-08-14)
 
 Struck through, never deleted: the original text stands as recorded, with
@@ -63,6 +72,29 @@ what closed it. Branch `feat/phase2a-hardening`.
    `evict_timeshare(waited_Nms)`. All time reads go through one
    injectable clock so the rule is testable without sleeping.
 
+## Delivered in Phase 2b/2c P4 (2026-08-15)
+
+Struck through, never deleted, same convention as the Phase 2a section
+above. Branch `feat/phase2bc-p4-codec-gate`.
+
+8. ~~**Profile has NO codec field.** `bloomery_core::profile::Profile`
+   carried no per-model patch-codec selection, so Phase 2b/2c P3's task
+   loop always ran every model under the fixed default codec
+   (`SearchReplace`), regardless of what a model's own assay profile might
+   measure landing better.~~
+   **DELIVERED** — P4 added a `codecs` grid to `Profile` and
+   `preferred_patch_codec` to select from it (protocol §4); `Pager`'s
+   `model_patch_codec`/`model_codec_from_profile` resolve the pair for any
+   model (profile-measured selection when one exists, `SearchReplace`
+   otherwise — `crates/bloomery-daemon/src/pager/codec_gate.rs`); task
+   creation now builds every `TaskSpec` from that resolved codec instead of
+   the old literal (`crates/bloomery-daemon/src/api_task.rs`); the G4
+   probe measures landing under exactly that resolved codec
+   (`run_codec_probe`, Task 9); and Task 10 wires the whole thing into
+   boot. The debt this closes was never a numbered item in this file — it
+   lived in the README's task-surface prose and in this sub-phase's own
+   plan doc — recorded here retroactively, delivered on arrival.
+
 ## Phase 2 work items (in recommended order)
 
 5. **NVMe-media KV image read is unmeasured** — every recorded
@@ -72,6 +104,14 @@ what closed it. Branch `feat/phase2a-hardening`.
 6. **No drift re-probe**: assay POST runs at boot only (~110 s GPU per
    model, sequential). Spec §4.7's continuous probing is knowingly
    boots-only in Phase 1.
+
+   **Extended 2026-08-15 (Phase 2b/2c P4, recorded item (a) below).** The
+   G4 codec probe (`run_codec_probe`, wired into boot by Task 10) inherits
+   this exact limit: it runs once per boot, inside the same POST thread,
+   strictly after POST itself — no continuous re-probing here either. A
+   model's codec-gate verdict, and any demotion it carries, is exactly as
+   stale between boots as its capability profile is (see item 11 below for
+   the demotion half of this).
 7. **The per-context runtime reservation is configured, not measured.**
    `ctx_overhead_mib` (default 384) is a measured floor for
    qwen2.5-coder-7b-q8_0 at `n_ctx = 16384` on this box's Vulkan driver
@@ -130,6 +170,42 @@ what closed it. Branch `feat/phase2a-hardening`.
    will actually charge, which for a multi-model daemon means
    `GeometryInput` also carrying the other models' loaded weights and
    residents' reservations — not a second, separate fix.
+
+9. **Recorded scoring edges (protocol §3), item (b) of the 2026-08-15
+   batch.** Two landing-score edge cases are pinned by test, not by
+   accident: an identity patch (search matches, replace is byte-identical
+   to it) *applies* but does not count as landed — the target's bytes
+   never actually changed (`an_identity_patch_applies_but_does_not_land`,
+   `codec_probe_test.rs`). A patch that lands only on a scratch file the
+   model wrote itself, leaving the fixture's declared `target` untouched,
+   also does not count (`a_patch_landing_only_on_a_scratch_file_does_not_land`).
+   Both are the scoring conjunction (§3: a `patch` step succeeded **and**
+   the *declared target's* bytes changed) working as specified, not a bug
+   — recorded here so a future reader who sees a model's patch "succeed"
+   without moving the rate does not mistake it for a defect.
+10. **The probe extends the ratified whole-task pager lock, item (c) of
+    the 2026-08-15 batch.** `run_codec_probe` holds the pager lock across
+    `create_agent` + `run_task` + `remove_agent` + the journal write, per
+    *fixture* — the same whole-task lock `task::registry` ratified for the
+    task loop generally (README, "One lock, held for a whole task"; this
+    file's item 6 extension above covers the boots-only half of the same
+    boot cost). A boot with `tasks_enabled` and the codec probe running
+    therefore serializes daemon-wide inference for however long that
+    model's fixtures take — up to ~120 sequential inference calls per
+    model (20 fixtures × up to `FIXTURE_MAX_STEPS` = 6 steps) — which is
+    strictly longer than POST's own ~110 s per model. See the "G4 codec
+    probe costs real GPU minutes" line in the README's Honest limits.
+11. **Demotion is per-boot state, never persisted, item (d) of the
+    2026-08-15 batch.** A completed G4 verdict lives only in the pager's
+    in-memory `codec_gate` field (`crates/bloomery-daemon/src/pager/codec_gate.rs`);
+    nothing writes it to disk outside the append-only journal record of
+    how it was reached. A restart re-measures from nothing — there is no
+    notion of a demotion "sticking" across boots, and `set_codec_gate`
+    replaces any previous verdict wholesale rather than merging with it.
+    Matches item 6's extension above and the "No drift re-probe" reasoning
+    exactly: this is a *consequence* of boots-only measurement, recorded
+    separately because "unmeasured on this boot" and "demoted forever" are
+    easy to conflate and the two must never be.
 
 ## Smaller items (fine as-is; fix opportunistically)
 

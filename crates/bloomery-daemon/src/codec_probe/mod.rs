@@ -7,14 +7,17 @@
 //! single-defect repair tasks through this daemon's own serving path — not
 //! whether the model can "solve" anything more general.
 //!
-//! Two halves live here. [`fixtures`] (Task 5) ships the frozen set itself
+//! Three pieces live here. [`fixtures`] (Task 5) ships the frozen set itself
 //! (`codec-tasks-v1`, N=20) and its parser, every fixture's reference fix
 //! proven to land through the real `bloomery_core::action::lens::land` path
 //! by `tests/codec_fixtures_test.rs`. [`run_codec_probe`] (Task 9) is the
 //! instrument: it runs one model against a set through the *real* `run_task`
 //! loop — real prompts, real envelope decoding, real executors, real grants
 //! — scores each fixture by §3's rule, and turns the result into one
-//! [`CodecGateResult`] the pager stores and `/status` renders.
+//! [`CodecGateResult`] the pager stores and `/status` renders. `boot`
+//! (Task 10) decides *when* the instrument runs at boot and what gets
+//! journaled when it doesn't — see its own module docs for the decision
+//! table.
 //!
 //! **The measurement-honesty rules this module is responsible for**, stated
 //! once here because they are what the whole sub-phase rests on:
@@ -44,8 +47,14 @@
 //!   score. Splicing a partial score is precisely what §3 forbids, and doing it
 //!   at read time is the same violation as doing it at write time.
 
+mod boot;
 pub mod fixtures;
 mod scoring;
+
+pub use boot::{
+    fixture_set_unparseable_reason, probe_aborted_reason, run_boot_codec_probe,
+    should_run_codec_probe, POST_DISABLED_CODEC_SKIP_REASON,
+};
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};

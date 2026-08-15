@@ -88,6 +88,10 @@ fn main() {
 /// 5. Run POST on its own thread — assay talks to this daemon's own `/v1`
 ///    surface, so the accept loop must be answering while it works — which
 ///    attaches what it measures and closes the window when it finishes.
+/// 6. On that same thread, strictly after POST returns `Ok`, run the G4
+///    codec probe (`codec_probe::run_boot_codec_probe`) when
+///    `tasks_enabled` says there is a mutating-verb surface worth gating —
+///    see that module's docs for the full boot decision table.
 #[cfg(feature = "llama")]
 fn run(config: Config, journal: Journal) -> ! {
     use std::process::Command;
@@ -96,6 +100,9 @@ fn run(config: Config, journal: Journal) -> ! {
     use bloomery_core::gguf::parse_gguf_meta;
     use bloomery_core::vram::free_vram_bytes;
     use bloomery_daemon::agents::ImageStore;
+    use bloomery_daemon::codec_probe::{
+        run_boot_codec_probe, should_run_codec_probe, POST_DISABLED_CODEC_SKIP_REASON,
+    };
     use bloomery_daemon::http::serve_shared;
     use bloomery_daemon::llama_send::SendLlama;
     use bloomery_daemon::pager::Pager;
@@ -197,9 +204,11 @@ fn run(config: Config, journal: Journal) -> ! {
         let tier = config.tier.clone();
         let python = config.assay.python.clone();
         let post_pager = Arc::clone(&pager);
+        let tasks_enabled = config.tasks_enabled;
+        let codec_scratch_dir = config.data_dir.join("codec-probe");
         std::thread::spawn(move || {
             let runner = PostRunner::new(python);
-            if let Err(e) = run_post(
+            match run_post(
                 &post_pager,
                 &runner,
                 &models,
@@ -207,10 +216,35 @@ fn run(config: Config, journal: Journal) -> ! {
                 &tier,
                 &profiles_dir,
             ) {
-                // The individual probe outcomes are journaled by `run_post`
-                // itself; reaching here means the *journal* failed, which is
-                // the one thing that cannot be journaled.
-                eprintln!("bloomery-daemon: POST could not record its result: {e}");
+                Ok(()) => {
+                    // Strictly after `run_post`: every model's profile is
+                    // attached and `posting` has cleared, so the probe
+                    // measures under exactly the codec every other request
+                    // would dispatch under (protocol §4). `assay.enabled` is
+                    // `true` here by construction (this is that branch).
+                    if should_run_codec_probe(true, tasks_enabled) {
+                        if let Err(e) =
+                            run_boot_codec_probe(&post_pager, &models, &codec_scratch_dir)
+                        {
+                            // Same reasoning as `run_post`'s own `Err` arm
+                            // below: each model's outcome is journaled by
+                            // `run_boot_codec_probe` itself, so reaching
+                            // here means the *journal* failed.
+                            eprintln!(
+                                "bloomery-daemon: codec probe could not record its result: {e}"
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    // The individual probe outcomes are journaled by
+                    // `run_post` itself; reaching here means the *journal*
+                    // failed, which is the one thing that cannot be
+                    // journaled. The codec probe is skipped too: POST's own
+                    // journal write is broken, so there is nowhere honest
+                    // left to record the codec probe's outcome either.
+                    eprintln!("bloomery-daemon: POST could not record its result: {e}");
+                }
             }
         });
     } else {
@@ -222,6 +256,18 @@ fn run(config: Config, journal: Journal) -> ! {
             .unwrap_or_else(|_| fail("pager poisoned before boot completed"));
         p.journal_degraded("POST disabled by config".to_string())
             .unwrap_or_else(|e| fail(format!("failed to journal degraded boot: {e}")));
+        if config.tasks_enabled {
+            // The codec probe measures the codec POST would have attached a
+            // profile for, and there is no serving window for it to run
+            // against either, so every model stays unmeasured for the
+            // mutating-verb gate too — one more line beside the one above,
+            // because the operator turned the task surface on and deserves
+            // to know why it stays refused. `!tasks_enabled` gets no line at
+            // all: the surface is dark, and `/status` already tells the
+            // truth (`mutating_verbs: false`, `codec_gate: null`).
+            p.journal_degraded(POST_DISABLED_CODEC_SKIP_REASON.to_string())
+                .unwrap_or_else(|e| fail(format!("failed to journal codec-probe skip: {e}")));
+        }
     }
     // `_handle`'s workers do the actual serving; the main thread just needs
     // to stay alive for the process to keep running. `park()` can wake

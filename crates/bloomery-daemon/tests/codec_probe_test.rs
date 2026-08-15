@@ -25,8 +25,9 @@ use bloomery_core::profile::Profile;
 use bloomery_daemon::agents::ImageStore;
 use bloomery_daemon::codec_probe::fixtures::{parse_fixture_set, FixtureSet};
 use bloomery_daemon::codec_probe::{
-    gate_decision, is_provisional, run_codec_probe, ENVELOPE_LENS, FIXTURE_BUDGET_TOKENS,
-    FIXTURE_MAX_STEPS,
+    fixture_set_unparseable_reason, gate_decision, is_provisional, probe_aborted_reason,
+    run_boot_codec_probe, run_codec_probe, should_run_codec_probe, ENVELOPE_LENS,
+    FIXTURE_BUDGET_TOKENS, FIXTURE_MAX_STEPS, POST_DISABLED_CODEC_SKIP_REASON,
 };
 use bloomery_daemon::pager::Pager;
 use bloomery_substrate::fake::FakeSubstrate;
@@ -180,6 +181,33 @@ fn build_pager(dir: &Path, replies: Vec<Reply>) -> Pager<FakeSubstrate> {
     let gguf = dir.join("m.gguf");
     std::fs::write(&gguf, b"fake weights").unwrap();
     pager.register_model(MODEL, &gguf, meta(), None).unwrap();
+    pager.set_task_journal_path(dir.join("tasks.jsonl"));
+    pager
+}
+
+/// Two models registered on one pager (admission wide open by `Pager::new`'s
+/// own default, same as [`build_pager`]) — the seam Task 10's
+/// [`run_boot_codec_probe`] needs: which model's probe succeeds and which
+/// aborts is decided entirely by how far `replies` stretches across the
+/// models in the order they are probed, not by anything model-specific.
+fn build_two_model_pager(
+    dir: &Path,
+    model_a: &str,
+    model_b: &str,
+    replies: Vec<Reply>,
+) -> Pager<FakeSubstrate> {
+    let journal = Journal::open(&dir.join("pager.jsonl")).unwrap();
+    let images = ImageStore::new(&dir.join("img")).unwrap();
+    let mut fake = FakeSubstrate::new();
+    for r in replies {
+        fake.script_reply(r);
+    }
+    let mut pager = Pager::new(fake, journal, images, Box::new(|| Some(1024 * 1024 * 1024)));
+    for (i, name) in [model_a, model_b].into_iter().enumerate() {
+        let gguf = dir.join(format!("m{i}.gguf"));
+        std::fs::write(&gguf, b"fake weights").unwrap();
+        pager.register_model(name, &gguf, meta(), None).unwrap();
+    }
     pager.set_task_journal_path(dir.join("tasks.jsonl"));
     pager
 }
@@ -763,4 +791,136 @@ fn a_poisoned_pager_lock_aborts_the_probe() {
     let err = run_codec_probe(&pager, MODEL, &test_set(), &dir.join("scratch"))
         .expect_err("a poisoned lock must abort");
     assert!(err.reason.contains("poisoned"), "got reason {}", err.reason);
+}
+
+// ---------------------------------------------------------------------------
+// Boot decision table (Task 10, Phase 2b/2c P4) — `main.rs`'s wiring is thin
+// glue; the decision, the skip/abort reason strings, and the multi-model
+// loop it calls all live in `codec_probe::boot` and are pinned here, the
+// same way POST's own invocation is pinned in `post_test.rs` rather than
+// tested through `main.rs`.
+// ---------------------------------------------------------------------------
+
+/// The brief's decision table, boiled to its boolean core: the probe runs
+/// only when POST itself ran (a profile might exist to read a codec from)
+/// **and** the task surface is on (there is a mutating verb worth gating).
+#[test]
+fn should_run_codec_probe_requires_post_and_tasks_both_on() {
+    assert!(should_run_codec_probe(true, true), "both on: run it");
+    assert!(
+        !should_run_codec_probe(true, false),
+        "tasks off: the surface is dark, nothing to gate"
+    );
+    assert!(
+        !should_run_codec_probe(false, true),
+        "POST off: no profile, no serving window to probe against"
+    );
+    assert!(!should_run_codec_probe(false, false), "both off");
+}
+
+/// A daemon build bug (the shipped fixture set fails to parse), named
+/// exactly the way the brief pins it — including the fixture-set-vs-probe
+/// distinction in the wording ("codec probe skipped", not "aborted": no
+/// model-specific probe ever started).
+#[test]
+fn fixture_set_unparseable_reason_matches_the_brief_wording() {
+    let reason = fixture_set_unparseable_reason("missing field `set`");
+    assert_eq!(
+        reason,
+        "codec fixture set unparseable: missing field `set`; codec probe skipped — mutating \
+         verbs stay refused"
+    );
+}
+
+/// A per-model `ProbeAborted`, named with the model and the fixture-level
+/// reason `run_codec_probe` already produced — this function only wraps it
+/// for the journal, never reformats what infrastructure failure it was.
+#[test]
+fn probe_aborted_reason_matches_the_brief_wording() {
+    let reason = probe_aborted_reason(
+        "qwen2.5-coder:7b",
+        "fixture t1-alpha: agent creation refused: no capability profile",
+    );
+    assert_eq!(
+        reason,
+        "codec probe aborted for qwen2.5-coder:7b: fixture t1-alpha: agent creation refused: no \
+         capability profile; unmeasured — mutating verbs refused"
+    );
+}
+
+/// `tasks_enabled && !assay.enabled`: one literal line beside the existing
+/// "POST disabled by config" line — pinned as a constant (not a function)
+/// because it takes no arguments, unlike the two reasons above.
+#[test]
+fn post_disabled_codec_skip_reason_is_pinned() {
+    assert_eq!(
+        POST_DISABLED_CODEC_SKIP_REASON,
+        "codec probe skipped: POST disabled; all models unmeasured — mutating verbs refused"
+    );
+}
+
+/// The wiring loop one level up from `run_codec_probe`'s own per-fixture
+/// isolation, driven against the *real* shipped fixture set (this function
+/// always parses `shipped_fixture_set()` itself — there is no set
+/// parameter to substitute a smaller one, unlike `run_codec_probe`). An
+/// empty script makes each model's very first `infer` fail immediately
+/// (`a_substrate_failure_aborts_the_probe_without_any_verdict`'s trigger,
+/// replayed once per model), so both models abort — and the loop must
+/// still visit the second one and still return a clean `Ok`: the POST rule
+/// restated at the boot layer, one model's abort never stops another's
+/// probe, and a journal failure is the only thing that stops this function.
+#[test]
+fn run_boot_codec_probe_visits_every_model_and_returns_ok_even_when_all_abort() {
+    let dir = fresh_dir("boot-both-abort");
+    let scratch = dir.join("scratch");
+    let pager = Mutex::new(build_two_model_pager(&dir, "m-a", "m-b", vec![]));
+    let models = vec!["m-a".to_string(), "m-b".to_string()];
+
+    run_boot_codec_probe(&pager, &models, &scratch)
+        .expect("every model aborting is still a clean boot, not a journal failure");
+
+    let p = pager.lock().unwrap();
+    assert!(!p.model_mutating_verbs("m-a"));
+    assert!(!p.model_mutating_verbs("m-b"));
+    drop(p);
+
+    let events = pager_events(&dir);
+    assert!(
+        verdict_events(&events).is_empty(),
+        "no model completed a probe"
+    );
+    assert_eq!(
+        removed_agents(&events).len(),
+        2,
+        "both models' ephemeral agents ran (and were removed) — the loop \
+         visited both, it did not stop after m-a's abort: {events:?}"
+    );
+
+    // `create_agent`'s own unprofiled-admission `Degraded` line (law 5,
+    // unrelated to this function) also lands here once per model — filtered
+    // out so this asserts only the lines `run_boot_codec_probe` itself is
+    // responsible for.
+    let degraded: Vec<&str> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Degraded { reason } => Some(reason.as_str()),
+            _ => None,
+        })
+        .filter(|r| r.starts_with("codec probe aborted for"))
+        .collect();
+    assert_eq!(
+        degraded.len(),
+        2,
+        "one 'codec probe aborted' line per aborted model, in probe order: {degraded:?}"
+    );
+    assert!(
+        degraded[0].starts_with("codec probe aborted for m-a:"),
+        "got {:?}",
+        degraded[0]
+    );
+    assert!(
+        degraded[1].starts_with("codec probe aborted for m-b:"),
+        "got {:?}",
+        degraded[1]
+    );
 }

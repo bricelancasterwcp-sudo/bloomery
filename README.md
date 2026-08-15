@@ -37,12 +37,13 @@ alongside KV, and the pager has been driven to evict under a natural measured
 budget on this box; that run is
 [recorded separately](docs/superpowers/evidence/2026-08-14-2a-natural-pressure.md)
 and is **not** a re-read of G2, which stands exactly as published. **Phase
-2b/2c (edit-codec syscall ABI, capability grants, and the task loop that
-wires both into a real HTTP surface) has since landed**, dark by default
-(`tasks_enabled = false`) and with no G4 codec-landing gate wired yet — see
-[Task loop](#task-loop-phase-2b2c-p3) below. Phase 4 (policy plane, semantic
-store, appliance boot) is not built. See [Honest limits](#honest-limits)
-before believing anything else.
+2b/2c (edit-codec syscall ABI, capability grants, the task loop that wires
+both into a real HTTP surface, and the G4 codec-landing gate that measures
+each model's patch codec at boot) has since landed**, dark by default
+(`tasks_enabled = false`) — see [Task loop](#task-loop-phase-2b2c-p3) and
+[Codec gate](#codec-gate-phase-2b2c-p4) below. Phase 4 (policy plane,
+semantic store, appliance boot) is not built. See
+[Honest limits](#honest-limits) before believing anything else.
 
 ## What works
 
@@ -131,6 +132,20 @@ Limits after Phase 2a, all known and none hidden:
   provisionally admits unprofiled models for that whole window (journaled).
   Set `assay.enabled = false` to skip it, and `allow_unprofiled = true` if you
   accept serving a model whose ceiling and codecs nobody measured.
+* **The G4 codec probe costs real GPU minutes per model per boot, stated
+  plainly.** With `tasks_enabled = true` and `assay.enabled = true`, boot runs
+  the codec probe against the frozen `codec-tasks-v1` set (N=20) for every
+  configured model, strictly after POST finishes — up to 20 fixtures × 6
+  steps (`FIXTURE_MAX_STEPS`) = **up to ~120 sequential inference calls per
+  model** before that model's boot probe completes, each fixture holding the
+  same coarse whole-task pager lock the task loop already does (see "One
+  lock, held for a whole task" above), so this is minutes of GPU-busy,
+  daemon-wide-blocking time per model, not seconds — and, like POST, this is
+  a **per-boot** measurement only: there is no continuous re-probing (same
+  honest limit as the POST line above). Turn `tasks_enabled` off, or
+  `assay.enabled` off, to skip it — either one leaves every model's mutating
+  verbs (`patch`/`write`/`run`) refused (see [Codec gate](#codec-gate-phase-2b2c-p4)
+  below).
 * **KV images are boot-scoped.** The image store's index lives in memory, so
   spilled images from a previous boot are unreachable litter. A restart is a
   cold start for every agent.
@@ -226,12 +241,57 @@ Limits after Phase 2a, all known and none hidden:
   {status, steps, summary}` or `404`. `steps` always lists every recorded
   `TaskStep`, in order — a re-asked step can produce more than one record
   sharing a step number, so nothing here assumes one record per step.
-* **Honest, not gated yet.** No G4 codec-landing gate wiring — P4 gates
-  per-model codec choice against G4 (≥80% applies-and-parses, else
-  demotion); P3 always uses the fixed default codec (`SearchReplace`; see
-  `bloomery_core::profile::Profile`, which carries no per-model codec field
-  yet). Local-only, buffered like the rest of this daemon: no remote
-  execution, no streaming of a task's progress beyond polling `GET`.
+* **Codec choice and mutating-verb gating are P4's, not P3's.** A task now
+  resolves its per-model `patch` codec and whether mutating verbs
+  (`patch`/`write`/`run`) are even available from the pager's G4 verdict —
+  see [Codec gate](#codec-gate-phase-2b2c-p4) below. Otherwise still
+  local-only and buffered like the rest of this daemon: no remote execution,
+  no streaming of a task's progress beyond polling `GET`.
+
+### Codec gate (Phase 2b/2c P4)
+
+* **Fail-closed, unmeasured is never permission.** Every model's mutating
+  verbs (`patch`/`write`/`run`) are refused by default. They are enabled
+  **only** for a model that has a *stored* G4 verdict recorded on the pager
+  **and** whose verdict itself says keep (`landed * 5 >= n * 4`, no float
+  edge) — a model that was never probed, is still probing, or whose probe
+  aborted mid-run reads exactly like a demoted model, never like a
+  permissive default. `read`/`find`/`done` are never gated; only the
+  mutating three are.
+* **What the gate measures.** The frozen `codec-tasks-v1` fixture set (N=20
+  single-defect repair tasks, embedded in the daemon binary) run through the
+  *real* `run_task` loop — real prompts, real envelope decoding, real
+  executors, real grants — against each model's profile-selected patch codec
+  (`SearchReplace` or `WholeFile`; `SearchReplace` when unprofiled or
+  unmeasured). A fixture lands iff a `patch` step succeeded **and** the
+  declared target file's bytes actually changed — either alone would score a
+  non-repair as a repair. Any infrastructure failure (a substrate error, a
+  refused agent creation, a poisoned lock, an unwritable journal, a
+  panicking task) aborts that model's *whole* probe: no verdict, no partial
+  score, the model stays unmeasured rather than a confident zero.
+* **Runs once per boot, strictly after POST.** Wired into the same POST
+  thread, after `run_post` returns `Ok` (profiles attached, `posting`
+  cleared) — see the boot-cost line in [Honest limits](#honest-limits)
+  above. `assay.enabled = false` **or** `tasks_enabled = false` skips it
+  entirely (mutating verbs stay refused either way); with both `true` it
+  runs for every configured model, in the same order POST probed them, and
+  one model's abort never stops another's.
+* **Demotion is per-boot state, never persisted.** The stored verdict lives
+  in memory on the pager, exactly like every other piece of boot-time
+  measurement here (VRAM budget, POST profiles). A restart re-measures from
+  nothing — there is no notion of a demotion "sticking" across boots, and no
+  notion of merging an old verdict with a new one.
+* **`/status` renders it per model.** `mutating_verbs` (bool, the enforced
+  decision) and `codec_gate` (the stored verdict's `fixture_set`, `codec`,
+  `landed`, `n`, `interval95`, `provisional` — or JSON `null` when the model
+  has never completed a probe, never a confident zero) sit beside the
+  existing `patch_codec` field on every entry in `models`.
+* **`CodecFixture` rows are a rate only under a matching `CodecVerdict`.** A
+  mid-set abort leaves the fixture rows that already ran permanently in the
+  journal (append-only, nothing retracts them) — diagnostic records of what
+  ran, not a partial measurement. Reading a landing rate from them requires
+  bounding by a `CodecVerdict` for that exact model and set; rows with no
+  matching verdict are orphans and must never be hand-summed into a score.
 
 ## Quick start
 
@@ -337,6 +397,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 * [Design spec](docs/superpowers/specs/2026-08-14-bloomery-design.md) — mission, laws, architecture, phases
 * [Kill gates G1–G4](docs/gates.md) — pre-registered, frozen before any instrument existed
+* [G4 codec-landing protocol](docs/superpowers/evidence/2026-08-15-g4-protocol.md) — pre-registered before the codec-gate instrument existed
 * [G2 evidence](docs/superpowers/evidence/2026-08-14-g2-agent-switch.md) — the switch-latency run, its lens, and its caveats
 * [2a natural-pressure evidence](docs/superpowers/evidence/2026-08-14-2a-natural-pressure.md) — eviction under a measured budget with the weights charged; an acceptance run, not a gate re-read
 * [Carried debt](docs/CARRIED-DEBT.md) — what each slice settled, what it deferred, and what has since been delivered
