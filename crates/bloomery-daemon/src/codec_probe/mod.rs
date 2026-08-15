@@ -31,6 +31,18 @@
 //! - **The point estimate decides (§5).** `gate_decision`'s integer form has
 //!   no float edge; the Wilson interval is recorded with every verdict and
 //!   `is_provisional` marks a straddling one, but never changes it.
+//! - **`CodecFixture` rows are a rate ONLY under a matching `CodecVerdict`.**
+//!   Each row is journaled as its fixture finishes, so an abort partway
+//!   through a set leaves the rows for the fixtures that already ran —
+//!   permanently, because the journal is append-only and cannot retract them.
+//!   Those orphans are *diagnostic records of what ran*, *not* a partial
+//!   measurement: the probe never scored them, and the only marker separating
+//!   them from a completed probe is the **absence of a `CodecVerdict` for that
+//!   model and set**. Anyone replaying the journal — an operator, a later
+//!   analyst, a downstream tool — must therefore read a landing rate only from
+//!   rows bounded by a verdict, and must never hand-sum orphan rows into a
+//!   score. Splicing a partial score is precisely what §3 forbids, and doing it
+//!   at read time is the same violation as doing it at write time.
 
 pub mod fixtures;
 mod scoring;

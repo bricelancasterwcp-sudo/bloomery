@@ -622,13 +622,69 @@ fn a_substrate_failure_aborts_the_probe_without_any_verdict() {
     );
     assert!(
         fixture_events(&events).is_empty(),
-        "no partial score may be spliced"
+        "this abort lands on the FIRST fixture, so no fixture row was written \
+         yet — see `a_mid_set_abort_leaves_orphan_fixture_rows_and_no_verdict` \
+         for what an abort partway through a set really leaves behind"
     );
     assert_eq!(
         removed_agents(&events).len(),
         1,
         "the fixture's agent is still removed on the abort path"
     );
+}
+
+/// The abort case the first-fixture tests cannot show: fixture 1 lands and is
+/// journaled, then fixture 2 aborts. The `CodecFixture` row for fixture 1
+/// **stays** — an append-only journal cannot retract it, and it is a useful
+/// diagnostic record of what actually ran.
+///
+/// That is protocol §3 exactly, and the honesty rule it implies is what this
+/// test pins: what is forbidden is a *score*, and the only thing separating
+/// these orphan rows from a completed probe — for a journal replayer, an
+/// operator, or a later analyst — is the **absence of a matching
+/// `CodecVerdict`**. Orphan rows must never be summed into a rate by hand;
+/// 1-of-1 here is not a 100% landing rate, it is one row from a measurement
+/// that never finished. The gate itself stays unmeasured and fail-closed.
+#[test]
+fn a_mid_set_abort_leaves_orphan_fixture_rows_and_no_verdict() {
+    let dir = fresh_dir("mid-set-abort");
+    // Exactly enough script for fixture 1 to land. Fixture 2's very first
+    // `infer` drains the queue → "script exhausted" → `TaskStatus::Error`.
+    let pager = Mutex::new(build_pager(
+        &dir,
+        vec![sr_patch("a.txt", "broken", "fixed"), done("repaired a.txt")],
+    ));
+
+    let err = run_codec_probe(&pager, MODEL, &test_set(), &dir.join("scratch"))
+        .expect_err("the second fixture must abort the whole probe");
+    assert!(
+        err.reason.contains("t2-beta"),
+        "the abort names the fixture it happened on, not the one that passed: {}",
+        err.reason
+    );
+
+    let events = pager_events(&dir);
+    let rows = fixture_rows(&events);
+    assert_eq!(
+        rows.len(),
+        1,
+        "the fixture that completed before the abort keeps its diagnostic row: {rows:?}"
+    );
+    assert_eq!(rows[0].0, "t1-alpha");
+    assert!(rows[0].2, "and keeps its real landed value");
+
+    assert!(
+        verdict_events(&events).is_empty(),
+        "the absence of a CodecVerdict is the ONLY thing marking those rows \
+         as orphans — an aborted probe must never emit one"
+    );
+
+    let p = pager.lock().unwrap();
+    assert!(
+        p.status().models[0].codec_gate.is_none(),
+        "1-of-1 orphan rows are not a 100% gate; the model stays unmeasured"
+    );
+    assert!(!p.model_mutating_verbs(MODEL), "and therefore read-only");
 }
 
 /// The other §3 abort trigger: `create_agent` itself refusing (here law 5's
