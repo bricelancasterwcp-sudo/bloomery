@@ -57,7 +57,10 @@ pub(crate) fn dispatch<S: Substrate>(
     }
 }
 
-fn bad_request(e: serde_json::Error) -> ApiResult {
+/// `pub(crate)` so `api_task.rs` (Task 5) reports a malformed request body
+/// the same way this surface always has, rather than a second, drifting
+/// spelling of `{"error":"bad_request", ...}`.
+pub(crate) fn bad_request(e: serde_json::Error) -> ApiResult {
     (
         400,
         Some(json!({"error": "bad_request", "message": e.to_string()})),

@@ -36,10 +36,13 @@ thing **Phase 2a** closed. Weights now spend from the reservation budget
 alongside KV, and the pager has been driven to evict under a natural measured
 budget on this box; that run is
 [recorded separately](docs/superpowers/evidence/2026-08-14-2a-natural-pressure.md)
-and is **not** a re-read of G2, which stands exactly as published. Phases 2b–4
-(edit-codec syscall ABI, capability grants, policy plane, semantic store,
-appliance boot) are not built. See [Honest limits](#honest-limits) before
-believing anything else.
+and is **not** a re-read of G2, which stands exactly as published. **Phase
+2b/2c (edit-codec syscall ABI, capability grants, and the task loop that
+wires both into a real HTTP surface) has since landed**, dark by default
+(`tasks_enabled = false`) and with no G4 codec-landing gate wired yet — see
+[Task loop](#task-loop-phase-2b2c-p3) below. Phase 4 (policy plane, semantic
+store, appliance boot) is not built. See [Honest limits](#honest-limits)
+before believing anything else.
 
 ## What works
 
@@ -117,7 +120,10 @@ Limits after Phase 2a, all known and none hidden:
   resident agent, journaled as a degradation.
 * **One coarse lock.** Four HTTP workers share one `Mutex<Pager>`, so
   inference is serialized daemon-wide. That is deliberate for one GPU and will
-  not survive two.
+  not survive two. Phase 2b/2c P3's task loop makes this coarser still: a
+  running task holds that same lock for its *whole* duration (see "Task loop"
+  above), so a long `run` step can block every other agent's inference for up
+  to `run_timeout_secs`, not just its own task's.
 * **`/v1` streaming is buffered.** `stream: true` returns real SSE framing, but
   the whole completion is generated first and then written — the shape is
   compatible, the latency benefit is not there.
@@ -166,6 +172,67 @@ Limits after Phase 2a, all known and none hidden:
 * **Type + checks only.** P3 wires these into the task-loop's executors;
   `tasks_enabled` (default `false`) gates the whole task surface.
 
+### Task loop (Phase 2b/2c P3)
+
+* **propose → validate → execute, journaled every step.** `run_task` prompts
+  the model with the goal and the P1 verb card, decodes its reply through
+  `parse_action_with_codec`, dispatches the validated action to its executor,
+  and journals a `TaskStep` — win, loss, or unparseable — before repeating. An
+  unparseable turn is re-asked up to twice before the step is recorded
+  failed; a grant violation is a failed step the model can see and recover
+  from, not a task abort. The task ends on the model's own `done`, on
+  `max_steps` running out, on the pager's own budget or window refusal, or on
+  a substrate/journal failure — never on a stuck step.
+* **Five verbs, four bounded executors.** `read` and `find` (capped by
+  `read_cap_bytes` / `find_result_cap`), `patch` (atomic write, fsync'd, then
+  P1's landing lens checks it both applies and parses), and `run` (no shell,
+  a scrubbed `PATH`/`HOME`/`LANG` environment, `run_output_cap_bytes` /
+  `run_timeout_secs`, its whole process group killed on timeout). `done` ends
+  the task; it has no executor. **A granted command's arguments are not
+  path-scoped:** the `commands` allowlist checks only the program and its
+  argv prefix, never what paths the arguments name — a grant for `cat` lets
+  the model run `cat /etc/passwd` regardless of `read_roots`. Operators
+  choosing command grants must treat each granted program as fully trusted
+  with whatever arguments the model supplies, not as implicitly confined to
+  the grant's roots.
+* **Every filesystem open is grant-checked, then `O_NOFOLLOW`.** Each
+  executor opens the *canonical* path P2's `Grant::check_read`/`check_write`
+  returned — never a path re-derived from the model's own string — with
+  `O_NOFOLLOW` on the final component, so even a same-instant symlink swap of
+  the checked path's last segment is refused (`ELOOP`) rather than followed.
+  **Named v1 limit:** `O_NOFOLLOW` only protects the final path component; a
+  TOCTOU race against a *mid-path* directory (swapped for a symlink between
+  the grant's canonicalization and the open) is not closed by this call —
+  that needs Linux's `openat2(2)` with `RESOLVE_NO_SYMLINKS`, not yet wired.
+* **One lock, held for a whole task.** `run_task` takes `&mut Pager` for its
+  entire call, so `TaskRegistry::spawn_task`'s background worker locks the
+  shared `Arc<Mutex<Pager>>` once and holds it for the task's full duration —
+  including the time an `exec_run` subprocess spends running and every
+  executor's file I/O — rather than only across each step's `infer` call.
+  Defensible for v1 because one GPU already serializes every `infer` daemon-
+  wide (see "One coarse lock" above); the cost it adds is that a long `run`
+  step (bounded by `run_timeout_secs`, default 120s) now blocks every *other*
+  agent's inference for up to that long too, not just its own task. Revisiting
+  this means threading a lock-per-`infer` shape through `run_task` itself,
+  deferred past P3.
+* **`tasks_enabled` (default `false`) gates the whole surface.** With it
+  unset, `POST /agents/{id}/task` answers `501 {"error":"tasks_disabled"}`
+  regardless of the request body. Enabled, `POST /agents/{id}/task
+  {goal, grants, budget_tokens?, max_steps?}` returns `202 {"task_id"}` (a
+  background worker started), `422 {"error":"invalid_grant", detail}` when
+  `grants` fails P2's `Grant::from_json` validation (or has neither a
+  `write_roots` nor a `read_roots` entry to run in), or `404` for an unknown
+  agent; `GET /agents/{id}/task/{task_id}` polls a snapshot — `200
+  {status, steps, summary}` or `404`. `steps` always lists every recorded
+  `TaskStep`, in order — a re-asked step can produce more than one record
+  sharing a step number, so nothing here assumes one record per step.
+* **Honest, not gated yet.** No G4 codec-landing gate wiring — P4 gates
+  per-model codec choice against G4 (≥80% applies-and-parses, else
+  demotion); P3 always uses the fixed default codec (`SearchReplace`; see
+  `bloomery_core::profile::Profile`, which carries no per-model codec field
+  yet). Local-only, buffered like the rest of this daemon: no remote
+  execution, no streaming of a task's progress beyond polling `GET`.
+
 ## Quick start
 
 Needs a Rust toolchain, a llama.cpp-capable GPU stack, and a `.gguf` on disk.
@@ -183,6 +250,11 @@ time_share_quantum_secs = 30       # how long an equal-priority refusal waits
                                    # before the LRU peer is evicted anyway
 ctx_overhead_mib = 384             # VRAM each resident context reserves beyond
                                    # its KV cache (llama.cpp compute buffers)
+tasks_enabled = false              # true = expose POST/GET /agents/{id}/task
+read_cap_bytes = 262144            # task loop: max bytes a single `read` returns
+find_result_cap = 100              # task loop: max matches a single `find` returns
+run_output_cap_bytes = 65536       # task loop: max bytes a `run` step's output returns
+run_timeout_secs = 120             # task loop: wall-clock cap on a `run` step's subprocess
 
 [models]
 "qwen2.5-coder:7b-instruct-q8_0" = "/path/to/model.gguf"

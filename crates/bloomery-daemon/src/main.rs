@@ -136,6 +136,18 @@ fn run(config: Config, journal: Journal) -> ! {
     pager.set_allow_unprofiled(config.allow_unprofiled);
     pager.set_tier(&config.tier.name, config.tier.emulated);
     pager.set_time_share_quantum_ms(config.time_share_quantum_secs.saturating_mul(1000));
+    pager.set_tasks_enabled(config.tasks_enabled);
+    pager.set_exec_bounds(bloomery_daemon::task::ExecBounds {
+        read_cap_bytes: config.read_cap_bytes,
+        find_result_cap: config.find_result_cap,
+        run_output_cap_bytes: config.run_output_cap_bytes,
+        run_timeout_secs: config.run_timeout_secs,
+    });
+    // A single shared file every task run appends to, distinct from the
+    // boot journal above (`journal_path`) — see `task::registry`'s module
+    // docs for why a fresh `Journal` handle per task run is safe against
+    // this one file specifically.
+    pager.set_task_journal_path(config.data_dir.join("journal").join("tasks.jsonl"));
 
     // Unprofiled on purpose: POST is the only source of a profile, and it
     // cannot run until this daemon is serving.

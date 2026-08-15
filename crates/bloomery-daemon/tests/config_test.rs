@@ -42,6 +42,14 @@ llama = "/models/llama.gguf"
     assert_eq!(config.default_budget_tokens, 200_000);
     assert!(!config.allow_unprofiled);
     assert_eq!(config.time_share_quantum_secs, 30);
+
+    // Task 5's task surface is dark by default, and its exec bounds default
+    // to the numbers named in the Task 5 brief.
+    assert!(!config.tasks_enabled);
+    assert_eq!(config.read_cap_bytes, 262_144);
+    assert_eq!(config.find_result_cap, 100);
+    assert_eq!(config.run_output_cap_bytes, 65_536);
+    assert_eq!(config.run_timeout_secs, 120);
 }
 
 #[test]
