@@ -224,7 +224,9 @@ weights_vram_mib = 11264
     assert_eq!(model2.weights_vram_mib(), Some(11264));
 }
 
-/// The design spec §2 example block parses verbatim.
+/// The design spec §2 example block parses character-for-character, verbatim from
+/// docs/superpowers/specs/2026-08-15-partial-offload-capability-window-design.md
+/// lines 31-41, including comments, ellipsis characters, and exact path spellings.
 #[test]
 fn spec_section_2_example_parses() {
     let toml = r#"
@@ -234,12 +236,14 @@ tier = { name = "enthusiast-16gb", emulated = false }
 assay = { enabled = false, python = "python3" }
 
 [models]
-"qwen3:14b" = "/mnt/extra/ollama-models/blobs/sha256-abc123"
+# today's shape — unchanged, still valid
+"qwen3:14b" = "/mnt/extra/ollama-models/blobs/sha256-…"
 
+# new shape — per-model tuning
 [models."qwen3.8:27b"]
-path = "/mnt/extra/ollama-models/blobs/sha256-f5f1dd89"
-n_gpu_layers = 28
-weights_vram_mib = 11264
+path = "/mnt/extra/ollama-models/blobs/sha256-f5f1dd89…"
+n_gpu_layers = 28          # optional; omitted = full offload
+weights_vram_mib = 11264   # optional; omitted = charge full weights
 "#;
     let path = write_temp_toml("spec-example.toml", toml);
     let config = load_config(&path).unwrap();
@@ -249,7 +253,7 @@ weights_vram_mib = 11264
     let model1 = config.models.get("qwen3:14b").unwrap();
     assert_eq!(
         model1.path(),
-        std::path::Path::new("/mnt/extra/ollama-models/blobs/sha256-abc123")
+        std::path::Path::new("/mnt/extra/ollama-models/blobs/sha256-…")
     );
     assert_eq!(model1.n_gpu_layers(), None);
     assert_eq!(model1.weights_vram_mib(), None);
@@ -257,7 +261,7 @@ weights_vram_mib = 11264
     let model2 = config.models.get("qwen3.8:27b").unwrap();
     assert_eq!(
         model2.path(),
-        std::path::Path::new("/mnt/extra/ollama-models/blobs/sha256-f5f1dd89")
+        std::path::Path::new("/mnt/extra/ollama-models/blobs/sha256-f5f1dd89…")
     );
     assert_eq!(model2.n_gpu_layers(), Some(28));
     assert_eq!(model2.weights_vram_mib(), Some(11264));
