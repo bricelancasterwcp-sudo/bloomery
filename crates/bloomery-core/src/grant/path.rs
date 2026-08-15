@@ -47,11 +47,20 @@ use std::path::{Path, PathBuf};
 /// 3. Canonicalize `target`:
 ///    - Success: in-bounds iff it `starts_with` (component-wise) some
 ///      canonical root.
-///    - Failure (path doesn't exist): fall back to canonicalizing
-///      `target`'s parent. If the parent canonicalizes and is in-bounds,
-///      the result is the canonical parent joined with the file name. If
-///      the parent canonicalizes but is out-of-bounds, refuse. If the
-///      parent itself doesn't canonicalize, name it as the missing piece.
+///    - Failure (path doesn't exist, or doesn't fully resolve): if
+///      `target` nonetheless already exists as *some* filesystem entry
+///      (checked via `symlink_metadata`, which does not itself follow
+///      links) — i.e. a dangling or looping symlink — refuse outright.
+///      A live symlink that resolves is caught by the branch above; the
+///      only way to reach this point with an existing entry is a broken
+///      link, and approving it as "new file in a granted dir" would let a
+///      later plain `open`/`write` follow the link straight out of the
+///      sandbox (see module docs and the fix-report entry for the
+///      dangling-symlink escape this closes). Otherwise (`target` truly
+///      does not exist at all) fall back to canonicalizing `target`'s
+///      parent: in-bounds parent → the canonical parent joined with the
+///      file name; out-of-bounds parent → refuse; parent itself doesn't
+///      canonicalize → name it as the missing piece.
 pub(crate) fn resolve_within(
     target: &Path,
     roots: &[PathBuf],
@@ -78,6 +87,20 @@ pub(crate) fn resolve_within(
                 kind,
             })
         };
+    }
+
+    // `canonicalize` failed. If an entry already exists at `target` (a
+    // dangling or looping symlink — the only way `symlink_metadata` can
+    // succeed here, since a live, fully-resolving symlink would have taken
+    // the `Ok(canon)` branch above), it is NOT a "new file" candidate: the
+    // grant's job is bounds, and an entry that exists but escapes bounds is
+    // out of bounds, full stop. Refuse before ever reaching the
+    // parent-fallback / new-file path.
+    if target.symlink_metadata().is_ok() {
+        return Err(GrantViolation::PathOutsideRoots {
+            path: target.to_string_lossy().into_owned(),
+            kind,
+        });
     }
 
     resolve_missing_target(target, &canonical_roots, kind)

@@ -135,3 +135,69 @@ fn write_whose_parent_dir_is_missing_is_named() {
         other => panic!("expected PathParentMissing, got {other:?}"),
     }
 }
+
+// Unique sibling-of-tempdir path for a target that lives entirely outside
+// any granted root, derived from sandbox()'s own per-call unique base dir
+// name so parallel test threads never collide on it.
+fn outside_path(sb: &std::path::Path) -> PathBuf {
+    let unique_name = sb.parent().unwrap().file_name().unwrap().to_string_lossy();
+    std::env::temp_dir().join(format!("{unique_name}-outside.txt"))
+}
+
+#[test]
+fn a_dangling_symlink_in_the_write_root_is_refused() {
+    let sb = sandbox();
+    let g = grant_for(&sb);
+    // sandbox/out/created.txt -> <outside, does not exist>. canonicalize(target)
+    // fails (the link doesn't fully resolve), but an entry (the dangling
+    // symlink itself) DOES exist at `target` — this must be refused, not
+    // treated as "new file in a granted dir", or a naive write would follow
+    // the link straight out of the sandbox.
+    let outside = outside_path(&sb);
+    let _ = std::fs::remove_file(&outside);
+    let link = sb.join("out").join("created.txt");
+    let _ = std::fs::remove_file(&link);
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    match g.check_write(&link) {
+        Err(GrantViolation::PathOutsideRoots {
+            kind: PathKind::Write,
+            ..
+        }) => {}
+        other => panic!("expected refusal of dangling symlink, got {other:?}"),
+    }
+    // The check must refuse before any executor ever runs — confirm no
+    // write happened and the outside path still doesn't exist.
+    assert!(!outside.exists());
+}
+
+#[test]
+fn a_genuinely_absent_new_file_is_still_allowed() {
+    let sb = sandbox();
+    let g = grant_for(&sb);
+    // Nothing at all exists at this path (not even a dangling symlink) —
+    // the legitimate new-file-in-a-granted-dir case must still work.
+    let newfile = sb.join("out").join("brand_new.txt");
+    let got = g.check_write(&newfile).unwrap();
+    assert_eq!(
+        got,
+        std::fs::canonicalize(sb.join("out"))
+            .unwrap()
+            .join("brand_new.txt")
+    );
+}
+
+#[test]
+fn a_live_symlink_to_an_in_root_file_resolves_via_the_normal_branch() {
+    let sb = sandbox();
+    let g = grant_for(&sb);
+    // sandbox/out/alias -> sandbox/out/real.txt (both inside the write root).
+    // canonicalize(target) succeeds here (the link fully resolves), so this
+    // takes the ordinary Ok(canon) branch, not the dangling-symlink refusal.
+    let real = sb.join("out").join("real.txt");
+    std::fs::write(&real, "hi").unwrap();
+    let alias = sb.join("out").join("alias");
+    let _ = std::fs::remove_file(&alias);
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    let got = g.check_write(&alias).unwrap();
+    assert_eq!(got, std::fs::canonicalize(&real).unwrap());
+}
