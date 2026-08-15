@@ -7,6 +7,7 @@
 //! sandbox. Tasks 2–3 validate that operations (path access, command execution) comply
 //! with the grant; the daemon (P3) enforces this against the actual execution context.
 
+pub mod command;
 pub mod path;
 
 use serde::{Deserialize, Serialize};
@@ -137,5 +138,12 @@ impl Grant {
     /// root (creating a new file in a granted directory).
     pub fn check_write(&self, target: &std::path::Path) -> Result<PathBuf, GrantViolation> {
         path::resolve_within(target, self.write_roots(), PathKind::Write)
+    }
+
+    /// `argv` (the run action's exec vector) must start with one granted
+    /// prefix, element-wise. It may append arguments but must not change or
+    /// reorder the prefix. No shell interpretation — argv is exec'd directly.
+    pub fn check_command(&self, argv: &[String]) -> Result<(), GrantViolation> {
+        command::check_command(&self.commands, argv)
     }
 }
