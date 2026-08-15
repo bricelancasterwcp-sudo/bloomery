@@ -2,6 +2,7 @@ pub mod agents;
 mod api_native;
 mod api_task;
 mod api_v1;
+pub mod codec_probe;
 pub mod config;
 pub mod http;
 #[cfg(feature = "llama")]
