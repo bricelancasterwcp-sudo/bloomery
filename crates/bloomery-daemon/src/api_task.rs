@@ -189,6 +189,11 @@ fn create_task<S: Substrate + Send + 'static>(
         // implying a lookup that doesn't exist.
         patch_codec: PatchCodec::SearchReplace,
         bounds,
+        // Gate G4 (P4 Task 7 brief): this task only makes demotion
+        // structural in `run_task`; wiring the real per-model verdict here
+        // is Task 8's job, so every task spawned through this HTTP surface
+        // is unconditionally allowed to mutate for now.
+        mutating_verbs: true,
     };
 
     let task_id = registry.spawn_task(Arc::clone(pager), agent_id.to_string(), spec, journal_path);

@@ -21,7 +21,7 @@
 use std::path::Path;
 use std::time::Instant;
 
-use bloomery_core::action::{parse_action_with_codec, verb_card, Action, PatchCodec};
+use bloomery_core::action::{parse_action_with_codec, verb_card_for, Action, PatchCodec};
 use bloomery_core::grant::Grant;
 use bloomery_core::journal::{Event, Journal};
 use bloomery_substrate::Substrate;
@@ -57,6 +57,17 @@ pub struct TaskSpec {
     pub cwd: std::path::PathBuf,
     pub patch_codec: PatchCodec,
     pub bounds: ExecBounds,
+    /// Gate G4 (`docs/superpowers/evidence/2026-08-15-g4-protocol.md` §6):
+    /// `false` means this model is demoted (or unmeasured — fail-closed
+    /// read-only, same §6) and may not use `patch`/`run` this task.
+    /// `render_prompt` reflects this in the verb card the model sees
+    /// (`verb_card_for(spec.patch_codec, spec.mutating_verbs)`), and
+    /// `run_task` enforces it structurally — a `patch`/`run` action is
+    /// refused before `execute_action` ever dispatches it, regardless of
+    /// what the card told the model. This task (P4 Task 7) always sets it
+    /// `true`; a later task (Task 8) wires the real per-model value decided
+    /// by the gate at agent-admission time.
+    pub mutating_verbs: bool,
 }
 
 /// How a task ended. `run_task` only ever returns `Done`, `BudgetExhausted`,
@@ -105,6 +116,12 @@ const STEP_MAX_TOKENS: u32 = 1024;
 /// first attempt plus 2 re-asks, per the binding brief ("re-ask ... up to 2
 /// times per step").
 const MAX_PARSE_ATTEMPTS: u32 = 3;
+
+/// The pinned gate-G4 refusal outcome (Task 7 brief — exact bytes; Task 9's
+/// scoring and the journal read this string). Recorded, not raised: a
+/// refused `patch`/`run` is a failed step like a grant violation or a parse
+/// failure, never a task-ending error — see [`run_task`]'s demotion gate.
+const MUTATING_VERB_DEMOTED: &str = "verb unavailable: mutating verbs demoted (gate G4)";
 
 /// Accumulated task state threaded through both `propose_action` and
 /// `run_task`'s own dispatch — bundled into one struct (rather than two
@@ -177,7 +194,7 @@ fn render_prompt(spec: &TaskSpec, transcript: &str) -> String {
     format!(
         "{}\n\n{}\n\n{transcript}",
         spec.goal,
-        verb_card(spec.patch_codec)
+        verb_card_for(spec.patch_codec, spec.mutating_verbs)
     )
 }
 
@@ -336,6 +353,42 @@ pub fn run_task<S: Substrate>(
                 steps: state.steps,
                 summary: Some(summary.clone()),
             };
+        }
+
+        // Gate G4 structural enforcement (docs/superpowers/evidence/
+        // 2026-08-15-g4-protocol.md §6: "a read-only verb card AND a
+        // structural dispatch refusal — prompting alone is not
+        // enforcement"). This check sits after the `Done` branch and before
+        // `execute_action` on purpose: `execute_action` stays pure dispatch
+        // with no gate knowledge of its own, and a demoted spec must still
+        // let the model `done` at any time. A refused verb is recorded with
+        // its real name (`"patch"`/`"run"`, never `"?"`), `failed: true`,
+        // and the pinned outcome — then the loop CONTINUES to the next
+        // step, exactly like a grant violation: a refused verb is a failed
+        // step, not a dead task.
+        if !spec.mutating_verbs {
+            let refused_verb = match &action {
+                Action::Patch { .. } => Some("patch"),
+                Action::Run { .. } => Some("run"),
+                _ => None,
+            };
+            if let Some(verb) = refused_verb {
+                let report = StepReport {
+                    verb,
+                    outcome: MUTATING_VERB_DEMOTED,
+                    content: MUTATING_VERB_DEMOTED,
+                    duration_ms: propose_duration_ms,
+                    failed: true,
+                };
+                if let Err(msg) = record_step(journal, agent_id, &mut state, step, report) {
+                    return TaskResult {
+                        status: TaskStatus::Error,
+                        steps: state.steps,
+                        summary: Some(msg),
+                    };
+                }
+                continue;
+            }
         }
 
         let started = Instant::now();

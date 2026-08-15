@@ -323,6 +323,7 @@ mod tests {
             cwd: std::fs::canonicalize(&dir).unwrap(),
             patch_codec: PatchCodec::SearchReplace,
             bounds: ExecBounds::default(),
+            mutating_verbs: true,
         };
 
         let task_id =
@@ -379,6 +380,7 @@ mod tests {
             cwd,
             patch_codec: PatchCodec::SearchReplace,
             bounds: ExecBounds::default(),
+            mutating_verbs: true,
         };
 
         let id1 = registry.spawn_task(
@@ -497,6 +499,7 @@ mod tests {
             cwd: std::fs::canonicalize(&dir).unwrap(),
             patch_codec: PatchCodec::SearchReplace,
             bounds: ExecBounds::default(),
+            mutating_verbs: true,
         };
 
         let task_id =
