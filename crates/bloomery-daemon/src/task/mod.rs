@@ -11,8 +11,9 @@
 //! behind `tasks_enabled` (default `false`).
 
 pub mod exec;
+pub mod lens_py;
 
-pub use exec::{exec_find, exec_read};
+pub use exec::{exec_find, exec_patch, exec_read};
 
 /// The result of executing one action: what to feed back to the model, and
 /// a short outcome tag for the `TaskStep` journal entry.

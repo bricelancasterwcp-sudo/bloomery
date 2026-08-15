@@ -24,12 +24,16 @@
 //!    `RESOLVE_NO_SYMLINKS`, which is Linux-specific and not yet wired
 //!    (tracked for a future pass, not silently assumed away).
 
+use crate::task::lens_py::PythonLens;
 use crate::task::{ExecBounds, Observation};
+use bloomery_core::action::lens::{land, Landing, LandingLens, PlainText};
+use bloomery_core::action::PatchBody;
 use bloomery_core::grant::{Grant, GrantViolation};
 use regex::Regex;
-use std::io::Read as _;
+use std::io::{Read as _, Write as _};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Per-file scan cap for [`exec_find`]'s file reads — independent of
 /// [`ExecBounds::read_cap_bytes`], which bounds a single `read` action's
@@ -170,6 +174,184 @@ pub fn exec_read(
         outcome,
         content,
         failed: false,
+    }
+}
+
+/// Cap on the *current* file's size `exec_patch` will read before
+/// attempting to land a patch against it. Unlike `ExecBounds::read_cap_bytes`
+/// (which bounds what a `read` action hands *back to the model*),
+/// `exec_patch`'s brief-mandated signature carries no `ExecBounds` — this is
+/// a patch-specific safety bound, not a per-task-configurable one.
+///
+/// The reason a cap is needed at all, and why hitting it must fail closed
+/// rather than silently truncate: `land()` applies the patch against
+/// whatever `current` string it's given, then writes `new_contents` back
+/// over the *entire* file. If the current-file read were silently truncated
+/// at some cap the way `exec_read`'s is (truncation is fine there — it's
+/// read-only, feeding the model a partial view), applying a patch against
+/// that truncated view and writing the result back would destroy every byte
+/// past the cap. So a file over this cap is refused outright — the same
+/// "cannot verify, so do not claim it landed" posture as `PythonLens`'s
+/// missing-`python3` case — rather than ever being patched from a
+/// known-incomplete read.
+const PATCH_READ_CAP_BYTES: usize = 16 * 1024 * 1024;
+
+/// Chooses the landing lens for `path` by extension: `.py` gets the
+/// verifying [`PythonLens`], everything else gets [`PlainText`] (accepts
+/// anything). `path` is expected to be the *canonical* path a grant check
+/// already returned, matching this module's usual discipline, though the
+/// extension match itself doesn't depend on canonicalization.
+pub(crate) fn lens_for(path: &Path) -> Box<dyn LandingLens> {
+    if path.extension().and_then(|e| e.to_str()) == Some("py") {
+        Box::new(PythonLens)
+    } else {
+        Box::new(PlainText)
+    }
+}
+
+/// Builds a per-call-unique temp-file name for [`atomic_write`], living
+/// alongside `canon` in the same directory (so the final rename is on one
+/// filesystem — see that function's docs). PID plus a static counter, same
+/// reasoning as `lens_py`'s scratch-path builder: many `exec_patch` calls
+/// can run concurrently (parallel tests, or later a multi-task daemon) in
+/// one process, all sharing a PID.
+fn temp_sibling_name() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!(".bloomery-patch-{}-{n}.tmp", std::process::id())
+}
+
+/// Writes `contents` to a new temp file in the same directory as `canon`,
+/// then atomically renames it over `canon`. A failed landing never reaches
+/// this function at all (see [`exec_patch`]), so every call here is a
+/// clean write meant to actually replace the file.
+///
+/// Two things make this safe against the attacks this module's docs call
+/// out:
+/// - **Same directory, one filesystem:** `std::fs::rename` is only atomic
+///   when source and destination are on the same filesystem; picking a
+///   sibling of `canon` (rather than, say, the OS temp dir) is what makes
+///   the rename atomic rather than a copy-then-delete a reader could
+///   observe half-done.
+/// - **`create_new` + `O_NOFOLLOW` on the temp file itself:** the temp
+///   name is guessable (PID + counter) in what's usually a shared,
+///   world-writable-ish directory tree; `create_new` refuses to open a
+///   path that already exists — including a pre-planted symlink — rather
+///   than following or truncating it, and `O_NOFOLLOW` is the same
+///   final-component belt-and-suspenders this module's other opens use.
+///   Without this, a pre-planted symlink at the exact temp name could
+///   redirect the write to an attacker-chosen target before the rename
+///   ever runs.
+///
+/// If the rename fails, the temp file is cleaned up best-effort rather than
+/// left behind — the caller reports the failure; a stray `.bloomery-patch-*`
+/// file next to the target would be confusing debris from a failed attempt.
+fn atomic_write(canon: &Path, contents: &str) -> std::io::Result<()> {
+    let dir = canon.parent().ok_or_else(|| {
+        std::io::Error::other(format!("{} has no parent directory", canon.display()))
+    })?;
+    let tmp = dir.join(temp_sibling_name());
+
+    let write_result = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&tmp)
+        .and_then(|mut file| file.write_all(contents.as_bytes()));
+
+    if let Err(e) = write_result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+
+    if let Err(e) = std::fs::rename(&tmp, canon) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// Execute a `Patch` action against `grant`: atomic write-with-verify.
+///
+/// `cwd` absolutizes a relative `path` exactly as [`exec_read`] does. The
+/// resolved, canonical write-target (`grant.check_write`'s return value —
+/// never the raw `path` string, per this module's obligation 1) is what
+/// every step below operates on:
+///
+/// 1. Read the *current* contents via [`open_nofollow_read`] (obligation 2:
+///    `O_NOFOLLOW`), capped at [`PATCH_READ_CAP_BYTES`]. `NotFound` is
+///    treated as an empty current file — the create-a-new-file case, which
+///    `grant.check_write` already resolved to an in-bounds path via its
+///    parent-fallback rule.
+/// 2. [`land`] the patch: apply `body` to the current contents, then run
+///    the lens [`lens_for`] chose for this path's extension.
+/// 3. On [`Landing::Lands`], write the new contents back via
+///    [`atomic_write`] — the file changes only here, only once, only after
+///    both the apply and the verify steps succeeded.
+/// 4. On [`Landing::DidNotApply`], [`Landing::DidNotParse`], or
+///    [`Landing::Unparsed`], the file is left completely untouched (no
+///    write is even attempted) and a failed [`Observation`] is returned
+///    naming which step failed and the lens involved.
+pub fn exec_patch(grant: &Grant, cwd: &Path, path: &str, body: &PatchBody) -> Observation {
+    let abs = absolutize(cwd, path);
+    let canon = match grant.check_write(&abs) {
+        Ok(canon) => canon,
+        Err(v) => return failed(format!("grant violation: {}", describe(&v))),
+    };
+
+    let current = match open_nofollow_read(&canon, PATCH_READ_CAP_BYTES) {
+        Ok((_bytes, true)) => {
+            return failed(format!(
+                "patch failed: {} exceeds the {PATCH_READ_CAP_BYTES}-byte patch read cap — \
+                 refusing to patch from a truncated read",
+                canon.display()
+            ));
+        }
+        Ok((bytes, false)) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
+            return failed(format!(
+                "patch failed: {e} — O_NOFOLLOW refused a symlink at the final path component \
+                 (the target changed between the grant check and the open)"
+            ));
+        }
+        Err(e) => return failed(format!("patch failed: {e} ({:?})", e.kind())),
+    };
+
+    let lens = lens_for(&canon);
+    match land(&current, body, lens.as_ref()) {
+        Landing::Lands { new_contents, lens } => match atomic_write(&canon, &new_contents) {
+            Ok(()) => Observation {
+                outcome: format!("patched (lens: {lens})"),
+                content: new_contents,
+                failed: false,
+            },
+            Err(e) => failed(format!(
+                "patch failed: could not write {}: {e}",
+                canon.display()
+            )),
+        },
+        Landing::DidNotApply { reason, lens } => {
+            let detail = format!("{reason:?}");
+            Observation {
+                outcome: format!("patch did not land: did not apply (lens: {lens}): {detail}"),
+                content: detail,
+                failed: true,
+            }
+        }
+        Landing::DidNotParse { detail, lens } => Observation {
+            outcome: format!("patch did not land: did not parse (lens: {lens}): {detail}"),
+            content: detail,
+            failed: true,
+        },
+        Landing::Unparsed { language, lens } => {
+            let detail = format!("lens {lens} cannot judge language {language}");
+            Observation {
+                outcome: format!("patch did not land: unparsed (lens: {lens}): {detail}"),
+                content: detail,
+                failed: true,
+            }
+        }
     }
 }
 
@@ -386,5 +568,62 @@ mod tests {
         let (bytes, truncated) = open_nofollow_read(&target, 1024).unwrap();
         assert_eq!(bytes, b"hello");
         assert!(!truncated);
+    }
+
+    /// Pins the `create_new` + `O_NOFOLLOW` mechanism [`atomic_write`]
+    /// relies on to defeat a pre-planted temp-file symlink, at the exact
+    /// `OpenOptions` combination it uses — bypassing `atomic_write`'s own
+    /// (unpredictable, counter-based) temp-name generation entirely by
+    /// building the symlink at a path this test controls directly and
+    /// opening it the same way `atomic_write` would.
+    ///
+    /// Without a test pinning this mechanism directly, a refactor that
+    /// dropped `create_new` (e.g. falling back to plain
+    /// `.write(true).create(true)`, which *would* follow and truncate an
+    /// existing symlink) would silently reopen exactly the temp-file
+    /// hijack `atomic_write`'s doc comment warns about — and no
+    /// `exec_patch`-level test would catch it, because every one of those
+    /// tests uses a fresh sandbox with nothing pre-planted at the
+    /// counter-generated temp name.
+    #[test]
+    fn create_new_nofollow_refuses_a_preplanted_symlink() {
+        let dir = tempdir("create-new-symlink");
+        let outside = dir.join("outside-target.txt");
+        std::fs::write(&outside, b"must never be overwritten").unwrap();
+        let planted = dir.join("planted.tmp");
+        std::os::unix::fs::symlink(&outside, &planted).unwrap();
+
+        let err = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&planted)
+            .expect_err("create_new + O_NOFOLLOW must refuse a pre-planted symlink");
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+
+        let untouched = std::fs::read(&outside).unwrap();
+        assert_eq!(untouched, b"must never be overwritten");
+    }
+
+    /// `atomic_write` end to end, proving the temp file left no trace
+    /// after a clean rename and that `canon` holds exactly the new
+    /// contents — the two properties `exec_patch`'s `Landing::Lands` arm
+    /// depends on.
+    #[test]
+    fn atomic_write_replaces_the_file_and_leaves_no_temp_sibling() {
+        let dir = tempdir("atomic-write-clean");
+        let canon = dir.join("target.txt");
+        std::fs::write(&canon, "old\n").unwrap();
+
+        atomic_write(&canon, "new\n").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&canon).unwrap(), "new\n");
+        let stray: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name != "target.txt")
+            .collect();
+        assert!(stray.is_empty(), "stray files left behind: {stray:?}");
     }
 }
