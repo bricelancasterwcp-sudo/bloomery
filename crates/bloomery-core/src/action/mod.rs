@@ -8,6 +8,7 @@
 //! and the patch body codec (Task 3). Pure, GPU-free: no I/O, no substrate.
 
 pub mod envelope;
+pub mod patch;
 pub mod verbs;
 
 pub use envelope::{scan_envelope, RawAction};
@@ -37,14 +38,25 @@ pub enum Action {
     },
 }
 
-/// Temporary stand-in for the patch body codec. Task 3 defines the real
-/// `PatchBody` (search/divider/replace markers, per the envelope grammar's
-/// patch-specific rules) and replaces this stub; kept minimal here purely so
-/// `Action::Patch` has a concrete, constructible field type in Task 1.
+/// A validated patch body, decoded under whichever [`PatchCodec`] the caller
+/// selected.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum PatchBody {
-    // Task 3 replaces this with the real search/replace payload.
-    Unset,
+    /// A robigo/assay-style conflict-marker block: `search` must match the
+    /// current file's contents exactly once (enforced by
+    /// [`patch::apply_patch`]); `replace` is what takes its place.
+    SearchReplace { search: String, replace: String },
+    /// The entire body is the file's new contents, verbatim.
+    WholeFile { contents: String },
+}
+
+/// Selects which grammar a `patch` verb's body is decoded under. P3 passes
+/// the model profile's configured codec; [`parse_action`] defaults to
+/// [`PatchCodec::SearchReplace`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PatchCodec {
+    SearchReplace,
+    WholeFile,
 }
 
 /// Everything that can go wrong turning a model turn into a validated
@@ -95,9 +107,10 @@ pub enum ActionError {
 /// The complete set of recognized `verb="..."` values.
 pub const VERBS: &[&str] = &["read", "find", "patch", "run", "done"];
 
-/// Scan + validate one action end to end. Patch is added in Task 3;
-/// until then a "patch" verb returns ActionError::BadCodec with detail "patch not wired".
-pub fn parse_action(turn: &str) -> Result<Action, ActionError> {
+/// Scan + validate one action end to end, decoding a `patch` verb's body
+/// under `patch_codec`. This is the entry point P3's task loop calls,
+/// passing the model profile's configured codec.
+pub fn parse_action_with_codec(turn: &str, patch_codec: PatchCodec) -> Result<Action, ActionError> {
     let raw = scan_envelope(turn)?;
 
     match raw.verb.as_str() {
@@ -105,12 +118,27 @@ pub fn parse_action(turn: &str) -> Result<Action, ActionError> {
         "find" => validate_find(&raw),
         "run" => validate_run(&raw),
         "done" => validate_done(&raw),
-        "patch" => Err(ActionError::BadCodec {
-            detail: "patch not wired".into(),
-        }),
+        "patch" => {
+            let path = raw
+                .attrs
+                .get("path")
+                .cloned()
+                .ok_or(ActionError::MissingAttr {
+                    verb: "patch",
+                    attr: "path",
+                })?;
+            let body = patch::parse_patch_body(&raw.body, patch_codec)?;
+            Ok(Action::Patch { path, body })
+        }
         verb => Err(ActionError::UnknownVerb {
             verb: verb.to_string(),
             expected: VERBS,
         }),
     }
+}
+
+/// Scan + validate one action end to end, defaulting a `patch` verb's body
+/// to the [`PatchCodec::SearchReplace`] grammar.
+pub fn parse_action(turn: &str) -> Result<Action, ActionError> {
+    parse_action_with_codec(turn, PatchCodec::SearchReplace)
 }
