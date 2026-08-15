@@ -256,7 +256,7 @@ replace = "    if len(password) >= min_length:"
 name = "txt-listen-port-mismatch"
 lens = "plaintext"
 target = "serve.conf"
-goal = """serve.conf's listen_port says 8080, but every other reference in the file uses 8181 -- the daemon comes up on the wrong port. Change the listen_port line in serve.conf to 8181. Patch the file, then emit done."""
+goal = """serve.conf's listen_port says 8080, but every other reference in the file uses 8181 — the daemon comes up on the wrong port. Change the listen_port line in serve.conf to 8181. Patch the file, then emit done."""
 
 [[fixture.file]]
 path = "serve.conf"
