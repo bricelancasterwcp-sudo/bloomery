@@ -15,6 +15,72 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+/// One `models` entry: either a bare path (today's shape) or a tuning table.
+///
+/// Per `docs/superpowers/specs/2026-08-15-partial-offload-capability-window-design.md` §2,
+/// a config entry accepts both shapes via serde untagged:
+///
+/// ```text
+/// [models]
+/// "qwen3:14b" = "/path/to/model.gguf"        # bare string → Path variant
+///
+/// [models."qwen3.8:27b"]                     # table → Tuned variant
+/// path = "/path/to/model.gguf"
+/// n_gpu_layers = 28        # optional; None → full offload
+/// weights_vram_mib = 11264 # optional; None → full charge
+/// ```
+///
+/// Both new fields are optional; omitting both is byte-for-byte today's behavior.
+/// Every existing config keeps parsing.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(untagged)]
+pub enum ModelSpec {
+    /// Bare path string; all tuning fields are None.
+    Path(PathBuf),
+    /// Table with required `path` and optional tuning fields.
+    Tuned {
+        path: PathBuf,
+        #[serde(default)]
+        n_gpu_layers: Option<u32>,
+        #[serde(default)]
+        weights_vram_mib: Option<u64>,
+    },
+}
+
+impl ModelSpec {
+    /// Returns a reference to the model's path.
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Path(p) => p,
+            Self::Tuned { path, .. } => path,
+        }
+    }
+
+    /// Returns the per-model n_gpu_layers override, if configured.
+    ///
+    /// The `Path` variant returns `None` (no tuning configured).
+    pub fn n_gpu_layers(&self) -> Option<u32> {
+        match self {
+            Self::Path(_) => None,
+            Self::Tuned { n_gpu_layers, .. } => *n_gpu_layers,
+        }
+    }
+
+    /// Returns the per-model weights_vram_mib override, if configured.
+    ///
+    /// The `Path` variant returns `None` (no tuning configured).
+    /// Per spec §3, `min(declared, weights_bytes)` is the effective charge;
+    /// see `pager` accounting and window-law VRAM terms for application.
+    pub fn weights_vram_mib(&self) -> Option<u64> {
+        match self {
+            Self::Path(_) => None,
+            Self::Tuned {
+                weights_vram_mib, ..
+            } => *weights_vram_mib,
+        }
+    }
+}
+
 fn default_port() -> u16 {
     8181
 }
@@ -61,12 +127,13 @@ fn default_time_share_quantum_secs() -> u64 {
 /// observed 334 with room for a device whose buffers are larger, and an
 /// operator who has measured their own may lower it.
 ///
-/// **Asymmetry to know about**: `usable_window`'s VRAM term subtracts
-/// `weights` and `overhead_mib` but *not* this value, so a window that comes
-/// out VRAM-bound reserves exactly `ctx_overhead_bytes` more than the budget
-/// it was sized against and can never be placed. That refuses safely (law 1,
-/// pre-checked) but it does not recover on its own; the fix is a core
-/// geometry change and is deferred (carried-debt item 7).
+/// **Item 7 closed 2026-08-15**: `usable_window`'s VRAM term now subtracts
+/// this value too (`GeometryInput::ctx_overhead_bytes`), alongside `weights`
+/// and `overhead_mib` — see
+/// `docs/superpowers/specs/2026-08-15-partial-offload-capability-window-design.md`
+/// §3b and `docs/CARRIED-DEBT.md` item 7's delivery note. A window that
+/// comes out VRAM-bound is placeable by construction now, for a single
+/// agent; the multi-model divergence item 7 also named remains open.
 fn default_ctx_overhead_mib() -> u64 {
     384
 }
@@ -103,8 +170,9 @@ pub struct Config {
     pub port: u16,
     /// Root of daemon state: `journal/`, `profiles/`, `images/`.
     pub data_dir: PathBuf,
-    /// Model name -> path to its `.gguf` file.
-    pub models: BTreeMap<String, PathBuf>,
+    /// Model name -> path and optional tuning (per-model n_gpu_layers, weights_vram_mib).
+    /// Per spec §2, accepts both bare-string and table shapes.
+    pub models: BTreeMap<String, ModelSpec>,
     pub tier: Tier,
     #[serde(default = "default_overhead_mib")]
     pub overhead_mib: u64,

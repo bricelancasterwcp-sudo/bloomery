@@ -71,17 +71,26 @@ pub struct TaskSpec {
 }
 
 /// How a task ended. `run_task` only ever returns `Done`, `BudgetExhausted`,
-/// `StepsExhausted`, or `Error` — `Running` exists for a caller that tracks
-/// task status outside a single `run_task` call (Task 5's in-flight status
-/// reporting). A grant-validation failure at task creation never produces a
-/// `TaskStatus` at all: Task 5's `create_task` returns a `422` HTTP error
-/// before a task (and therefore a status) exists.
+/// `StepsExhausted`, `WindowExhausted`, or `Error` — `Running` exists for a
+/// caller that tracks task status outside a single `run_task` call (Task 5's
+/// in-flight status reporting). A grant-validation failure at task creation
+/// never produces a `TaskStatus` at all: Task 5's `create_task` returns a
+/// `422` HTTP error before a task (and therefore a status) exists.
+///
+/// `WindowExhausted` is protocol Amendment 1
+/// (`docs/superpowers/evidence/2026-08-15-g4-protocol.md` §9, 2026-08-15):
+/// a mid-task `PagerError::PromptTooLarge` from `infer` — the model's
+/// measured context window filled before it finished — is scored the same
+/// way `BudgetExhausted` already is, not folded into `Error`'s
+/// infrastructure-abort bucket. Every other `infer` failure (substrate
+/// faults, journal failures, agent-creation refusals) stays `Error`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum TaskStatus {
     Running,
     Done,
     BudgetExhausted,
     StepsExhausted,
+    WindowExhausted,
     Error,
 }
 
@@ -206,9 +215,10 @@ enum ProposeOutcome {
     /// been recorded as failed, and `run_task` moves on to the next step —
     /// a stuck step is not a stuck task.
     StepFailed,
-    /// A hard stop: budget exhaustion, a too-large prompt, or a substrate/
-    /// contract failure. Carries the terminal status and an optional
-    /// diagnostic for `TaskResult::summary`.
+    /// A hard stop: budget exhaustion, a too-large prompt (protocol
+    /// Amendment 1, §9 — `WindowExhausted`, scored, not aborted), or a
+    /// substrate/contract failure (`Error`). Carries the terminal status and
+    /// an optional diagnostic for `TaskResult::summary`.
     Terminate(TaskStatus, Option<String>),
 }
 
@@ -235,8 +245,15 @@ fn propose_action<S: Substrate>(
         let reply = match pager.infer(agent_id, &prompt, STEP_MAX_TOKENS) {
             Ok(reply) => reply,
             Err(e) => {
+                // Protocol Amendment 1 (docs/superpowers/evidence/
+                // 2026-08-15-g4-protocol.md §9): ONLY `PromptTooLarge`
+                // becomes the scored `WindowExhausted` terminal — every
+                // other `infer` failure (substrate faults, journal
+                // failures, contract violations, unknown agent) stays
+                // `Error`, the infrastructure abort §3 already defines.
                 let status = match &e {
                     PagerError::Budget { .. } => TaskStatus::BudgetExhausted,
+                    PagerError::PromptTooLarge { .. } => TaskStatus::WindowExhausted,
                     _ => TaskStatus::Error,
                 };
                 return ProposeOutcome::Terminate(status, Some(e.to_string()));

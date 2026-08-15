@@ -28,6 +28,12 @@ pub struct FakeSubstrate {
     contexts: HashMap<CtxHandle, ModelHandle>,
     next_model_handle: ModelHandle,
     next_ctx_handle: CtxHandle,
+    /// Every `n_gpu_layers` value passed to [`Substrate::load_model`], in
+    /// call order — Task 3's plumbing test needs to see which value each
+    /// load actually used (a per-model override vs. the pager-global
+    /// default), and `calls()` alone only records that a load happened, not
+    /// with what argument.
+    load_n_gpu_layers: Vec<u32>,
 }
 
 impl FakeSubstrate {
@@ -40,6 +46,7 @@ impl FakeSubstrate {
             contexts: HashMap::new(),
             next_model_handle: 0,
             next_ctx_handle: 0,
+            load_n_gpu_layers: Vec::new(),
         }
     }
 
@@ -52,6 +59,13 @@ impl FakeSubstrate {
     /// Every call made so far, in order (e.g. `"load_model"`, `"infer:c1"`).
     pub fn calls(&self) -> &[String] {
         &self.calls
+    }
+
+    /// Every `n_gpu_layers` value passed to [`Substrate::load_model`], in
+    /// call order — index-aligned with the `"load_model"` entries in
+    /// [`Self::calls`].
+    pub fn load_n_gpu_layers(&self) -> &[u32] {
+        &self.load_n_gpu_layers
     }
 
     /// The accumulated prompt history for context `c`, if it is currently
@@ -75,9 +89,10 @@ impl Substrate for FakeSubstrate {
     fn load_model(
         &mut self,
         _path: &std::path::Path,
-        _n_gpu_layers: u32,
+        n_gpu_layers: u32,
     ) -> Result<ModelHandle, SubstrateError> {
         self.log("load_model");
+        self.load_n_gpu_layers.push(n_gpu_layers);
         self.next_model_handle += 1;
         let handle = self.next_model_handle;
         self.models.insert(handle);

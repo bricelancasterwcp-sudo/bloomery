@@ -48,7 +48,12 @@ impl<S: Substrate> Pager<S> {
         self.models
             .values()
             .filter(|m| m.handle.is_some())
-            .fold(0u64, |acc, m| acc.saturating_add(m.meta.weights_bytes))
+            .fold(0u64, |acc, m| {
+                // Task 3, spec §3: the effective (declared-clamped) charge,
+                // not the file's raw `meta.weights_bytes` — see
+                // `ModelEntry::effective_weights_bytes`'s doc comment.
+                acc.saturating_add(m.effective_weights_bytes())
+            })
     }
 
     /// Reads bloomery's static VRAM budget (see [`Pager::new`]). `None` is
@@ -151,12 +156,25 @@ impl<S: Substrate> Pager<S> {
                 a.model.clone(),
             )
         };
-        let (model_loaded, weights_bytes) = {
+        let (model_loaded, weights_bytes, declared_label) = {
             let entry = self
                 .models
                 .get(&model)
                 .ok_or_else(|| PagerError::UnknownModel(model.clone()))?;
-            (entry.handle.is_some(), entry.meta.weights_bytes)
+            // Task 3, spec §3: the effective (declared-clamped) charge, not
+            // the file's raw `meta.weights_bytes` — this is the SAME
+            // `effective_weights_bytes()` `loaded_weights_bytes` (the supply
+            // side, above) and `create_agent`'s `GeometryInput.weights_bytes`
+            // read, so a cold model's demand and its eventual resident
+            // charge never disagree. `declared_label` is `Some(file_bytes)`
+            // only when the number below IS the declared one (see
+            // `ModelEntry::declared_weights_label`), for the refusal
+            // string's "declared" naming just below.
+            (
+                entry.handle.is_some(),
+                entry.effective_weights_bytes(),
+                entry.declared_weights_label(),
+            )
         };
         // Loading is part of satisfying this request when the model is
         // cold: the demand side carries its weights alongside this agent's
@@ -242,9 +260,26 @@ impl<S: Substrate> Pager<S> {
                     // flat `0`, not derived from `budget − loaded −
                     // resident`) — it says plainly that the budget is
                     // unmeasured instead.
+                    // Task 3, spec §3: name the weights term "declared" only
+                    // when it actually IS the declared number — a declared
+                    // number must never read as a measured one, and a
+                    // measured one (the file's own `weights_bytes`, printed
+                    // when there is no override, or when the clamp fell
+                    // back to it) must never be mislabeled as declared
+                    // either. Meaningless when `model_loaded`: an
+                    // already-loaded model's `weights_term` is always `0`
+                    // (its weights are charged via `loaded_weights` below,
+                    // not here), which is neither number.
+                    let weights_clause = match (model_loaded, declared_label) {
+                        (false, Some(file_bytes)) => format!(
+                            "weights {weights_term} B (declared weights_vram_mib; \
+                             file {file_bytes} B)"
+                        ),
+                        _ => format!("weights {weights_term} B"),
+                    };
                     let detail = match budget {
                         Some(budget) => format!(
-                            "residency: weights {weights_term} B + reserved {reserved_bytes} B \
+                            "residency: {weights_clause} + reserved {reserved_bytes} B \
                              (kv {kv_bytes} B + ctx overhead {ctx_overhead} B) vs budget \
                              {budget} B − overhead {overhead} B − loaded {loaded_weights} B − \
                              resident {resident_reserved} B (needed {needed} B, free {free} B, \
@@ -650,10 +685,16 @@ impl<S: Substrate> Pager<S> {
             return Ok(handle);
         }
         let path = entry.path.clone();
+        // Task 3, spec §4: a per-model override (`Pager::set_model_tuning`)
+        // wins over the pager-global default at this one plumbing point —
+        // `Substrate::load_model` already takes `n_gpu_layers` per call, so
+        // no substrate API change is needed, only which value this call
+        // passes.
+        let n_gpu_layers = entry.n_gpu_layers_override.unwrap_or(self.n_gpu_layers);
         let started = Instant::now();
         let handle = self
             .substrate
-            .load_model(&path, self.n_gpu_layers)
+            .load_model(&path, n_gpu_layers)
             .map_err(sub)?;
         jrnl::model_loaded(&mut self.journal, model, started.elapsed())?;
         if let Some(entry) = self.models.get_mut(model) {

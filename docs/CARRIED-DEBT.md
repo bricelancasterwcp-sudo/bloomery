@@ -19,6 +19,14 @@ new items are also recorded: (a) extends item 6 in place (the codec probe
 is boots-only too); (b)–(d) are new items 9–11. P4 closes one debt and
 opens others, same as every slice before it.
 
+**Amended 2026-08-15** (partial-offload + G4 capability-window task 1):
+item 7's "Window/placement asymmetry" half — found live by the first 14B
+capability-window attempt refusing at exactly the asymmetry this file
+predicted — is delivered and struck through in place, below, without
+moving the compound item out of this section. Item 7's first paragraph
+(configured, not measured) and its "Multi-model window/placement
+divergence" third half remain open, unchanged and unstruck.
+
 ## Delivered in Phase 2a (2026-08-14)
 
 Struck through, never deleted: the original text stands as recorded, with
@@ -126,7 +134,7 @@ above. Branch `feat/phase2bc-p4-codec-gate`.
    Measuring it at model-load time, or reading it back from llama.cpp,
    is the honest fix.
 
-   **Window/placement asymmetry (same item, second half).**
+   ~~**Window/placement asymmetry (same item, second half).**
    `usable_window`'s VRAM term subtracts `weights` and `overhead_bytes`
    but **not** `ctx_overhead_bytes`, while placement charges
    `kv + ctx_overhead`. An agent whose window comes out `BoundBy::Vram`
@@ -142,7 +150,32 @@ above. Branch `feat/phase2bc-p4-codec-gate`.
    must subtract the per-context reservation it is sizing, which means
    `GeometryInput` grows a term and every window-law test moves with
    it. Deliberately deferred rather than bolted on beside a live-run
-   fix.
+   fix.~~
+   **DELIVERED 2026-08-15** — `GeometryInput` gained `ctx_overhead_bytes:
+   u64` and `usable_window`'s VRAM term now subtracts it too, alongside
+   `weights_bytes` and `overhead_bytes`
+   (`crates/bloomery-core/src/geometry.rs`); `Pager::create_agent` passes
+   its own `self.ctx_overhead_bytes` in
+   (`crates/bloomery-daemon/src/pager.rs`). The window law and placement
+   now charge the same four terms, so a `Vram`-bound window is placeable
+   by construction for a single agent — pinned by
+   `pager_reservation_test.rs`'s
+   `a_vram_bound_window_is_placeable_item_7_regression` and
+   `geometry_test.rs`'s `vram_term_charges_ctx_overhead` /
+   `ctx_overhead_larger_than_remainder_saturates_to_zero_without_panicking`.
+   Found live, not in review: the first 14B capability-window attempt
+   (2026-08-15, journal `~/.cache/bloomery-g4-14b/journal/`) refused at
+   exactly this asymmetry, journaling:
+   ```
+   residency: weights 9276184896 B + reserved 4975919104 B (kv 4573265920 B + ctx overhead 402653184 B) vs budget 14923333632 B − overhead 1073741824 B − loaded 0 B − resident 0 B (needed 14252104000 B, free 13849591808 B, reclaimable 0 B)
+   ```
+   `needed − free = 402,512,192 B`, ≈ the 384 MiB configured
+   `ctx_overhead_mib` (the small delta from 402,653,184 is kv rounding) —
+   the exact signature this item predicted. See
+   `docs/superpowers/specs/2026-08-15-partial-offload-capability-window-design.md`
+   §3b for the amendment recorded before the fix landed. The "third half"
+   below (multi-model divergence) is a separate, still-open half of the
+   same item, **not** closed by this delivery.
 
    **Multi-model window/placement divergence (same item, third half;
    added 2026-08-14 in the final Phase 2a review, flagged as M-3 in
@@ -170,6 +203,32 @@ above. Branch `feat/phase2bc-p4-codec-gate`.
    will actually charge, which for a multi-model daemon means
    `GeometryInput` also carrying the other models' loaded weights and
    residents' reservations — not a second, separate fix.
+
+   **Still open as of the 2026-08-15 delivery above.** The ctx_overhead
+   half and this half were always named as needing the same
+   `GeometryInput` growth, but only the single-model half of that growth
+   shipped this round — `create_agent` still sizes a window from only
+   its own model's `weights_bytes`, blind to any other loaded model or
+   resident sibling. Pinned directly (fixed on review 2026-08-15: an
+   earlier version of this note pointed at
+   `a_second_agents_reservation_not_just_its_kv_is_what_refuses_it`, but
+   that test gives both agents an explicit `window_cap` small enough that
+   `UserCap` binds regardless of what the window law knows about
+   residency — it exercises placement's already-correct whole-reservation
+   subtraction across two agents, not the window law's sibling-blindness,
+   and its doc comment now says so) —
+   `pager_reservation_test.rs`'s
+   `a_sibling_blind_automatic_window_still_refuses_item_7_third_half`
+   gives **both** agents no `window_cap` and asserts `a2.window_tokens`
+   and `a2.bound_by` directly: a2's automatic window law runs after a1 is
+   already resident and computes the *identical* oversized, `Vram`-bound
+   window a1 got, as if a2 were alone — the sibling-blindness itself,
+   asserted, not merely inferred from a refusal that could have another
+   cause. Placement's separate, already-correct whole-reservation
+   subtraction then finds nothing left (`avail = 0`) and refuses. A first,
+   otherwise-alone agent's reservation can no longer overflow its own
+   budget (that's what closed); a second agent's window, sized blind to a
+   resident sibling, still can be wrong (that's what's left).
 
 9. **Recorded scoring edges (protocol §3), item (b) of the 2026-08-15
    batch.** Two landing-score edge cases are pinned by test, not by
@@ -209,6 +268,17 @@ above. Branch `feat/phase2bc-p4-codec-gate`.
     exactly: this is a *consequence* of boots-only measurement, recorded
     separately because "unmeasured on this boot" and "demoted forever" are
     easy to conflate and the two must never be.
+12. **KV is fully charged to VRAM under partial offload, recorded 2026-08-15
+    (partial-offload + G4 capability-window task 4).** When `n_gpu_layers` is
+    tuned to offload some model layers to CPU, llama.cpp places KV cache for
+    those layers in host RAM, not VRAM. The pager conservatively charges the
+    full KV cache against the VRAM budget anyway — the safe direction
+    (overcount begets smaller windows, earlier refusals) and never an OOM.
+    A measured read would require per-layer KV tracking; charging conservatively
+    is simpler and recorded here as an honest limit, not deferred. The
+    `weights_vram_mib` declared-charge field (Task 3) enables partial offload
+    (smaller windows work with smaller declared weights); KV's full charge
+    is the companion honest limit showing where the bounds come from.
 
 ## Smaller items (fine as-is; fix opportunistically)
 

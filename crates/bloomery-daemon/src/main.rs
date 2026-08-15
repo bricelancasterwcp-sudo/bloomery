@@ -158,7 +158,8 @@ fn run(config: Config, journal: Journal) -> ! {
 
     // Unprofiled on purpose: POST is the only source of a profile, and it
     // cannot run until this daemon is serving.
-    for (name, path) in &config.models {
+    for (name, spec) in &config.models {
+        let path = spec.path();
         let meta = parse_gguf_meta(path).unwrap_or_else(|e| {
             fail(format!(
                 "model {name}: could not read {}: {e}",
@@ -167,6 +168,17 @@ fn run(config: Config, journal: Journal) -> ! {
         });
         pager
             .register_model(name, path, meta, None)
+            .unwrap_or_else(|e| fail(format!("model {name}: {e}")));
+        // Task 3, spec §2/§3/§4: per-model tuning from the config's `Tuned`
+        // shape. MiB->bytes conversion happens HERE — the pager speaks
+        // bytes only, same as `overhead_mib`/`ctx_overhead_mib` just above.
+        // `None` for either field is "no override": today's full-charge,
+        // full-offload behavior.
+        let weights_vram_bytes = spec
+            .weights_vram_mib()
+            .map(|mib| mib.saturating_mul(1024 * 1024));
+        pager
+            .set_model_tuning(name, spec.n_gpu_layers(), weights_vram_bytes)
             .unwrap_or_else(|e| fail(format!("model {name}: {e}")));
     }
 

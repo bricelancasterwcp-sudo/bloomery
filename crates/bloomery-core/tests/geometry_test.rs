@@ -10,6 +10,11 @@ fn base() -> GeometryInput {
         weights_bytes: 8 * GIB,
         free_vram_bytes: Some(14 * GIB),
         overhead_bytes: GIB,
+        // Zero here, deliberately: every test built on `base()` below is
+        // the backward-equivalence property (item 7, task 1(b)) — with
+        // ctx_overhead_bytes at 0 every pre-fix expectation must still
+        // hold byte for byte.
+        ctx_overhead_bytes: 0,
         user_cap: None,
         measured_ceiling: None,
     }
@@ -83,12 +88,57 @@ fn vram_term_saturates_instead_of_wrapping_and_ties_favor_training_ctx() {
         weights_bytes: 0,
         free_vram_bytes: Some(4_294_967_296), // 2^32
         overhead_bytes: 0,
+        ctx_overhead_bytes: 0,
         user_cap: None,
         measured_ceiling: None,
     };
     let w = usable_window(&i);
     assert_eq!(w.tokens, u32::MAX);
     assert_eq!(w.bound_by, BoundBy::TrainingCtx);
+}
+
+/// **Item 7, task 1(a).** The VRAM term must charge `ctx_overhead_bytes`
+/// alongside `weights_bytes` and `overhead_bytes` — placement already
+/// charges it (`Agent::reserved_bytes`), so a window that omitted it was
+/// sized to consume memory it could never actually get. Old code (no
+/// `ctx_overhead_bytes` subtraction) would compute `(1000 - 400 - 100) / 1 =
+/// 500` tokens; this fix requires `(1000 - 400 - 100 - 200) / 1 = 300`.
+#[test]
+fn vram_term_charges_ctx_overhead() {
+    let i = GeometryInput {
+        training_ctx: 1_000_000, // huge: must not bind
+        kv_per_token: 1,
+        weights_bytes: 400,
+        free_vram_bytes: Some(1000),
+        overhead_bytes: 100,
+        ctx_overhead_bytes: 200,
+        user_cap: None,
+        measured_ceiling: None,
+    };
+    let w = usable_window(&i);
+    assert_eq!(w.tokens, 300);
+    assert_eq!(w.bound_by, BoundBy::Vram);
+}
+
+/// **Item 7, task 1(c).** `ctx_overhead_bytes` larger than what's left after
+/// `weights_bytes` and `overhead_bytes` must saturate to a 0-token window,
+/// never panic or wrap: `1000 - 400 - 100 = 500`, and `ctx_overhead_bytes =
+/// 600` exceeds that remainder entirely.
+#[test]
+fn ctx_overhead_larger_than_remainder_saturates_to_zero_without_panicking() {
+    let i = GeometryInput {
+        training_ctx: 1000,
+        kv_per_token: 1,
+        weights_bytes: 400,
+        free_vram_bytes: Some(1000),
+        overhead_bytes: 100,
+        ctx_overhead_bytes: 600,
+        user_cap: None,
+        measured_ceiling: None,
+    };
+    let w = usable_window(&i);
+    assert_eq!(w.tokens, 0);
+    assert_eq!(w.bound_by, BoundBy::Vram);
 }
 
 #[test]
