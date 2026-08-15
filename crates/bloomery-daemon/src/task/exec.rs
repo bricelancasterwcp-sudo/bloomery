@@ -25,7 +25,6 @@
 //!    (tracked for a future pass, not silently assumed away).
 
 use crate::task::lens_py::PythonLens;
-use crate::task::run_capture::{new_sink, spawn_drain_thread, take_captured};
 use crate::task::{ExecBounds, Observation};
 use bloomery_core::action::lens::{land, Landing, LandingLens, PlainText};
 use bloomery_core::action::PatchBody;
@@ -34,10 +33,7 @@ use regex::Regex;
 use std::io::{Read as _, Write as _};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 /// Per-file scan cap for [`exec_find`]'s file reads — independent of
 /// [`ExecBounds::read_cap_bytes`], which bounds a single `read` action's
@@ -88,7 +84,11 @@ pub(crate) fn open_nofollow_read(canon: &Path, cap: usize) -> std::io::Result<(V
 
 /// Turns a [`GrantViolation`] into a short, repair-friendly string a model
 /// can act on (e.g. "narrow the path" rather than a bare enum tag).
-fn describe(v: &GrantViolation) -> String {
+///
+/// `pub(crate)`, not private: `exec_run` (in the sibling `exec_run` module)
+/// uses this too, for the identical grant-violation-to-observation
+/// translation every executor in this crate shares.
+pub(crate) fn describe(v: &GrantViolation) -> String {
     match v {
         GrantViolation::PathOutsideRoots { path, kind } => {
             format!("{path} is outside the granted {kind:?} roots")
@@ -106,7 +106,10 @@ fn describe(v: &GrantViolation) -> String {
 /// are both `text` — every failure path in this module reports the same
 /// short reason to both the journal tag and the model transcript, so
 /// there is nothing to keep in sync between the two.
-fn failed(text: String) -> Observation {
+///
+/// `pub(crate)`, not private — see [`describe`]'s doc comment; `exec_run`
+/// shares this too.
+pub(crate) fn failed(text: String) -> Observation {
     Observation {
         outcome: text.clone(),
         content: text,
@@ -524,157 +527,6 @@ pub fn exec_find(
         outcome,
         content: out.join("\n"),
         failed: false,
-    }
-}
-
-/// Fixed `PATH` every `run` action's subprocess gets, regardless of the
-/// daemon's own environment. Never the invoking process's inherited
-/// `PATH` — see [`exec_run`]'s doc comment for why that must not leak
-/// through.
-const RUN_PATH: &str = "/usr/bin:/bin";
-
-/// Poll interval for [`exec_run`]'s timeout loop — same value, same
-/// reasoning, as `lens_py::PythonLens`'s `PY_COMPILE_TIMEOUT` loop and
-/// `post::run_bounded`'s: short enough that a fast command isn't visibly
-/// delayed, long enough not to busy-spin.
-const RUN_POLL_INTERVAL: Duration = Duration::from_millis(10);
-
-/// Why [`exec_run`]'s poll loop can end without a normal exit status.
-enum RunFailure {
-    /// `bounds.run_timeout_secs` elapsed before the child exited; it has
-    /// been killed and reaped.
-    TimedOut,
-    /// `Child::try_wait` itself returned an OS error (not the child's own
-    /// exit — the `wait4`/`waitpid` call failed). Rare; handled
-    /// fail-closed rather than ignored.
-    WaitFailed(std::io::Error),
-}
-
-/// Execute a `Run` action against `grant` — the most security-sensitive
-/// executor in this module, per the P3 brief.
-///
-/// `grant.check_command(argv)` runs **first**. On a violation this returns
-/// a failed [`Observation`] and **nothing is ever spawned** — no `Command`
-/// is even constructed on that path (`tests/task_exec_run_test.rs` proves
-/// this against a canary file: an ungranted `rm`-shaped `argv` leaves the
-/// file untouched).
-///
-/// On a granted command, `argv` runs **directly** —
-/// `Command::new(&argv[0]).args(&argv[1..])` — never through a shell,
-/// never `sh -c`: no `$VAR` expansion, no `;`/`|`/`&&` splitting into a
-/// second command, no globbing. A model that puts shell metacharacters in
-/// an argument gets that argument back byte-for-byte in the child's
-/// `argv` (see `no_shell_interpretation` in the test file).
-///
-/// The environment is fully scrubbed and rebuilt from nothing:
-/// `.env_clear()` then exactly `PATH` (fixed at [`RUN_PATH`], never the
-/// daemon's own), `HOME` (`cwd`), and `LANG=C` — no proxy vars, no
-/// inherited secrets. `stdin` is `/dev/null`; stdout+stderr are piped and
-/// drained into one combined, bounded buffer — see
-/// [`crate::task::run_capture`]'s docs for why that draining is
-/// continuous (not read-after-exit) and capped (not `read_to_end`).
-///
-/// **Timeout:** the same poll-`try_wait`-then-kill-and-reap pattern as
-/// `lens_py::run_py_compile` and `post::run_bounded`. On
-/// `bounds.run_timeout_secs` expiry, `child.kill()` — `SIGKILL`, not
-/// `SIGTERM`, via `std::process::Child::kill` on Unix, so a child that
-/// ignores termination signals (the 2a `llama-server` case this pattern
-/// was built to survive) still dies — followed by `child.wait()` to reap
-/// it; skipping that `wait` would leave a zombie for the daemon's life.
-///
-/// **`failed` is `false` for any run that *completes*, at any exit code —
-/// including non-zero.** A `run` action's verb is "run this command", not
-/// "run it successfully": a non-zero exit is a legitimate observation the
-/// model acts on, not an executor failure. `failed` is `true` only when
-/// the verb itself was not carried out: a grant violation or spawn
-/// failure (never ran), or a timeout (started but never finished).
-///
-/// This executor never touches the pager lock — the subprocess runs
-/// entirely outside it; Task 4 decides whether/when a `run` action holds
-/// or releases the pager while this executes.
-pub fn exec_run(grant: &Grant, cwd: &Path, argv: &[String], bounds: &ExecBounds) -> Observation {
-    if let Err(v) = grant.check_command(argv) {
-        return failed(format!("grant violation: {}", describe(&v)));
-    }
-    // `check_command` rejects an empty `argv` (see
-    // `bloomery_core::grant::command::check_command`), so `argv[0]` and
-    // `argv[1..]` below can never panic.
-    let program = argv[0].clone();
-
-    let mut child = match Command::new(&program)
-        .args(&argv[1..])
-        .current_dir(cwd)
-        .env_clear()
-        .env("PATH", RUN_PATH)
-        .env("HOME", cwd)
-        .env("LANG", "C")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(e) => return failed(format!("run failed: could not spawn {program:?}: {e}")),
-    };
-
-    let stdout = child.stdout.take().expect("stdout piped above");
-    let stderr = child.stderr.take().expect("stderr piped above");
-    let sink = new_sink(bounds.run_output_cap_bytes);
-    let out_thread = spawn_drain_thread(stdout, Arc::clone(&sink));
-    let err_thread = spawn_drain_thread(stderr, Arc::clone(&sink));
-
-    let timeout = Duration::from_secs(bounds.run_timeout_secs);
-    let started = Instant::now();
-    let result = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Ok(status),
-            Ok(None) if started.elapsed() >= timeout => {
-                // Kill (SIGKILL, per this fn's doc comment above), then
-                // reap — without the `wait` the child would be left a
-                // zombie for the life of the daemon.
-                let _ = child.kill();
-                let _ = child.wait();
-                break Err(RunFailure::TimedOut);
-            }
-            Ok(None) => std::thread::sleep(RUN_POLL_INTERVAL),
-            Err(e) => break Err(RunFailure::WaitFailed(e)),
-        }
-    };
-    // The child has exited or been killed-and-reaped by this point, so
-    // both pipes' write ends are closed; the drain threads see EOF and
-    // return promptly — this does not block on a still-running child.
-    let _ = out_thread.join();
-    let _ = err_thread.join();
-    let (bytes, truncated) = take_captured(&sink);
-    let mut output = String::from_utf8_lossy(&bytes).into_owned();
-    if truncated {
-        output.push_str(&format!(
-            "\n[note: output truncated at {} bytes]",
-            bounds.run_output_cap_bytes
-        ));
-    }
-
-    match result {
-        Ok(status) => {
-            // `code()` is `None` when the child died from a signal rather
-            // than exiting normally; -1 is not a real exit code and reads
-            // as "no code", the same sentinel `post::run_bounded`'s sibling
-            // uses for the identical case.
-            let code = status.code().unwrap_or(-1);
-            Observation {
-                outcome: format!("ran {program} exit {code}"),
-                content: format!("exit {code}\n{output}"),
-                failed: false,
-            }
-        }
-        Err(RunFailure::TimedOut) => Observation {
-            outcome: format!("ran {program} timed out"),
-            content: format!("timed out after {}s\n{output}", bounds.run_timeout_secs),
-            failed: true,
-        },
-        Err(RunFailure::WaitFailed(e)) => {
-            failed(format!("run failed: could not wait for {program:?}: {e}"))
-        }
     }
 }
 

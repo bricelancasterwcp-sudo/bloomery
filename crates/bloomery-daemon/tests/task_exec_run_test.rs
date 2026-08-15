@@ -246,3 +246,101 @@ fn env_is_scrubbed_to_exactly_path_home_lang() {
         obs.content
     );
 }
+
+/// The security reviewer's exact repro for a real CRITICAL: a granted
+/// command that backgrounds a descendant before its own (direct child)
+/// process exits. Before the fix this test pins, `exec_run` only ever
+/// signaled the direct child's own PID — a backgrounded descendant
+/// survives that untouched, keeps the stdout/stderr pipe's write end
+/// open, and the drain threads (which read those pipes to EOF) block
+/// forever; joining them unconditionally then meant `exec_run` itself
+/// never returned, wedging the task thread indefinitely, while the
+/// descendant leaked as a permanently running orphan — an unbounded DoS
+/// on exactly the cargo/make/pytest-shaped workload this executor exists
+/// to run.
+///
+/// This grants `sh` directly (an operator choice the test itself makes,
+/// not `exec_run` invoking a shell implicitly — that separate guarantee
+/// is `no_shell_interpretation`, still true and unaffected by this fix)
+/// and runs `sh -c 'sleep 30 & echo $! > <pidfile>; exit 0'`: the direct
+/// child (`sh`) exits almost immediately with status 0. This is
+/// deliberately the *clean-exit*, not-a-timeout half of the bug — a fix
+/// that only swept the process group on timeout would still miss it,
+/// because no timeout is ever reached here.
+///
+/// Mechanism this test proves: `exec_run` now (1) puts the child in its
+/// own new process group at spawn (`process_group(0)`) and (2) sends
+/// `SIGKILL` to that *whole group* — not just the direct child's PID —
+/// unconditionally once the direct child is no longer running, including
+/// right after an ordinary clean exit. A plain background job (`&`, no
+/// `setsid`) stays in its parent's process group, so the group-wide kill
+/// reaches it. Independently, (3) `exec_run` only ever waits a short
+/// bounded deadline for the drain threads to notice their pipe closed
+/// before detaching (not joining) them — see `task/exec_run.rs`'s module
+/// docs — which is what guarantees `exec_run` itself returns promptly
+/// even in a hypothetical case where the group kill alone weren't enough.
+#[test]
+fn a_backgrounded_descendant_is_killed_and_does_not_wedge_the_call() {
+    let (cwd, g) = sandbox(&[&["sh"]]);
+    let pidfile = cwd.join("bg.pid");
+    let script = format!("sleep 30 & echo $! > {}; exit 0", pidfile.display());
+    let mut b = bounds();
+    b.run_timeout_secs = 5; // generous vs. the fix's own bound, tiny vs. 30s
+
+    let started = Instant::now();
+    let obs = exec_run(&g, &cwd, &[s("sh"), s("-c"), script], &b);
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "exec_run must return promptly even though the backgrounded sleep \
+         is nominally 'running' for 30s of wall-clock time; took {elapsed:?}"
+    );
+    assert!(
+        !obs.failed,
+        "the direct child (sh) exited 0 — this is not a timeout or a grant violation: {obs:?}"
+    );
+    assert_eq!(obs.outcome, "ran sh exit 0");
+
+    let pid_text = std::fs::read_to_string(&pidfile)
+        .expect("the backgrounded job's PID must have been written before sh exited");
+    let pid: i32 = pid_text.trim().parse().expect("a PID");
+
+    // The background `sleep` must actually be dead — not merely detached
+    // from our own wait, which would leave it running for the full 30s as
+    // a live DoS. Poll /proc briefly: SIGKILL delivery (and reaping by
+    // whatever process becomes its new parent once `sh` is killed) is
+    // near-instant but not synchronous with `exec_run`'s return, so allow
+    // a short grace window rather than asserting the instant it returns.
+    let proc_path = std::path::PathBuf::from(format!("/proc/{pid}"));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while proc_path.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        !proc_path.exists(),
+        "backgrounded sleep pid {pid} is still alive after exec_run returned — \
+         the process-group kill did not reach it"
+    );
+}
+
+/// Control for the test above: an ordinary quick command with no
+/// descendants still returns fast and clean — the process-group kill and
+/// bounded drain-join added by this fix must not slow down or otherwise
+/// change the common case.
+#[test]
+fn a_normal_quick_command_still_returns_fast_and_clean() {
+    let (cwd, g) = sandbox(&[&["echo"]]);
+
+    let started = Instant::now();
+    let obs = exec_run(&g, &cwd, &[s("echo"), s("hi")], &bounds());
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "a plain echo must not be slowed down by the group-kill/bounded-join \
+         machinery; took {elapsed:?}"
+    );
+    assert!(!obs.failed);
+    assert!(obs.content.contains("hi"));
+}

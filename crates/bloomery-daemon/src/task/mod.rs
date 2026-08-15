@@ -6,15 +6,18 @@
 //! plus [`exec`]) owns the `read`/`find` executors and the two binding
 //! security obligations every later executor inherits — see [`exec`]'s
 //! module docs for the full statement. Task 2 adds `exec_patch` (plus the
-//! Python landing lens), Task 3 adds `exec_run`, Task 4 wires all four into
-//! the propose→validate→execute loop, and Task 5 exposes it over HTTP
-//! behind `tasks_enabled` (default `false`).
+//! Python landing lens), Task 3 adds `exec_run` (split into its own
+//! [`exec_run`] module — see that module's docs for why), Task 4 wires all
+//! four into the propose→validate→execute loop, and Task 5 exposes it over
+//! HTTP behind `tasks_enabled` (default `false`).
 
 pub mod exec;
+pub mod exec_run;
 pub mod lens_py;
 mod run_capture;
 
-pub use exec::{exec_find, exec_patch, exec_read, exec_run};
+pub use exec::{exec_find, exec_patch, exec_read};
+pub use exec_run::exec_run;
 
 /// The result of executing one action: what to feed back to the model, and
 /// a short outcome tag for the `TaskStep` journal entry.
