@@ -14,6 +14,7 @@ use std::path::PathBuf;
 ///
 /// All fields are private; `from_json` is the only constructor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Grant {
     read_roots: Vec<PathBuf>,
     write_roots: Vec<PathBuf>,
@@ -54,6 +55,14 @@ pub enum PathKind {
 }
 
 impl Grant {
+    /// Find the first non-absolute root in a list.
+    fn first_non_absolute(roots: &[PathBuf]) -> Option<String> {
+        roots
+            .iter()
+            .find(|root| !root.is_absolute())
+            .map(|root| root.to_string_lossy().into_owned())
+    }
+
     /// Parse JSON and validate according to v1 rules.
     ///
     /// Validation order:
@@ -73,20 +82,12 @@ impl Grant {
             return Err(GrantError::NetworkNotSupported);
         }
 
-        // Step 3: Check absolute roots
-        for root in &grant.read_roots {
-            if !root.is_absolute() {
-                return Err(GrantError::NonAbsoluteRoot {
-                    root: root.to_string_lossy().into_owned(),
-                });
-            }
+        // Step 3: Check absolute roots (read_roots first, then write_roots)
+        if let Some(root) = Self::first_non_absolute(&grant.read_roots) {
+            return Err(GrantError::NonAbsoluteRoot { root });
         }
-        for root in &grant.write_roots {
-            if !root.is_absolute() {
-                return Err(GrantError::NonAbsoluteRoot {
-                    root: root.to_string_lossy().into_owned(),
-                });
-            }
+        if let Some(root) = Self::first_non_absolute(&grant.write_roots) {
+            return Err(GrantError::NonAbsoluteRoot { root });
         }
 
         // Step 4: Check for empty command prefixes

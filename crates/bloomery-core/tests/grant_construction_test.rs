@@ -64,3 +64,11 @@ fn malformed_json_is_a_named_parse_error() {
         Err(GrantError::Parse(_))
     ));
 }
+
+#[test]
+fn an_unknown_field_is_rejected() {
+    assert!(matches!(
+        Grant::from_json(r#"{"read_roots":[],"write_roots":[],"commands":[],"sudo":true}"#),
+        Err(GrantError::Parse(_))
+    ));
+}
