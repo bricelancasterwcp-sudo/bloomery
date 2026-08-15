@@ -7,7 +7,7 @@
 //! `pager_test.rs`.
 
 use bloomery_core::action::PatchCodec;
-use bloomery_core::journal::Journal;
+use bloomery_core::journal::{replay, Event, Journal};
 use bloomery_core::profile::Profile;
 use bloomery_daemon::agents::ImageStore;
 use bloomery_daemon::pager::*;
@@ -214,4 +214,83 @@ fn agent_task_policy_is_none_for_an_unknown_agent() {
     let dir = fresh_dir("bloomery-codec-gate-agentpolicy-unknown");
     let (p, _) = pager_with_model(&dir);
     assert_eq!(p.agent_task_policy("nope"), None);
+}
+
+// ---------------------------------------------------------------------------
+// journal_codec_fixture / journal_codec_verdict round-trips (fix round 1:
+// closes the review finding that neither wrapper had any coverage). Every
+// field that could be swapped with a neighbor — the two adjacent bools
+// (`provisional`/`mutating_verbs`), the two adjacent counts (`landed`/`n`),
+// the two `interval95` endpoints, and the run of `String` fields — is given
+// a distinct, asymmetric value here so a field-order swap or a value-mapping
+// error in either wrapper flips a byte the `assert_eq!` against the full
+// replayed `Event` will catch.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn journal_codec_fixture_round_trips_through_replay() {
+    let dir = fresh_dir("bloomery-codec-gate-journal-fixture");
+    let (mut p, jpath) = pager_with_model(&dir);
+
+    p.journal_codec_fixture(
+        "qwen-fixture-model",
+        "codec-tasks-v1",
+        "py-fix-off-by-one",
+        PatchCodec::WholeFile,
+        true,
+        4,
+        "applies_and_parses",
+    )
+    .unwrap();
+
+    let events = replay(&jpath).unwrap();
+    assert_eq!(
+        events,
+        vec![Event::CodecFixture {
+            model: "qwen-fixture-model".to_string(),
+            fixture_set: "codec-tasks-v1".to_string(),
+            fixture: "py-fix-off-by-one".to_string(),
+            codec: "whole_file".to_string(),
+            landed: true,
+            steps: 4,
+            detail: "applies_and_parses".to_string(),
+        }]
+    );
+}
+
+#[test]
+fn journal_codec_verdict_round_trips_through_replay() {
+    let dir = fresh_dir("bloomery-codec-gate-journal-verdict");
+    let (mut p, jpath) = pager_with_model(&dir);
+
+    // landed != n, interval95 endpoints distinct, provisional != mutating_verbs
+    // — asymmetric on purpose (see module note above).
+    p.journal_codec_verdict(
+        "qwen-verdict-model",
+        "codec-tasks-v1",
+        PatchCodec::SearchReplace,
+        13,
+        20,
+        (0.31, 0.79),
+        true,
+        false,
+        "applies_and_parses under bloomery-task-envelope-v1",
+    )
+    .unwrap();
+
+    let events = replay(&jpath).unwrap();
+    assert_eq!(
+        events,
+        vec![Event::CodecVerdict {
+            model: "qwen-verdict-model".to_string(),
+            fixture_set: "codec-tasks-v1".to_string(),
+            codec: "search_replace".to_string(),
+            landed: 13,
+            n: 20,
+            interval95: [0.31, 0.79],
+            provisional: true,
+            mutating_verbs: false,
+            detail: "applies_and_parses under bloomery-task-envelope-v1".to_string(),
+        }]
+    );
 }
