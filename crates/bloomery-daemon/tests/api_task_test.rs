@@ -112,7 +112,9 @@ fn a_task_runs_and_is_pollable_to_done() {
     let steps = v["steps"].as_array().unwrap();
     assert_eq!(steps.len(), 2, "{last_body}");
     assert_eq!(steps[0]["verb"], "read");
+    assert_eq!(steps[0]["failed"], false);
     assert_eq!(steps[1]["verb"], "done");
+    assert_eq!(steps[1]["failed"], false);
     assert_eq!(v["summary"], "read the file");
 
     handle.shutdown();
@@ -447,6 +449,373 @@ fn a_panicking_task_step_becomes_error_and_the_daemon_stays_healthy() {
     assert_eq!(
         st, 200,
         "daemon degraded after a caught worker panic: {body}"
+    );
+
+    handle.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// Task 8: `create_task` resolves the real per-model patch codec and G4 verb
+// policy through `Pager::agent_task_policy` (closes the carried-debt item
+// "Profile has NO codec field") instead of the `PatchCodec::SearchReplace` +
+// `mutating_verbs: true` literal this task replaced.
+// ---------------------------------------------------------------------------
+
+/// A `Profile` whose `codecs` grid picks `WholeFile` over `SearchReplace`
+/// for "qwen" — the same fixture `pager_codec_gate_test.rs` uses to prove
+/// `Pager::model_patch_codec`'s selection (protocol §4).
+const WF_WINS_PROFILE: &str = r#"{
+  "assay_profile_version": 3,
+  "model": {"name": "qwen"},
+  "codecs": {
+    "search_replace": {"small": {"lands": 0.5, "lands_applies": 0.6, "n": 20}},
+    "whole_file": {"small": {"lands": 0.8, "lands_applies": 0.9, "n": 20}}
+  }
+}"#;
+
+/// The `WholeFile` codec's worked `patch` example, verbatim from
+/// `bloomery_core::action::card`'s private `WHOLE_FILE_PATCH_EXAMPLE` — that
+/// constant isn't `pub`, so this is the same bytes duplicated at the
+/// boundary this test actually observes (the rendered prompt), the same way
+/// `task_loop_test.rs` duplicates its own scripted `<action>` bodies rather
+/// than reaching into `bloomery-core`'s private internals.
+const WHOLE_FILE_PATCH_EXAMPLE: &str = "<action verb=\"patch\" path=\"src/lib.rs\">\nfn greeting() -> &'static str { \"hello\" }\n</action>";
+
+/// The pinned gate-G4 refusal outcome (P4 Task 7 brief — exact bytes; Task
+/// 9's scoring and the journal read this string). Duplicated locally for the
+/// same reason `task_loop_test.rs` duplicates it rather than importing a
+/// private `task_loop` constant.
+const MUTATING_VERB_DEMOTED: &str = "verb unavailable: mutating verbs demoted (gate G4)";
+
+type FakePager = bloomery_daemon::pager::Pager<bloomery_substrate::fake::FakeSubstrate>;
+
+/// Builds a `Pager<FakeSubstrate>` with one registered "qwen" model, tasks
+/// enabled, and a pre-created `sandbox` dir — the same shape as
+/// `test_support::serve_fake_with_tasks` — but serves it through
+/// `http::serve_shared` and hands the caller back its own
+/// `Arc<Mutex<Pager<FakeSubstrate>>>` handle instead of an opaque
+/// `ServerHandle`-only fixture.
+///
+/// That handle is the only way any of these three tests can reach back into
+/// `FakeSubstrate::ctx_history` (test (a)'s observable seam) or call
+/// `attach_profile`/`set_codec_gate` on the model before creating the agent
+/// (tests (a)/(c)): once a plain `Pager` is handed to `http::serve` (every
+/// other fixture in this crate) it is moved behind the socket with no way
+/// back out — `test_support.rs`'s own docs name this. The agent is
+/// deliberately NOT created here — a caller configures the model first
+/// (profile, codec gate) via the returned handle, then creates the agent
+/// itself, so `create_agent`'s window/policy-quoting happens after that
+/// configuration, not before it.
+fn serve_codec_gate_fixture(
+    replies: Vec<bloomery_substrate::Reply>,
+) -> (
+    u16,
+    bloomery_daemon::http::ServerHandle,
+    std::path::PathBuf,
+    std::sync::Arc<std::sync::Mutex<FakePager>>,
+) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "bloomery-task-codec-gate-test-{}-{seq}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    let journal = bloomery_core::journal::Journal::open(&dir.join("j.jsonl")).unwrap();
+    let images = bloomery_daemon::agents::ImageStore::new(&dir.join("img")).unwrap();
+    let mut fake = bloomery_substrate::fake::FakeSubstrate::new();
+    for r in replies {
+        fake.script_reply(r);
+    }
+    let mut pager = bloomery_daemon::pager::Pager::new(
+        fake,
+        journal,
+        images,
+        Box::new(|| Some(1024 * 1024 * 1024)),
+    );
+    pager.set_tasks_enabled(true);
+    pager.set_exec_bounds(bloomery_daemon::task::ExecBounds::default());
+    pager.set_task_journal_path(dir.join("tasks.jsonl"));
+
+    let gguf = dir.join("qwen.gguf");
+    std::fs::write(&gguf, b"fake weights").unwrap();
+    let meta = bloomery_core::gguf::GgufMeta {
+        arch: "qwen2".into(),
+        layers: 4,
+        kv_heads: 2,
+        head_dim: 32,
+        training_ctx: 65536,
+        weights_bytes: 1000,
+    };
+    pager.register_model("qwen", &gguf, meta, None).unwrap();
+
+    let sandbox = dir.join("sandbox");
+    std::fs::create_dir_all(&sandbox).unwrap();
+    let sandbox = std::fs::canonicalize(&sandbox).unwrap();
+
+    let pager = std::sync::Arc::new(std::sync::Mutex::new(pager));
+    let (port, mut handle) = bloomery_daemon::http::serve_shared(std::sync::Arc::clone(&pager), 0);
+    handle.set_scratch_dir(dir);
+    (port, handle, sandbox, pager)
+}
+
+/// Polls `GET /agents/{agent_id}/task/{task_id}` until `status` moves off
+/// `"Running"` (bounded, mirroring every other poll loop in this file) and
+/// returns the final response body.
+fn wait_for_terminal(addr: &str, agent_id: &str, task_id: &str) -> String {
+    let mut last_body = String::new();
+    for _ in 0..200 {
+        let (st, body) = http(
+            addr,
+            "GET",
+            &format!("/agents/{agent_id}/task/{task_id}"),
+            "",
+        );
+        assert_eq!(st, 200, "{body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        last_body = body;
+        if v["status"].as_str().unwrap_or("Running") != "Running" {
+            return last_body;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!("task never reached a terminal state: {last_body}");
+}
+
+fn task_create_request(sandbox: &std::path::Path, goal: &str) -> String {
+    serde_json::json!({
+        "goal": goal,
+        "grants": {
+            "read_roots": [sandbox.to_string_lossy()],
+            "write_roots": [sandbox.to_string_lossy()],
+            "commands": [],
+        },
+    })
+    .to_string()
+}
+
+fn done_reply(summary: &str) -> bloomery_substrate::Reply {
+    bloomery_substrate::Reply {
+        text: format!("<action verb=\"done\">\n{summary}\n</action>"),
+        prompt_tokens: Some(8),
+        completion_tokens: Some(4),
+        duration_ms: 1,
+    }
+}
+
+/// Test (a): a model with an attached wf-wins profile AND a stored keep gate
+/// (mutating verbs on — otherwise the demoted read-only card would drop the
+/// `patch` section entirely and there would be no patch example to select
+/// between) gets tasks whose verb card shows the `WholeFile` patch example,
+/// not the `SearchReplace` default `create_task` used to hardcode. Observed
+/// via `FakeSubstrate::ctx_history` — the harness's existing seam
+/// (`api_v1_test.rs::x_bloomery_agent_header_reuses_the_same_substrate_context`)
+/// — since the rendered prompt is exactly what the model turn receives, sent
+/// before the scripted reply even matters.
+#[test]
+fn a_wf_wins_profile_with_a_keep_gate_selects_the_whole_file_patch_example() {
+    let (port, handle, sandbox, pager) = serve_codec_gate_fixture(vec![done_reply("ok")]);
+    let addr = format!("127.0.0.1:{port}");
+
+    let agent_id = {
+        let mut p = pager.lock().unwrap();
+        let profile = bloomery_core::profile::Profile::from_json(WF_WINS_PROFILE).unwrap();
+        p.attach_profile("qwen", profile, false).unwrap();
+        p.set_codec_gate(
+            "qwen",
+            bloomery_daemon::pager::CodecGateResult {
+                fixture_set: "codec-tasks-v1".to_string(),
+                codec: bloomery_core::action::PatchCodec::SearchReplace,
+                landed: 17,
+                n: 20,
+                interval95: (0.60, 0.94),
+                provisional: false,
+                mutating_verbs: true,
+            },
+        )
+        .unwrap();
+        p.create_agent("qwen", 100, None, 1_000_000).unwrap().id
+    };
+
+    let (st, body) = http(
+        &addr,
+        "POST",
+        &format!("/agents/{agent_id}/task"),
+        &task_create_request(&sandbox, "say done"),
+    );
+    assert_eq!(st, 202, "{body}");
+    let task_id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let last_body = wait_for_terminal(&addr, &agent_id, &task_id);
+    let v: serde_json::Value = serde_json::from_str(&last_body).unwrap();
+    assert_eq!(v["status"], "Done", "{last_body}");
+
+    let p = pager.lock().unwrap();
+    let history = p
+        .substrate()
+        .ctx_history(1)
+        .expect("context 1 is still resident after the task's only step");
+    assert!(
+        history.contains(WHOLE_FILE_PATCH_EXAMPLE),
+        "expected the WholeFile patch example in the verb card the model was \
+         prompted with, got: {history}"
+    );
+    assert!(
+        !history.contains("<<<<<<< SEARCH"),
+        "a WholeFile-selected card must never also carry the SearchReplace \
+         conflict-marker example: {history}"
+    );
+    drop(p);
+
+    handle.shutdown();
+}
+
+/// Test (b): an unmeasured model (no `set_codec_gate` call at all — protocol
+/// §3/§6's fail-closed default) still gets a task created (`202`), but a
+/// scripted `patch` turn records the pinned G4 refusal rather than executing
+/// — proving the fail-closed default set at agent-admission time actually
+/// reaches `run_task`'s dispatch gate through this HTTP route, not just
+/// through `Pager::agent_task_policy` in isolation (`pager_codec_gate_test.rs`
+/// already covers that half).
+#[test]
+fn an_unmeasured_model_is_created_but_its_patch_turn_is_refused_by_gate_g4() {
+    let patch_attempt = bloomery_substrate::Reply {
+        text: "<action verb=\"patch\" path=\"file.txt\">\n\
+               <<<<<<< SEARCH\n\
+               hello\n\
+               =======\n\
+               goodbye\n\
+               >>>>>>> REPLACE\n\
+               </action>"
+            .to_string(),
+        prompt_tokens: Some(8),
+        completion_tokens: Some(4),
+        duration_ms: 1,
+    };
+    let (port, handle, sandbox, pager) =
+        serve_codec_gate_fixture(vec![patch_attempt, done_reply("refused as expected")]);
+    std::fs::write(sandbox.join("file.txt"), "hello\nworld\n").unwrap();
+    let addr = format!("127.0.0.1:{port}");
+
+    // No `set_codec_gate` call at all — this model is unmeasured, which
+    // `agent_task_policy` must resolve to `mutating_verbs: false`.
+    let agent_id = {
+        let mut p = pager.lock().unwrap();
+        p.create_agent("qwen", 100, None, 1_000_000).unwrap().id
+    };
+
+    let (st, body) = http(
+        &addr,
+        "POST",
+        &format!("/agents/{agent_id}/task"),
+        &task_create_request(&sandbox, "patch the file"),
+    );
+    assert_eq!(st, 202, "{body}");
+    let task_id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let last_body = wait_for_terminal(&addr, &agent_id, &task_id);
+    let v: serde_json::Value = serde_json::from_str(&last_body).unwrap();
+    assert_eq!(
+        v["status"], "Done",
+        "a refused verb must not abort the task: {last_body}"
+    );
+    let steps = v["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 2, "{last_body}");
+    assert_eq!(steps[0]["verb"], "patch", "must record the real verb name");
+    assert_eq!(steps[0]["failed"], true);
+    assert_eq!(steps[0]["outcome"], MUTATING_VERB_DEMOTED);
+    assert_eq!(steps[1]["verb"], "done");
+
+    let on_disk = std::fs::read_to_string(sandbox.join("file.txt")).unwrap();
+    assert_eq!(
+        on_disk, "hello\nworld\n",
+        "an unmeasured model's refused patch must never touch the file"
+    );
+
+    handle.shutdown();
+}
+
+/// Test (c): a model with a stored keep gate (`mutating_verbs: true`) gets a
+/// patch turn that actually executes — the counterpart to test (b), proving
+/// `create_task` reaches the real per-model verdict in both directions, not
+/// just the fail-closed one.
+#[test]
+fn a_stored_keep_gate_lets_the_patch_turn_execute_for_real() {
+    let patch_attempt = bloomery_substrate::Reply {
+        text: "<action verb=\"patch\" path=\"file.txt\">\n\
+               <<<<<<< SEARCH\n\
+               hello\n\
+               =======\n\
+               goodbye\n\
+               >>>>>>> REPLACE\n\
+               </action>"
+            .to_string(),
+        prompt_tokens: Some(8),
+        completion_tokens: Some(4),
+        duration_ms: 1,
+    };
+    let (port, handle, sandbox, pager) =
+        serve_codec_gate_fixture(vec![patch_attempt, done_reply("patched it")]);
+    std::fs::write(sandbox.join("file.txt"), "hello\nworld\n").unwrap();
+    let addr = format!("127.0.0.1:{port}");
+
+    let agent_id = {
+        let mut p = pager.lock().unwrap();
+        p.set_codec_gate(
+            "qwen",
+            bloomery_daemon::pager::CodecGateResult {
+                fixture_set: "codec-tasks-v1".to_string(),
+                codec: bloomery_core::action::PatchCodec::SearchReplace,
+                landed: 17,
+                n: 20,
+                interval95: (0.60, 0.94),
+                provisional: false,
+                mutating_verbs: true,
+            },
+        )
+        .unwrap();
+        p.create_agent("qwen", 100, None, 1_000_000).unwrap().id
+    };
+
+    let (st, body) = http(
+        &addr,
+        "POST",
+        &format!("/agents/{agent_id}/task"),
+        &task_create_request(&sandbox, "patch the file"),
+    );
+    assert_eq!(st, 202, "{body}");
+    let task_id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let last_body = wait_for_terminal(&addr, &agent_id, &task_id);
+    let v: serde_json::Value = serde_json::from_str(&last_body).unwrap();
+    assert_eq!(v["status"], "Done", "{last_body}");
+    let steps = v["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 2, "{last_body}");
+    assert_eq!(steps[0]["verb"], "patch");
+    assert_eq!(steps[0]["failed"], false, "{last_body}");
+    assert!(
+        steps[0]["outcome"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("patched (lens:"),
+        "{last_body}"
+    );
+
+    let on_disk = std::fs::read_to_string(sandbox.join("file.txt")).unwrap();
+    assert_eq!(
+        on_disk, "goodbye\nworld\n",
+        "a keep-gated model's patch must actually land"
     );
 
     handle.shutdown();

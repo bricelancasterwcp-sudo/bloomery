@@ -15,7 +15,7 @@ pub mod lens;
 pub mod patch;
 pub mod verbs;
 
-pub use card::verb_card;
+pub use card::{verb_card, verb_card_for};
 pub use envelope::{scan_envelope, RawAction};
 pub use verbs::{validate_done, validate_find, validate_read, validate_run};
 

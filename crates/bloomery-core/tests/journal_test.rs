@@ -85,6 +85,38 @@ fn agent_removed_and_task_step_round_trip() {
 }
 
 #[test]
+fn codec_fixture_and_codec_verdict_round_trip() {
+    let dir = std::env::temp_dir().join("bloomery-journal-g4");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("j-g4.jsonl");
+    let _ = std::fs::remove_file(&path);
+    let mut j = Journal::open(&path).unwrap();
+    let e1 = Event::CodecFixture {
+        model: "m1".into(),
+        fixture_set: "core-v1".into(),
+        fixture: "rename-var".into(),
+        codec: "search_replace".into(),
+        landed: true,
+        steps: 2,
+        detail: "applied".into(),
+    };
+    let e2 = Event::CodecVerdict {
+        model: "m1".into(),
+        fixture_set: "core-v1".into(),
+        codec: "search_replace".into(),
+        landed: 8,
+        n: 10,
+        interval95: [0.42, 0.94],
+        provisional: false,
+        mutating_verbs: true,
+        detail: "applies_and_parses under bloomery-task-envelope-v1".into(),
+    };
+    j.append(&e1).unwrap();
+    j.append(&e2).unwrap();
+    assert_eq!(replay(&path).unwrap(), vec![e1, e2]);
+}
+
+#[test]
 fn committed_g2_journal_still_replays() {
     // Backward-compatibility pin: schema changes must never orphan the
     // committed evidence. Every committed `*.jsonl` under the evidence

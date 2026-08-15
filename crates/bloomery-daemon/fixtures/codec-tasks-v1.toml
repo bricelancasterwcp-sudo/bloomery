@@ -1,0 +1,480 @@
+# codec-tasks-v1 -- frozen G4 codec-landing measurement fixture set.
+#
+# Pre-registered instrument: docs/superpowers/evidence/2026-08-15-g4-protocol.md
+# section 2. This set is embedded in the daemon binary (see
+# src/codec_probe/fixtures.rs::shipped_fixture_set) and its contents are
+# frozen -- any change is a recorded amendment (protocol section 8), never a
+# silent edit.
+#
+# TOML gotcha: a triple-quoted basic string (`"""..."""`) strips only the
+# newline immediately after the OPENING delimiter, not any other
+# whitespace/newlines in the body. That is exactly what every multi-line
+# `contents`/`goal` value below relies on (content starts on the line right
+# after the opening `"""`). But `[fixture.reference]`'s `search`/`replace`
+# values must match a target file's bytes exactly, byte for byte -- for
+# those, prefer single-line basic strings ("...") so there is no
+# triple-quote newline-stripping behavior to reason about at all. A
+# `search`/`replace` value that itself needs an embedded double quote uses a
+# single-quoted TOML literal string ('...') instead of escaping.
+
+set = "codec-tasks-v1"
+
+[[fixture]]
+name = "py-mean-off-by-one"
+lens = "python"
+target = "stats.py"
+goal = """stats.py's mean() divides by len(values) + 1, so mean([2, 4]) returns 2.0 instead of 3.0. Fix mean() in stats.py so it divides by len(values). Patch the file, then emit done."""
+
+[[fixture.file]]
+path = "stats.py"
+contents = """
+def mean(values):
+    total = 0
+    for v in values:
+        total += v
+    return total / (len(values) + 1)
+"""
+
+[fixture.reference]
+search = "    return total / (len(values) + 1)"
+replace = "    return total / len(values)"
+
+[[fixture]]
+name = "py-max-wrong-comparison"
+lens = "python"
+target = "extremes.py"
+goal = """extremes.py's find_max() returns the smallest value instead of the largest -- find_max([3, 1, 4, 1, 5]) returns 1 instead of 5. Fix the comparison in find_max() in extremes.py so it keeps the larger value. Patch the file, then emit done."""
+
+[[fixture.file]]
+path = "extremes.py"
+contents = """
+def find_max(values):
+    best = values[0]
+    for v in values[1:]:
+        if v < best:
+            best = v
+    return best
+"""
+
+[fixture.reference]
+search = "        if v < best:"
+replace = "        if v > best:"
+
+[[fixture]]
+name = "py-countdown-range-off-by-one"
+lens = "python"
+target = "countdown.py"
+goal = """countdown.py's countdown_labels() drops the final step -- countdown_labels(3) returns only two labels instead of three, missing 'step 3'. Fix the range in countdown_labels() in countdown.py so it includes n. Patch the file, then emit done."""
+
+[[fixture.file]]
+path = "countdown.py"
+contents = """
+def countdown_labels(n):
+    labels = []
+    for i in range(1, n):
+        labels.append(f"step {i}")
+    return labels
+"""
+
+[fixture.reference]
+search = "    for i in range(1, n):"
+replace = "    for i in range(1, n + 1):"
+
+[[fixture]]
+name = "py-discount-wrong-operator"
+lens = "python"
+target = "pricing.py"
+goal = """pricing.py's discounted_price() increases the price instead of discounting it -- discounted_price(100, 10) returns 110.0 instead of 90.0. Fix discounted_price() in pricing.py so it subtracts the discount. Patch the file, then emit done."""
+
+[[fixture.file]]
+path = "pricing.py"
+contents = """
+MAX_DISCOUNT_PCT = 90
+
+
+def discounted_price(price, discount_pct):
+    # Return price after applying discount_pct percent off.
+    discount = price * discount_pct / 100
+    return price + discount
+"""
+
+[fixture.reference]
+search = "    return price + discount"
+replace = "    return price - discount"
+
+[[fixture]]
+name = "py-firstlast-wrong-index"
+lens = "python"
+target = "firstlast.py"
+goal = """firstlast.py's first_and_last() returns the first element twice instead of the first and last -- first_and_last([1, 2, 3]) returns (1, 1) instead of (1, 3). Fix the last assignment in first_and_last() in firstlast.py so it takes the last element. Patch the file, then emit done."""
+
+[[fixture.file]]
+path = "firstlast.py"
+contents = """
+def first_and_last(values):
+    # Return a (first, last) tuple from values.
+    first = values[0]
+    last = values[0]
+    return (first, last)
+"""
+
+[fixture.reference]
+search = "    last = values[0]"
+replace = "    last = values[-1]"
+
+[[fixture]]
+name = "py-shipping-wrong-boolean"
+lens = "python"
+target = "shipping.py"
+goal = """shipping.py's free_shipping() only grants free shipping to members with a $50+ cart, but a $75 cart from a non-member should also qualify -- free_shipping(75, False, ['item']) returns False instead of True. Fix the condition in free_shipping() in shipping.py so cart size or membership alone qualifies. Patch the file, then emit done."""
+
+[[fixture.file]]
+path = "shipping.py"
+contents = """
+def free_shipping(cart_total, is_member, cart_items):
+    if cart_items:
+        if cart_total >= 50 and is_member:
+            return True
+    return False
+"""
+
+[fixture.reference]
+search = "        if cart_total >= 50 and is_member:"
+replace = "        if cart_total >= 50 or is_member:"
+
+[[fixture]]
+name = "py-greeting-wrong-fstring-var"
+lens = "python"
+target = "greeting.py"
+goal = """greeting.py's greeting() prints the name where the age should go -- greeting('Ada', 30) returns 'Hello Ada, you are Ada years old' instead of showing 30. Fix the f-string in greeting() in greeting.py so it reports age, not name. Patch the file, then emit done."""
+
+[[fixture.file]]
+path = "greeting.py"
+contents = """
+def greeting(name, age):
+    # Return a friendly greeting mentioning the person's age.
+    return f"Hello {name}, you are {name} years old"
+
+
+def greeting_for(person):
+    return greeting(person["name"], person["age"])
+"""
+
+[fixture.reference]
+search = '    return f"Hello {name}, you are {name} years old"'
+replace = '    return f"Hello {name}, you are {age} years old"'
+
+[[fixture]]
+name = "py-cart-total-missing-tax"
+lens = "python"
+target = "cart.py"
+goal = """cart.py's cart_total() computes tax but never adds it to the total returned -- cart_total([10, 20]) returns 30 instead of 32.4 (with 8% tax). Fix the return in cart_total() in cart.py so it includes tax. Patch the file, then emit done."""
+
+[[fixture.file]]
+path = "cart.py"
+contents = """
+def cart_total(items):
+    subtotal = 0
+    tax = 0
+    for price in items:
+        subtotal += price
+        tax += price * 0.08
+    return subtotal
+"""
+
+[fixture.reference]
+search = "    return subtotal"
+replace = "    return subtotal + tax"
+
+[[fixture]]
+name = "py-inventory-restock-threshold"
+lens = "python"
+target = "inventory.py"
+goal = """report.py's low_stock_report() is supposed to flag items running low, but it flags items that have plenty of stock instead -- restock_needed(2, 10, False) in inventory.py returns False when stock is critically low. Fix the comparison in restock_needed() in inventory.py so items below the threshold are flagged. Patch the file, then emit done."""
+
+[[fixture.file]]
+path = "inventory.py"
+contents = """
+def restock_needed(current_stock, reorder_threshold, is_discontinued):
+    if not is_discontinued:
+        if current_stock > reorder_threshold:
+            return True
+    return False
+"""
+
+[[fixture.file]]
+path = "report.py"
+contents = """
+from inventory import restock_needed
+
+
+def low_stock_report(stock_levels, threshold):
+    return [
+        name
+        for name, info in stock_levels.items()
+        if restock_needed(info["qty"], threshold, info["discontinued"])
+    ]
+"""
+
+[fixture.reference]
+search = "        if current_stock > reorder_threshold:"
+replace = "        if current_stock < reorder_threshold:"
+
+[[fixture]]
+name = "py-validator-password-length"
+lens = "python"
+target = "validator.py"
+goal = """signup.py's register() is rejecting passwords that meet the minimum length -- register('ada', 'secret') returns 'ada: password too short' even though 'secret' is exactly 6 characters, because validator.py's is_valid_password() uses a strict greater-than check. Fix the comparison in is_valid_password() in validator.py so passwords at the minimum length are accepted. Patch the file, then emit done."""
+
+[[fixture.file]]
+path = "validator.py"
+contents = """
+def is_valid_password(password, min_length):
+    # Return True if password meets the minimum length requirement.
+    if len(password) > min_length:
+        return True
+    return False
+"""
+
+[[fixture.file]]
+path = "signup.py"
+contents = """
+from validator import is_valid_password
+
+
+def register(username, password):
+    if not is_valid_password(password, 6):
+        return f"{username}: password too short"
+    return f"{username}: registered"
+"""
+
+[fixture.reference]
+search = "    if len(password) > min_length:"
+replace = "    if len(password) >= min_length:"
+
+[[fixture]]
+name = "txt-listen-port-mismatch"
+lens = "plaintext"
+target = "serve.conf"
+goal = """serve.conf's listen_port says 8080, but every other reference in the file uses 8181 — the daemon comes up on the wrong port. Change the listen_port line in serve.conf to 8181. Patch the file, then emit done."""
+
+[[fixture.file]]
+path = "serve.conf"
+contents = """
+listen_addr = 127.0.0.1
+listen_port = 8080
+health_path = /status
+upstream = http://127.0.0.1:8181
+"""
+
+[fixture.reference]
+search = "listen_port = 8080"
+replace = "listen_port = 8181"
+
+[[fixture]]
+name = "txt-db-connection-string"
+lens = "plaintext"
+target = "db.conf"
+goal = """db.conf's db_port says 5432, but the health_check_url at the bottom of the file points at port 5433 -- the health check never reaches the database. Change the db_port line in db.conf to 5433. Patch the file, then emit done."""
+
+[[fixture.file]]
+path = "db.conf"
+contents = """
+db_host = 127.0.0.1
+db_port = 5432
+db_name = billing
+db_user = billing_svc
+health_check_url = http://127.0.0.1:5433/health
+"""
+
+[fixture.reference]
+search = "db_port = 5432"
+replace = "db_port = 5433"
+
+[[fixture]]
+name = "txt-retry-count-wrong"
+lens = "plaintext"
+target = "worker.ini"
+goal = """worker.ini's retries is set to 1, but the on-call runbook requires failed jobs to retry 5 times before moving to the dead-letter queue -- jobs are dying after a single attempt. Change the retries line in worker.ini to 5. Patch the file, then emit done."""
+
+[[fixture.file]]
+path = "worker.ini"
+contents = """
+[worker]
+queue = default
+retries = 1
+timeout_seconds = 30
+concurrency = 4
+"""
+
+[fixture.reference]
+search = "retries = 1"
+replace = "retries = 5"
+
+[[fixture]]
+name = "txt-readme-wrong-command"
+lens = "plaintext"
+target = "README.txt"
+goal = """README.txt tells contributors to run 'npm run tests' to run the test suite, but the actual npm script is named 'test', not 'tests' -- following the README's instructions fails with an unknown script error. Fix the test command line in README.txt to read 'npm run test'. Patch the file, then emit done."""
+
+[[fixture.file]]
+path = "README.txt"
+contents = """
+Bloomery Widget CLI
+===================
+
+Install dependencies with:
+
+    npm install
+
+Run the test suite with:
+
+    npm run tests
+
+Build a release binary with:
+
+    npm run build
+"""
+
+[fixture.reference]
+search = "    npm run tests"
+replace = "    npm run test"
+
+[[fixture]]
+name = "txt-changelog-wrong-version"
+lens = "plaintext"
+target = "CHANGELOG.txt"
+goal = """CHANGELOG.txt lists two separate releases both labeled version 2.4.0 -- the August 2nd entry (memory leak fix, faster startup) actually shipped as 2.4.1, but the heading still says 2.4.0, duplicating the version number. Fix the second release heading in CHANGELOG.txt to read 2.4.1. Patch the file, then emit done."""
+
+[[fixture.file]]
+path = "CHANGELOG.txt"
+contents = """
+# Changelog
+
+## 2.4.0 - 2026-07-18
+- Added dark mode toggle
+- Fixed crash on empty cart
+
+## 2.4.0 - 2026-08-02
+- Fixed memory leak in the sync worker
+- Improved startup time by 15%
+"""
+
+[fixture.reference]
+search = "## 2.4.0 - 2026-08-02"
+replace = "## 2.4.1 - 2026-08-02"
+
+[[fixture]]
+name = "txt-email-template-wrong-name"
+lens = "plaintext"
+target = "welcome_email.txt"
+goal = """welcome_email.txt's body thanks the customer for signing up for 'Acme Corp' instead of 'Bloomery' -- the wrong product name is going out in every welcome email. Fix the company name in the thank-you line of welcome_email.txt to say Bloomery. Patch the file, then emit done."""
+
+[[fixture.file]]
+path = "welcome_email.txt"
+contents = """
+Subject: Welcome to Bloomery!
+
+Hi {{customer_name}},
+
+Thanks for signing up for Acme Corp. We're excited to have you on board.
+
+If you have any questions, reply to this email any time.
+
+- The Bloomery Team
+"""
+
+[fixture.reference]
+search = "Thanks for signing up for Acme Corp. We're excited to have you on board."
+replace = "Thanks for signing up for Bloomery. We're excited to have you on board."
+
+[[fixture]]
+name = "txt-nginx-upstream-mismatch"
+lens = "plaintext"
+target = "upstream.conf"
+goal = """upstream.conf's upstream block listens on port 9000 for both backend servers, but the server block's proxy_pass points at port 9100 instead -- requests never reach the upstream. Fix the proxy_pass line in upstream.conf to use port 9000. Patch the file, then emit done."""
+
+[[fixture.file]]
+path = "upstream.conf"
+contents = """
+upstream api_backend {
+    server 10.0.0.5:9000;
+    server 10.0.0.6:9000;
+}
+
+server {
+    listen 80;
+    proxy_pass http://10.0.0.5:9100;
+}
+"""
+
+[fixture.reference]
+search = "    proxy_pass http://10.0.0.5:9100;"
+replace = "    proxy_pass http://10.0.0.5:9000;"
+
+[[fixture]]
+name = "txt-support-doc-wrong-url"
+lens = "plaintext"
+target = "support.txt"
+goal = """support.txt's billing contact is billing@example.org, but every other address in the document uses the example.com domain -- customers get a bounced email when they follow the billing instructions. Fix the billing email line in support.txt to use the example.com domain. Patch the file, then emit done."""
+
+[[fixture.file]]
+path = "support.txt"
+contents = """
+Bloomery Support
+================
+
+If the daemon fails to start, check the logs at /var/log/bloomery/daemon.log.
+
+For billing questions, email billing@example.org.
+
+For technical support, visit https://support.bloomery.example.com/help
+"""
+
+[fixture.reference]
+search = "For billing questions, email billing@example.org."
+replace = "For billing questions, email billing@example.com."
+
+[[fixture]]
+name = "txt-env-wrong-timeout"
+lens = "plaintext"
+target = "settings.env"
+goal = """settings.env's comment says upstream calls typically take 2-4 seconds and the timeout must exceed that, but HTTP_TIMEOUT_MS is set to 500 milliseconds -- every real request times out before it can finish. Change the HTTP_TIMEOUT_MS line in settings.env to 5000. Patch the file, then emit done."""
+
+[[fixture.file]]
+path = "settings.env"
+contents = """
+# Upstream calls typically take 2-4 seconds; timeout must exceed that.
+HTTP_TIMEOUT_MS=500
+MAX_RETRIES=3
+LOG_LEVEL=info
+UPSTREAM_URL=https://api.internal.example.com
+"""
+
+[fixture.reference]
+search = "HTTP_TIMEOUT_MS=500"
+replace = "HTTP_TIMEOUT_MS=5000"
+
+[[fixture]]
+name = "txt-release-notes-wrong-date"
+lens = "plaintext"
+target = "release_notes.txt"
+goal = """release_notes.txt lists the v3.1.0 release date as 2026-02-30, which isn't a real calendar date -- February only has 28 days in 2026. Fix the release date line in release_notes.txt to read 2026-02-28. Patch the file, then emit done."""
+
+[[fixture.file]]
+path = "release_notes.txt"
+contents = """
+Release Notes - v3.1.0
+=======================
+
+Release date: 2026-02-30
+
+Highlights:
+- Faster cold start
+- New plugin API
+- Bug fixes across the board
+"""
+
+[fixture.reference]
+search = "Release date: 2026-02-30"
+replace = "Release date: 2026-02-28"

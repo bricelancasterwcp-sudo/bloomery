@@ -88,6 +88,31 @@ pub enum Event {
         outcome: String,
         duration_ms: u64,
     },
+    /// One codec-probe fixture run (G4 instrument). `detail` is the last patch
+    /// step's outcome, or the terminal status when no patch step ran.
+    CodecFixture {
+        model: String,
+        fixture_set: String,
+        fixture: String,
+        codec: String, // "search_replace" | "whole_file"
+        landed: bool,
+        steps: u32,
+        detail: String,
+    },
+    /// The per-model G4 verdict, emitted exactly once per completed probe
+    /// (never for an aborted one — unmeasured is not an event, it is the
+    /// absence of this event plus a Degraded reason).
+    CodecVerdict {
+        model: String,
+        fixture_set: String,
+        codec: String,
+        landed: u32,
+        n: u32,
+        interval95: [f64; 2],
+        provisional: bool,
+        mutating_verbs: bool,
+        detail: String, // names the lens: "applies_and_parses under bloomery-task-envelope-v1" (+ codec-selection provenance)
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]

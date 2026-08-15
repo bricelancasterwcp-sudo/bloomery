@@ -78,7 +78,12 @@ type Entries = Arc<Mutex<HashMap<String, TaskResult>>>;
 /// every panic this codebase's own code can raise; a payload of any other
 /// type (a foreign dependency's custom panic value) falls back to a named
 /// generic message rather than guessing at its shape.
-fn panic_message(payload: &(dyn Any + Send + 'static)) -> String {
+///
+/// `pub(crate)` because P4's codec probe catches a panic from the *same*
+/// `run_task` call under the *same* held pager guard, for the same
+/// mutex-poisoning reason this module documents — one shared extractor, not
+/// two spellings of the same message.
+pub(crate) fn panic_message(payload: &(dyn Any + Send + 'static)) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
         format!("task worker panicked: {s}")
     } else if let Some(s) = payload.downcast_ref::<String>() {
@@ -315,14 +320,22 @@ mod tests {
         );
         let pager = Arc::new(Mutex::new(pager));
         let registry = TaskRegistry::new();
+        // Demoted + WholeFile, deliberately not this module's other tests'
+        // `true`/`SearchReplace` defaults: the registry's own contract
+        // (background thread, pollable completion) does not depend on which
+        // codec-gate policy a `TaskSpec` carries, and this test's single
+        // `done` action never touches `patch_codec` or `mutating_verbs`
+        // either way — so it doubles as coverage that the registry passes a
+        // demoted, non-default-codec spec through to `run_task` untouched.
         let spec = TaskSpec {
             goal: "say done".to_string(),
             grant: ok_grant(&dir),
             budget_tokens: 1_000_000,
             max_steps: 3,
             cwd: std::fs::canonicalize(&dir).unwrap(),
-            patch_codec: PatchCodec::SearchReplace,
+            patch_codec: PatchCodec::WholeFile,
             bounds: ExecBounds::default(),
+            mutating_verbs: false,
         };
 
         let task_id =
@@ -379,6 +392,7 @@ mod tests {
             cwd,
             patch_codec: PatchCodec::SearchReplace,
             bounds: ExecBounds::default(),
+            mutating_verbs: true,
         };
 
         let id1 = registry.spawn_task(
@@ -497,6 +511,7 @@ mod tests {
             cwd: std::fs::canonicalize(&dir).unwrap(),
             patch_codec: PatchCodec::SearchReplace,
             bounds: ExecBounds::default(),
+            mutating_verbs: true,
         };
 
         let task_id =

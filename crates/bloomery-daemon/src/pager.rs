@@ -22,6 +22,7 @@
 //! Everything here is generic over [`Substrate`], so the whole file is
 //! exercised GPU-free against `FakeSubstrate`.
 
+mod codec_gate;
 mod error;
 mod journal;
 mod paging;
@@ -46,8 +47,9 @@ use error::sub;
 use journal as jrnl;
 use status::bound_by_str;
 
+pub use codec_gate::CodecGateResult;
 pub use error::PagerError;
-pub use status::{AgentInfo, AgentStatus, ModelStatus, StatusReport, TierStatus};
+pub use status::{AgentInfo, AgentStatus, CodecGateStatus, ModelStatus, StatusReport, TierStatus};
 
 /// VRAM held back from the window law for allocator and compute buffers.
 ///
@@ -129,6 +131,15 @@ struct ModelEntry {
     /// model resets both, because it is a new entry.
     provisional_logged: bool,
     unprofiled_logged: bool,
+    /// This model's completed G4 codec-gate verdict (`Pager::set_codec_gate`,
+    /// Task 9's probe driver), or `None` when it has never completed one —
+    /// the state `Pager::model_mutating_verbs` reads as fail-closed
+    /// read-only (protocol §3/§6). Re-registering a model starts a fresh
+    /// entry and so drops any previous gate, matching protocol §6's "restart
+    /// re-measures": a model whose weights changed has not been re-probed
+    /// under the new file, and carrying the old verdict forward would be
+    /// exactly the silent reuse law 5 forbids.
+    codec_gate: Option<codec_gate::CodecGateResult>,
 }
 
 pub struct Pager<S: Substrate> {
@@ -452,6 +463,7 @@ impl<S: Substrate> Pager<S> {
                 handle: None,
                 provisional_logged: false,
                 unprofiled_logged: false,
+                codec_gate: None,
             },
         );
         Ok(())

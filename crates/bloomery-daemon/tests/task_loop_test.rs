@@ -110,6 +110,12 @@ fn fixture(
 }
 
 fn spec(grant: Grant, cwd: PathBuf, max_steps: u32) -> TaskSpec {
+    demoted_spec(grant, cwd, max_steps, true)
+}
+
+/// Like [`spec`], but with an explicit `mutating_verbs` — the gate-G4
+/// demotion tests need `false`.
+fn demoted_spec(grant: Grant, cwd: PathBuf, max_steps: u32, mutating_verbs: bool) -> TaskSpec {
     TaskSpec {
         goal: "exercise the task loop".to_string(),
         grant,
@@ -118,6 +124,7 @@ fn spec(grant: Grant, cwd: PathBuf, max_steps: u32) -> TaskSpec {
         cwd,
         patch_codec: PatchCodec::SearchReplace,
         bounds: bounds(),
+        mutating_verbs,
     }
 }
 
@@ -149,7 +156,12 @@ fn a_read_then_done_task_completes() {
     );
     assert_eq!(result.steps[0].verb, "read");
     assert!(result.steps[0].content.contains("hello"));
+    assert!(
+        !result.steps[0].failed,
+        "a clean read step must not be marked failed"
+    );
     assert_eq!(result.steps[1].verb, "done");
+    assert!(!result.steps[1].failed, "the done step is never failed");
 
     let events = replay(&task_journal_path).unwrap();
     let task_steps = events
@@ -237,7 +249,12 @@ fn a_grant_violation_is_a_failed_step_not_a_task_abort() {
         "expected a grant-violation outcome, got {:?}",
         result.steps[0].outcome
     );
+    assert!(
+        result.steps[0].failed,
+        "a grant-violating step must be marked failed"
+    );
     assert_eq!(result.steps[1].verb, "done");
+    assert!(!result.steps[1].failed, "the done step is never failed");
 }
 
 #[test]
@@ -364,5 +381,146 @@ fn a_find_resolves_against_the_task_cwd_not_the_process_cwd() {
         "expected the match to name the needle file, got {:?}",
         result.steps[0].content
     );
+    assert_eq!(result.steps[1].verb, "done");
+}
+
+/// The pinned refusal outcome (gate G4, Task 7 brief) — Task 9's scoring and
+/// the journal read this exact string.
+const MUTATING_VERB_DEMOTED: &str = "verb unavailable: mutating verbs demoted (gate G4)";
+
+/// Gate G4 structural enforcement (docs/superpowers/evidence/
+/// 2026-08-15-g4-protocol.md §6: "a structural dispatch refusal —
+/// prompting alone is not enforcement"): under a demoted spec
+/// (`mutating_verbs: false`), a `patch` action that would otherwise land is
+/// refused before `execute_action` ever runs — the target file is left
+/// completely untouched, the refused step is recorded with the pinned
+/// outcome and `failed: true`, and the task still completes normally
+/// (a refused verb is a failed step, not a dead task).
+#[test]
+fn a_demoted_spec_refuses_patch_and_leaves_the_file_untouched() {
+    let dir = fresh_dir("demoted-patch");
+    let (sb, g) = sandbox(&dir);
+    let (mut pager, agent_id) = fixture(
+        &dir,
+        1_000_000,
+        vec![
+            scripted(
+                "<action verb=\"patch\" path=\"file.txt\">\n\
+                 <<<<<<< SEARCH\n\
+                 hello\n\
+                 =======\n\
+                 goodbye\n\
+                 >>>>>>> REPLACE\n\
+                 </action>",
+            ),
+            scripted("<action verb=\"done\">\nrefused as expected\n</action>"),
+        ],
+    );
+    let task_journal_path = dir.join("task.jsonl");
+    let mut task_journal = Journal::open(&task_journal_path).unwrap();
+    let spec = demoted_spec(g, sb.clone(), 5, false);
+
+    let result = run_task(&mut pager, &agent_id, &spec, &mut task_journal);
+
+    assert_eq!(
+        result.status,
+        TaskStatus::Done,
+        "a refused verb must not abort the task"
+    );
+    assert_eq!(
+        result.steps.len(),
+        2,
+        "expected [patch (refused), done], got {:?}",
+        result.steps
+    );
+    assert_eq!(result.steps[0].verb, "patch", "must record the real verb");
+    assert!(
+        result.steps[0].failed,
+        "a refused verb must be marked failed"
+    );
+    assert_eq!(result.steps[0].outcome, MUTATING_VERB_DEMOTED);
+    assert_eq!(result.steps[0].content, MUTATING_VERB_DEMOTED);
+    assert_eq!(result.steps[1].verb, "done");
+    assert!(!result.steps[1].failed);
+
+    let on_disk = std::fs::read_to_string(sb.join("file.txt")).unwrap();
+    assert_eq!(
+        on_disk, "hello\nworld\n",
+        "the demoted patch must never touch the file"
+    );
+
+    let events = replay(&task_journal_path).unwrap();
+    let patch_steps: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::TaskStep { verb, outcome, .. } if verb == "patch" => Some(outcome.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        patch_steps,
+        vec![MUTATING_VERB_DEMOTED.to_string()],
+        "the journal must carry the same pinned refusal outcome"
+    );
+}
+
+/// Same gate, the `run` verb: a demoted spec refuses it the same way a
+/// `patch` is refused — real verb recorded, `failed: true`, pinned outcome,
+/// task continues.
+#[test]
+fn a_demoted_spec_refuses_run_the_same_way() {
+    let dir = fresh_dir("demoted-run");
+    let (sb, g) = sandbox(&dir);
+    let (mut pager, agent_id) = fixture(
+        &dir,
+        1_000_000,
+        vec![
+            scripted("<action verb=\"run\">\n[\"echo\", \"hi\"]\n</action>"),
+            scripted("<action verb=\"done\">\nrefused as expected\n</action>"),
+        ],
+    );
+    let task_journal_path = dir.join("task.jsonl");
+    let mut task_journal = Journal::open(&task_journal_path).unwrap();
+    let spec = demoted_spec(g, sb, 5, false);
+
+    let result = run_task(&mut pager, &agent_id, &spec, &mut task_journal);
+
+    assert_eq!(result.status, TaskStatus::Done);
+    assert_eq!(result.steps.len(), 2, "got {:?}", result.steps);
+    assert_eq!(result.steps[0].verb, "run", "must record the real verb");
+    assert!(result.steps[0].failed);
+    assert_eq!(result.steps[0].outcome, MUTATING_VERB_DEMOTED);
+    assert_eq!(result.steps[0].content, MUTATING_VERB_DEMOTED);
+    assert_eq!(result.steps[1].verb, "done");
+}
+
+/// A demoted spec still lets `read` execute normally — the gate only
+/// refuses `patch`/`run`, never the read-only verbs.
+#[test]
+fn a_demoted_spec_still_executes_read_normally() {
+    let dir = fresh_dir("demoted-read");
+    let (sb, g) = sandbox(&dir);
+    let (mut pager, agent_id) = fixture(
+        &dir,
+        1_000_000,
+        vec![
+            scripted("<action verb=\"read\" path=\"file.txt\">\n</action>"),
+            scripted("<action verb=\"done\">\nread it\n</action>"),
+        ],
+    );
+    let task_journal_path = dir.join("task.jsonl");
+    let mut task_journal = Journal::open(&task_journal_path).unwrap();
+    let spec = demoted_spec(g, sb, 5, false);
+
+    let result = run_task(&mut pager, &agent_id, &spec, &mut task_journal);
+
+    assert_eq!(result.status, TaskStatus::Done);
+    assert_eq!(result.steps.len(), 2, "got {:?}", result.steps);
+    assert_eq!(result.steps[0].verb, "read");
+    assert!(
+        !result.steps[0].failed,
+        "a demoted spec must not refuse read"
+    );
+    assert!(result.steps[0].content.contains("hello"));
     assert_eq!(result.steps[1].verb, "done");
 }

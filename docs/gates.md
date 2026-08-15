@@ -48,4 +48,6 @@ Adopted from the spec's provisional values; Task 1's prior-art pass found no fea
 
 **Kill consequence:** the model is demoted to a narrower verb set or refused for mutating roles.
 
+**Protocol (pre-registered 2026-08-15, before the instrument):** fixture set codec-tasks-v1 (N=20; 10 python + 10 plaintext lenses), run through the daemon's own task loop at admission; landing = applies-and-parses scored per docs/superpowers/evidence/2026-08-15-g4-protocol.md §3; decision landed*5 >= n*4 on the point estimate; Wilson 95% recorded, provisional when the interval straddles 0.80; infrastructure aborts yield unmeasured (fail-closed demotion), never a score.
+
 ---
