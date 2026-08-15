@@ -101,8 +101,8 @@ fn vram_term_saturates_instead_of_wrapping_and_ties_favor_training_ctx() {
 /// alongside `weights_bytes` and `overhead_bytes` — placement already
 /// charges it (`Agent::reserved_bytes`), so a window that omitted it was
 /// sized to consume memory it could never actually get. Old code (no
-/// `ctx_overhead_bytes` subtraction) would compute `(1000 - 400) / 1 =
-/// 600` tokens; this fix requires `(1000 - 400 - 100 - 200) / 1 = 300`.
+/// `ctx_overhead_bytes` subtraction) would compute `(1000 - 400 - 100) / 1 =
+/// 500` tokens; this fix requires `(1000 - 400 - 100 - 200) / 1 = 300`.
 #[test]
 fn vram_term_charges_ctx_overhead() {
     let i = GeometryInput {

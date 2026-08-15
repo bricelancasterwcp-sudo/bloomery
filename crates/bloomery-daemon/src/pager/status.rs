@@ -40,14 +40,14 @@ pub struct StatusReport {
     /// host buffers, which the 2026-08-14 natural-pressure run measured at
     /// 304 MiB + 30 MiB against an 896 MiB KV cache.
     pub ctx_overhead_bytes: u64,
-    /// Sum of `weights_bytes` over every model whose weights are currently
-    /// loaded into the substrate — the weights term of the reservation
-    /// budget (`avail = budget − overhead − Σ loaded weights − Σ resident
-    /// reservations`; Task 3 added the weights term, Task 5's live run added
-    /// the other two — see the accounting rule on `Pager::place`). Derived from the loaded
-    /// set on every call rather than tracked as a counter, so `unload_model`
-    /// crediting weights back is just this sum recomputing; `0` when
-    /// nothing is loaded.
+    /// Sum of the effective (declared-clamped) weights charge over every model
+    /// whose weights are currently loaded into the substrate — the weights term
+    /// of the reservation budget (`avail = budget − overhead − Σ loaded weights −
+    /// Σ resident reservations`; Task 3 added the weights term, Task 5's live run
+    /// added the other two — see the accounting rule on `Pager::place`). Derived
+    /// from the loaded set on every call rather than tracked as a counter, so
+    /// `unload_model` crediting weights back is just this sum recomputing; `0`
+    /// when nothing is loaded.
     pub loaded_weights_bytes: u64,
     /// The operator-declared hardware tier every profile here is marked
     /// with. `None` = the daemon was never told one, never a guessed name.

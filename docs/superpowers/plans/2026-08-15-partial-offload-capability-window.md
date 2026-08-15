@@ -138,7 +138,7 @@ impl ModelSpec {
 **Files:**
 - Create: `docs/superpowers/evidence/2026-08-15-27b-offload-derivation.txt` (log excerpt, the ctx_overhead precedent)
 
-- [ ] **Step 1:** Pick a starting `n_gpu_layers` from the GGUF's layer count (read it: `parse_gguf_meta` prints via the daemon boot log, or `llama.cpp`'s loader lines) aiming weights-in-VRAM ≈ 10-11 GiB.
+- [ ] **Step 1:** Pick a starting `n_gpu_layers` from the GGUF's layer count (read it: `parse_gguf_meta` prints via the daemon boot log, or `llama.cpp`'s loader lines) aiming weights-in-VRAM ≈ 10-11 GiB. Confirm llama.cpp's 'offloaded X/N layers to GPU' log line matches the configured n_gpu_layers before trusting the boot (a typo'd config key is silently ignored → full offload → device OOM).
 - [ ] **Step 2:** One scratch boot (`allow_unprofiled = true`, `assay.enabled = false`, `tasks_enabled = false`, scratch data_dir) with the 27B entry in table form; record llama.cpp's buffer-size log lines + `nvidia-smi` delta; kill the boot.
 - [ ] **Step 3:** Declare `weights_vram_mib` with headroom above the observed number; commit the excerpt with the chosen values and the arithmetic.
 
@@ -147,7 +147,7 @@ impl ModelSpec {
 **Files:**
 - Create: `docs/superpowers/evidence/2026-08-15-g4-capability-27b.md` (+ committed journals)
 
-- [ ] **Step 1: Preflight** as Task 5, plus: blob = the 15.65 GiB main GGUF (`sha256-f5f1dd89…`, NOT the 931 MB mmproj); config uses the Task 6 declared values.
+- [ ] **Step 1: Preflight** as Task 5, plus: blob = the 15.65 GiB main GGUF (`sha256-f5f1dd89…`, NOT the 931 MB mmproj); config uses the Task 6 declared values. Confirm llama.cpp's 'offloaded X/N layers to GPU' log line matches the configured n_gpu_layers before trusting the boot (a typo'd config key is silently ignored → full offload → device OOM).
 - [ ] **Step 2: Cost projection before committing the hours** — time the POST + first two fixtures; extrapolate the full probe; if > 2 h, restart the daemon OS-detached (`setsid nohup … &` with a pid file) and watch via a harness-tracked waiter, per the long-run discipline.
 - [ ] **Step 3-5:** Run, score-check, evidence doc (same shape as Task 5; state the partial-offload lens facts: `n_gpu_layers`, declared MiB, the KV-full-charge caveat) — commit.
 

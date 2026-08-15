@@ -111,10 +111,10 @@ Limits after Phase 2a, all known and none hidden:
 * **The per-model weights charge is derived once, then declared with headroom.**
   The `weights_vram_mib` field (spec §2–§5) declares an upper bound on a model's
   VRAM charge; the effective charge is `min(declared, measured_weights_bytes)` —
-  declared absent means the file's full measured weight. The **default** is derived
-  once per model according to spec §5's procedure: (1) Load the model once at the
-  chosen `n_gpu_layers` (a scratch data_dir with `allow_unprofiled` is fine);
-  (2) read llama.cpp's buffer-size log lines and the nvidia-smi delta;
+  declared absent means the file's full measured weight. The declared value is
+  derived once per model according to spec §5's procedure: (1) Load the model once
+  at the chosen `n_gpu_layers` (a scratch data_dir with `allow_unprofiled` is
+  fine); (2) read llama.cpp's buffer-size log lines and the nvidia-smi delta;
   (3) declare `weights_vram_mib` with headroom above the observed number;
   (4) commit the log excerpt as evidence. The **active value is configured, not
   measured per run**, and bloomery never reads it back from the substrate, so a
