@@ -72,3 +72,64 @@ fn multiple_actions_in_one_turn_is_a_single_named_error() {
         ActionError::MultipleActions { found: 2 }
     ));
 }
+
+/// Splits `card` (the verb card's full text, which interleaves prose and
+/// exactly one `<action>...</action>` block per verb) into its individual
+/// `<action>...</action>` blocks, in order. Local to this test file: the
+/// card is our own controlled text with no nested `<action` occurrences in
+/// any example's body, so a plain non-nesting scan (unlike the real
+/// envelope scanner, which must handle untrusted, possibly-nested model
+/// output) is enough to isolate each example for re-parsing on its own.
+fn extract_action_blocks(card: &str) -> Vec<&str> {
+    const OPEN: &str = "<action";
+    const CLOSE: &str = "</action>";
+
+    let mut blocks = Vec::new();
+    let mut pos = 0usize;
+    while let Some(open_rel) = card[pos..].find(OPEN) {
+        let open_start = pos + open_rel;
+        let Some(close_rel) = card[open_start..].find(CLOSE) else {
+            break;
+        };
+        let close_end = open_start + close_rel + CLOSE.len();
+        blocks.push(&card[open_start..close_end]);
+        pos = close_end;
+    }
+    blocks
+}
+
+#[test]
+fn card_examples_parse_under_their_codec() {
+    for codec in [PatchCodec::SearchReplace, PatchCodec::WholeFile] {
+        let card = verb_card(codec);
+        let blocks = extract_action_blocks(&card);
+        assert_eq!(
+            blocks.len(),
+            5,
+            "expected exactly 5 <action> examples in the {codec:?} card, found {}: {blocks:?}",
+            blocks.len()
+        );
+
+        let verbs: Vec<&'static str> = blocks
+            .iter()
+            .map(|block| {
+                let action = parse_action_with_codec(block, codec).unwrap_or_else(|e| {
+                    panic!("card example failed to parse under {codec:?}: {e:?}\nblock:\n{block}")
+                });
+                match action {
+                    Action::Read { .. } => "read",
+                    Action::Find { .. } => "find",
+                    Action::Patch { .. } => "patch",
+                    Action::Run { .. } => "run",
+                    Action::Done { .. } => "done",
+                }
+            })
+            .collect();
+
+        assert_eq!(
+            verbs,
+            vec!["read", "find", "patch", "run", "done"],
+            "card examples for {codec:?} changed verb or order"
+        );
+    }
+}

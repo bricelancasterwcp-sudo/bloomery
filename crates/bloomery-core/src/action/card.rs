@@ -41,10 +41,10 @@ pub fn verb_card(patch_codec: PatchCodec) -> String {
     format!(
         r#"# Action verbs
 
-Exactly one action per turn: a single `<action verb="..." ...>...</action>`
-block, nothing more. Narration before it is fine; a second action block in
-the same turn is a single MultipleActions error (not applied piecemeal), and
-no action block at all is NoAction.
+Exactly one action per turn: exactly one action block from the five below,
+nothing more. Narration before it is fine; a second action block in the same
+turn is a single MultipleActions error (not applied piecemeal), and no
+action block at all is NoAction.
 
 ## read — read a file, optionally a line range
 <action verb="read" path="src/lib.rs" lines="1-40">
