@@ -8,6 +8,7 @@
 
 use bloomery_core::geometry::BoundBy;
 
+use super::codec_gate;
 use crate::agents::AgentState;
 
 /// What [`crate::pager::Pager::create_agent`] hands back: the id to use, the
@@ -102,6 +103,33 @@ pub struct ModelStatus {
     pub profiled: bool,
     pub kv_per_token: u64,
     pub training_ctx: u32,
+    /// The patch codec tasks on this model actually run under (protocol
+    /// §4) — `"search_replace"` or `"whole_file"`. Always populated: an
+    /// unprofiled model still has a codec, the default.
+    pub patch_codec: &'static str,
+    /// The enforced value of [`crate::pager::Pager::model_mutating_verbs`]
+    /// — protocol §3/§6's fail-closed gate. `false` for an unmeasured
+    /// model, exactly like [`ModelStatus::codec_gate`] being `None`.
+    pub mutating_verbs: bool,
+    /// This model's stored G4 gate, or `None` when it has never completed
+    /// one. `None` renders as JSON `null` — never a confident zero — so a
+    /// reader can tell "measured 0/20" from "never measured" at a glance.
+    pub codec_gate: Option<CodecGateStatus>,
+}
+
+/// One model's stored G4 gate, as `/status` renders it (protocol §5).
+/// `mutating_verbs` is deliberately not repeated here — it already lives on
+/// [`ModelStatus::mutating_verbs`], the one enforced value, and copying it
+/// onto this struct too would be two numbers the wire format promises agree
+/// but nothing enforces.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CodecGateStatus {
+    pub fixture_set: String,
+    pub codec: &'static str,
+    pub landed: u32,
+    pub n: u32,
+    pub interval95: [f64; 2],
+    pub provisional: bool,
 }
 
 /// Stable wire spelling for the binding term of the window law.
@@ -159,6 +187,18 @@ impl<S: bloomery_substrate::Substrate> crate::pager::Pager<S> {
                 profiled: m.profile.is_some(),
                 kv_per_token: m.kv_per_token,
                 training_ctx: m.meta.training_ctx,
+                patch_codec: codec_gate::patch_codec_str(codec_gate::resolve_patch_codec(
+                    m.profile.as_ref(),
+                )),
+                mutating_verbs: codec_gate::resolve_mutating_verbs(m.codec_gate.as_ref()),
+                codec_gate: m.codec_gate.as_ref().map(|g| CodecGateStatus {
+                    fixture_set: g.fixture_set.clone(),
+                    codec: codec_gate::patch_codec_str(g.codec),
+                    landed: g.landed,
+                    n: g.n,
+                    interval95: [g.interval95.0, g.interval95.1],
+                    provisional: g.provisional,
+                }),
             })
             .collect();
         models.sort_by(|x, y| x.name.cmp(&y.name));

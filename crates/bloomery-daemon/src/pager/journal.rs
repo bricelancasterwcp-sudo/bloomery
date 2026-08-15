@@ -209,3 +209,64 @@ pub(crate) fn post(
         },
     )
 }
+
+/// One G4 fixture run outcome (protocol §2/§3, `codec_gate::CodecGateResult`'s
+/// per-fixture evidence). `codec` is already the wire spelling
+/// (`"search_replace"`/`"whole_file"`) — callers convert once via
+/// `codec_gate::patch_codec_str` rather than this module knowing about
+/// [`bloomery_core::action::PatchCodec`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn codec_fixture(
+    j: &mut Journal,
+    model: &str,
+    fixture_set: &str,
+    fixture: &str,
+    codec: &str,
+    landed: bool,
+    steps: u32,
+    detail: &str,
+) -> Result<(), PagerError> {
+    append(
+        j,
+        &Event::CodecFixture {
+            model: model.to_string(),
+            fixture_set: fixture_set.to_string(),
+            fixture: fixture.to_string(),
+            codec: codec.to_string(),
+            landed,
+            steps,
+            detail: detail.to_string(),
+        },
+    )
+}
+
+/// The per-model G4 verdict (protocol §5), emitted exactly once per
+/// completed probe — never for an aborted one, per protocol §3.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn codec_verdict(
+    j: &mut Journal,
+    model: &str,
+    fixture_set: &str,
+    codec: &str,
+    landed: u32,
+    n: u32,
+    interval95: (f64, f64),
+    provisional: bool,
+    mutating_verbs: bool,
+    detail: &str,
+) -> Result<(), PagerError> {
+    append(
+        j,
+        &Event::CodecVerdict {
+            model: model.to_string(),
+            fixture_set: fixture_set.to_string(),
+            codec: codec.to_string(),
+            landed,
+            n,
+            interval95: [interval95.0, interval95.1],
+            provisional,
+            mutating_verbs,
+            detail: detail.to_string(),
+        },
+    )
+}
