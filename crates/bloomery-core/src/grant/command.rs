@@ -6,10 +6,13 @@ use super::GrantViolation;
 /// of granted command prefixes.
 ///
 /// `argv` is allowed iff some granted prefix `p` satisfies:
-/// `argv.len() >= p.len() && argv[..p.len()] == p[..]`
+/// `argv.starts_with(p)` (element-wise prefix match).
 ///
 /// An empty `argv` is rejected with `CommandNotAllowed`. No granted prefix
 /// match is also rejected with `CommandNotAllowed{argv}`.
+///
+/// **Invariant**: All prefixes are non-empty; this is enforced by
+/// [`Grant::from_json`](super::Grant::from_json) at construction time.
 pub fn check_command(prefixes: &[Vec<String>], argv: &[String]) -> Result<(), GrantViolation> {
     // Empty argv is always rejected.
     if argv.is_empty() {
@@ -18,7 +21,7 @@ pub fn check_command(prefixes: &[Vec<String>], argv: &[String]) -> Result<(), Gr
 
     // Check if any prefix matches.
     for prefix in prefixes {
-        if argv.len() >= prefix.len() && argv[..prefix.len()] == prefix[..] {
+        if argv.starts_with(prefix) {
             return Ok(());
         }
     }
