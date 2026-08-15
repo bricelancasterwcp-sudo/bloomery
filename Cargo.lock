@@ -77,6 +77,8 @@ dependencies = [
  "bloomery-core",
  "bloomery-daemon",
  "bloomery-substrate",
+ "libc",
+ "regex",
  "serde",
  "serde_json",
  "sha2",

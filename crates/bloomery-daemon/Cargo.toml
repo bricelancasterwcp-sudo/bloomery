@@ -24,6 +24,15 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 sha2 = { workspace = true }
+# Recompiled by the task executors (bloomery_core::action validates a
+# `find` pattern at parse time, but exec.rs is standalone per the P3 Task 1
+# brief, so it compiles the regex again rather than trusting a caller).
+regex = { workspace = true }
+# libc::O_NOFOLLOW for the task executors' grant-bounded file opens (see
+# task/exec.rs). Already transitive via llama-cpp-sys-2; declared direct
+# because hardcoding the syscall flag's numeric value would be exactly the
+# magic-number this project forbids.
+libc = { workspace = true }
 
 [dev-dependencies]
 # Self-dependency trick: integration test binaries under `tests/` link this
