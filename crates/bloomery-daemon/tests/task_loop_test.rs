@@ -1,0 +1,294 @@
+//! The task loop's five binding tests (Phase 2b/2c P3 Task 4 brief).
+//!
+//! Mirrors `task_exec_read_find_test.rs`'s real-sandbox pattern (a real
+//! tempdir, a real `Grant` scoped to it) layered on `pager_test.rs`'s
+//! `Pager<FakeSubstrate>` fixture pattern: a fresh pager per test, one
+//! registered model, one created agent, and scripted `<action>`-shaped
+//! turns fed through `FakeSubstrate`'s FIFO reply queue — the model's
+//! output is entirely pre-canned, so every test is deterministic and
+//! GPU-free.
+
+use bloomery_core::action::PatchCodec;
+use bloomery_core::gguf::GgufMeta;
+use bloomery_core::grant::Grant;
+use bloomery_core::journal::{replay, Event, Journal};
+use bloomery_daemon::agents::ImageStore;
+use bloomery_daemon::pager::Pager;
+use bloomery_daemon::task::{run_task, ExecBounds, TaskSpec, TaskStatus};
+use bloomery_substrate::fake::FakeSubstrate;
+use bloomery_substrate::Reply;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+fn bounds() -> ExecBounds {
+    ExecBounds {
+        read_cap_bytes: 256 * 1024,
+        find_result_cap: 100,
+        run_output_cap_bytes: 64 * 1024,
+        run_timeout_secs: 120,
+    }
+}
+
+fn meta() -> GgufMeta {
+    GgufMeta {
+        arch: "qwen2".into(),
+        layers: 4,
+        kv_heads: 2,
+        head_dim: 32,
+        // Generous: the window law's `TrainingCtx` term must never be what
+        // an ordinary (non-budget) test refuses on — only the
+        // budget-exhaustion test is meant to refuse, and it refuses on
+        // `Budget`, checked before the window gate.
+        training_ctx: 65536,
+        weights_bytes: 1000,
+    }
+}
+
+fn scripted(text: &str) -> Reply {
+    Reply {
+        text: text.to_string(),
+        prompt_tokens: Some(8),
+        completion_tokens: Some(4),
+        duration_ms: 1,
+    }
+}
+
+/// A fresh, per-test tempdir — PID + atomic counter, so parallel test
+/// threads in one `cargo test` process never collide.
+fn fresh_dir(tag: &str) -> PathBuf {
+    static UNIQUE: AtomicU64 = AtomicU64::new(0);
+    let unique = UNIQUE.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "bloomery-taskloop-{tag}-{}-{unique}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// Builds `<dir>/sandbox` containing `file.txt` ("hello\nworld\n") and a
+/// `Grant` scoped to exactly that directory for both read and write —
+/// mirroring `task_exec_read_find_test.rs::sandbox`.
+fn sandbox(dir: &std::path::Path) -> (PathBuf, Grant) {
+    let sb = dir.join("sandbox");
+    std::fs::create_dir_all(&sb).unwrap();
+    std::fs::write(sb.join("file.txt"), "hello\nworld\n").unwrap();
+    let sb = std::fs::canonicalize(&sb).unwrap();
+    let g = Grant::from_json(&format!(
+        r#"{{"read_roots":["{s}"],"write_roots":["{s}"],"commands":[]}}"#,
+        s = sb.display()
+    ))
+    .unwrap();
+    (sb, g)
+}
+
+/// Builds a `Pager<FakeSubstrate>` with one registered model, `replies`
+/// scripted in FIFO order, and one created agent with `budget_tokens` as
+/// its pager-level budget. Returns the pager and the new agent's id;
+/// `dir` is the caller's scratch dir (also where `sandbox` and the task's
+/// own journal live).
+fn fixture(
+    dir: &std::path::Path,
+    budget_tokens: u64,
+    replies: Vec<Reply>,
+) -> (Pager<FakeSubstrate>, String) {
+    let journal = Journal::open(&dir.join("pager.jsonl")).unwrap();
+    let images = ImageStore::new(&dir.join("img")).unwrap();
+    let mut fake = FakeSubstrate::new();
+    for r in replies {
+        fake.script_reply(r);
+    }
+    let mut pager = Pager::new(fake, journal, images, Box::new(|| Some(1024 * 1024 * 1024)));
+    let gguf = dir.join("m.gguf");
+    std::fs::write(&gguf, b"fake weights").unwrap();
+    pager.register_model("m", &gguf, meta(), None).unwrap();
+    let info = pager.create_agent("m", 100, None, budget_tokens).unwrap();
+    (pager, info.id)
+}
+
+fn spec(grant: Grant, cwd: PathBuf, max_steps: u32) -> TaskSpec {
+    TaskSpec {
+        goal: "exercise the task loop".to_string(),
+        grant,
+        budget_tokens: 1_000_000,
+        max_steps,
+        cwd,
+        patch_codec: PatchCodec::SearchReplace,
+        bounds: bounds(),
+    }
+}
+
+#[test]
+fn a_read_then_done_task_completes() {
+    let dir = fresh_dir("read-done");
+    let (sb, g) = sandbox(&dir);
+    let (mut pager, agent_id) = fixture(
+        &dir,
+        1_000_000,
+        vec![
+            scripted("<action verb=\"read\" path=\"file.txt\">\n</action>"),
+            scripted("<action verb=\"done\">\nread it\n</action>"),
+        ],
+    );
+    let task_journal_path = dir.join("task.jsonl");
+    let mut task_journal = Journal::open(&task_journal_path).unwrap();
+    let spec = spec(g, sb, 5);
+
+    let result = run_task(&mut pager, &agent_id, &spec, &mut task_journal);
+
+    assert_eq!(result.status, TaskStatus::Done);
+    assert_eq!(result.summary.as_deref(), Some("read it"));
+    assert_eq!(
+        result.steps.len(),
+        2,
+        "expected [read, done], got {:?}",
+        result.steps
+    );
+    assert_eq!(result.steps[0].verb, "read");
+    assert!(result.steps[0].content.contains("hello"));
+    assert_eq!(result.steps[1].verb, "done");
+
+    let events = replay(&task_journal_path).unwrap();
+    let task_steps = events
+        .iter()
+        .filter(|e| matches!(e, Event::TaskStep { .. }))
+        .count();
+    assert_eq!(task_steps, 2, "journal has 2 TaskStep events");
+}
+
+#[test]
+fn an_unparseable_turn_is_re_asked_then_the_step_fails() {
+    let dir = fresh_dir("reask");
+    let (sb, g) = sandbox(&dir);
+    let (mut pager, agent_id) = fixture(
+        &dir,
+        1_000_000,
+        vec![
+            scripted("garbage turn one, no action block at all"),
+            scripted("garbage turn two, still nothing"),
+            scripted("garbage turn three, nope"),
+            scripted("<action verb=\"done\">\nfinally\n</action>"),
+        ],
+    );
+    let task_journal_path = dir.join("task.jsonl");
+    let mut task_journal = Journal::open(&task_journal_path).unwrap();
+    let spec = spec(g, sb, 5);
+
+    let result = run_task(&mut pager, &agent_id, &spec, &mut task_journal);
+
+    assert_eq!(result.status, TaskStatus::Done);
+    let failed_step = result
+        .steps
+        .iter()
+        .find(|s| s.outcome == "unparseable after 2 re-asks");
+    assert!(
+        failed_step.is_some(),
+        "expected an 'unparseable after 2 re-asks' step, got {:?}",
+        result.steps
+    );
+    assert_eq!(result.steps.last().unwrap().verb, "done");
+
+    let events = replay(&task_journal_path).unwrap();
+    let question_mark_steps = events
+        .iter()
+        .filter(|e| matches!(e, Event::TaskStep { verb, .. } if verb == "?"))
+        .count();
+    assert!(
+        question_mark_steps >= 1,
+        "expected at least one '?' TaskStep journaled for the re-asked step"
+    );
+    let done_steps = events
+        .iter()
+        .filter(|e| matches!(e, Event::TaskStep { verb, .. } if verb == "done"))
+        .count();
+    assert_eq!(done_steps, 1, "the eventual done turn is still journaled");
+}
+
+#[test]
+fn a_grant_violation_is_a_failed_step_not_a_task_abort() {
+    let dir = fresh_dir("grant-violation");
+    let (sb, g) = sandbox(&dir);
+    let (mut pager, agent_id) = fixture(
+        &dir,
+        1_000_000,
+        vec![
+            scripted("<action verb=\"read\" path=\"/etc/passwd\">\n</action>"),
+            scripted("<action verb=\"done\">\nnoted the violation\n</action>"),
+        ],
+    );
+    let task_journal_path = dir.join("task.jsonl");
+    let mut task_journal = Journal::open(&task_journal_path).unwrap();
+    let spec = spec(g, sb, 5);
+
+    let result = run_task(&mut pager, &agent_id, &spec, &mut task_journal);
+
+    assert_eq!(
+        result.status,
+        TaskStatus::Done,
+        "a grant violation must not abort the task"
+    );
+    assert_eq!(result.steps.len(), 2);
+    assert_eq!(result.steps[0].verb, "read");
+    assert!(
+        result.steps[0].outcome.contains("grant violation"),
+        "expected a grant-violation outcome, got {:?}",
+        result.steps[0].outcome
+    );
+    assert_eq!(result.steps[1].verb, "done");
+}
+
+#[test]
+fn max_steps_terminates_the_task() {
+    let dir = fresh_dir("max-steps");
+    let (sb, g) = sandbox(&dir);
+    let (mut pager, agent_id) = fixture(
+        &dir,
+        1_000_000,
+        vec![
+            scripted("<action verb=\"read\" path=\"file.txt\">\n</action>"),
+            scripted("<action verb=\"read\" path=\"file.txt\">\n</action>"),
+            scripted("<action verb=\"read\" path=\"file.txt\">\n</action>"),
+        ],
+    );
+    let task_journal_path = dir.join("task.jsonl");
+    let mut task_journal = Journal::open(&task_journal_path).unwrap();
+    let spec = spec(g, sb, 3);
+
+    let result = run_task(&mut pager, &agent_id, &spec, &mut task_journal);
+
+    assert_eq!(result.status, TaskStatus::StepsExhausted);
+    assert_eq!(result.steps.len(), 3);
+    assert!(result.steps.iter().all(|s| s.verb == "read"));
+
+    let events = replay(&task_journal_path).unwrap();
+    let task_steps = events
+        .iter()
+        .filter(|e| matches!(e, Event::TaskStep { .. }))
+        .count();
+    assert_eq!(task_steps, 3, "exactly 3 steps journaled");
+}
+
+#[test]
+fn budget_exhaustion_ends_the_task() {
+    let dir = fresh_dir("budget");
+    let (sb, g) = sandbox(&dir);
+    // Zero budget: the very first `pager.infer` refuses on `Budget` before
+    // ever touching the substrate, so no replies need to be scripted.
+    let (mut pager, agent_id) = fixture(&dir, 0, vec![]);
+    let task_journal_path = dir.join("task.jsonl");
+    let mut task_journal = Journal::open(&task_journal_path).unwrap();
+    let spec = spec(g, sb, 5);
+
+    let result = run_task(&mut pager, &agent_id, &spec, &mut task_journal);
+
+    assert_eq!(result.status, TaskStatus::BudgetExhausted);
+    assert!(result.steps.is_empty());
+
+    let events = replay(&task_journal_path).unwrap();
+    let task_steps = events
+        .iter()
+        .filter(|e| matches!(e, Event::TaskStep { .. }))
+        .count();
+    assert_eq!(task_steps, 0, "nothing executed, nothing journaled");
+}

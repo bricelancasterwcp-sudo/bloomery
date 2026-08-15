@@ -15,9 +15,11 @@ pub mod exec;
 pub mod exec_run;
 pub mod lens_py;
 mod run_capture;
+pub mod task_loop;
 
 pub use exec::{exec_find, exec_patch, exec_read};
 pub use exec_run::exec_run;
+pub use task_loop::{run_task, TaskResult, TaskSpec, TaskStatus, TaskStepRecord};
 
 /// The result of executing one action: what to feed back to the model, and
 /// a short outcome tag for the `TaskStep` journal entry.
