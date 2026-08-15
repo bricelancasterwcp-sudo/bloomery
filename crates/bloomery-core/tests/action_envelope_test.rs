@@ -45,3 +45,48 @@ fn a_block_without_verb_attr_is_named() {
         })
     );
 }
+
+/// Adversarial (binding, from code review finding #1 — Critical): the
+/// grammar permits `>` inside a quoted attribute value. A naive "first `>`
+/// closes the tag" scan would cut the tag off inside the `pattern` value's
+/// `Result<T>`, silently losing the `path` attr and leaving the rest of the
+/// tag text as leftover "body" — with no error raised. The scanner must be
+/// quote-aware so a `>` (or `->`) inside a quoted value doesn't end the tag.
+#[test]
+fn quoted_attr_value_containing_angle_brackets_does_not_truncate_the_tag() {
+    let turn =
+        "<action verb=\"find\" pattern=\"fn \\w+\\(.*\\) -> Result<T>\" path=\"src/lib.rs\"></action>";
+    let raw = scan_envelope(turn).unwrap();
+    assert_eq!(raw.verb, "find");
+    assert_eq!(
+        raw.attrs.get("pattern").map(String::as_str),
+        Some("fn \\w+\\(.*\\) -> Result<T>")
+    );
+    assert_eq!(
+        raw.attrs.get("path").map(String::as_str),
+        Some("src/lib.rs")
+    );
+    assert_eq!(raw.body, "");
+}
+
+/// Adversarial (binding, from code review finding #2a — Important): a
+/// patch body can legitimately contain the literal text of an `<action>`
+/// tag (e.g. editing a file that itself defines this grammar). A naive
+/// substring count of `<action` over the whole turn would misreport this
+/// as two blocks. The nested tag is body content of the one real top-level
+/// block, not a sibling — it must parse as a single Patch action with the
+/// nested text preserved verbatim in the body.
+#[test]
+fn nested_action_text_inside_a_body_is_not_multiple_actions() {
+    let turn = "<action verb=\"patch\" path=\"p\">\nbefore\n<action verb=\"x\">nested</action>\nafter\n</action>";
+    let raw = scan_envelope(turn).unwrap();
+    assert_eq!(raw.verb, "patch");
+    assert_eq!(
+        raw.body,
+        "before\n<action verb=\"x\">nested</action>\nafter"
+    );
+}
+
+// Adversarial case 2b ("two genuine top-level blocks still report
+// MultipleActions{found:2}") is already covered verbatim above by
+// `two_blocks_is_multiple_actions` — no separate test needed.

@@ -3,6 +3,11 @@
 //! validation and attribute-specific parsing (ranges, regexes, argv, patch
 //! bodies) are later P1 tasks' job — this module only implements the
 //! envelope grammar itself.
+//!
+//! The turn is untrusted model output, so the scanner is written to be
+//! robust against grammar-legal content that a naive substring scan would
+//! misparse: a `>` inside a quoted attribute value, and a `<action` that
+//! merely *appears* inside another block's body text.
 
 use super::ActionError;
 use regex::Regex;
@@ -21,49 +26,142 @@ pub struct RawAction {
     pub body: String,
 }
 
+/// One `<action>` block's byte spans within the turn, located by
+/// [`scan_top_level_blocks`].
+struct BlockSpan {
+    attrs_start: usize,
+    tag_close: usize,
+    body_start: usize,
+    close_start: usize,
+}
+
 /// Scans a model turn for exactly one `<action ...>...</action>` block.
 ///
 /// Envelope grammar: the block opens with `<action` followed by
 /// whitespace-separated `key="value"` attrs (double-quoted; a value may
-/// contain anything but `"`) and a `>`, then arbitrary body bytes, then
-/// `</action>`. Attributes parse into `attrs`; `verb` is the mandatory
-/// `verb="…"` attr lifted out of that map into its own field. Prose outside
-/// the block is ignored. Zero blocks is [`ActionError::NoAction`]; two or
-/// more opening `<action` tags is [`ActionError::MultipleActions`].
+/// contain anything but `"` — including `>`) and a `>`, then arbitrary body
+/// bytes, then `</action>`. Attributes parse into `attrs`; `verb` is the
+/// mandatory `verb="…"` attr lifted out of that map into its own field.
+/// Prose outside the block is ignored. Zero well-formed top-level blocks is
+/// [`ActionError::NoAction`]; two or more is [`ActionError::MultipleActions`].
+///
+/// "Top-level" excludes a `<action` that merely appears as literal text
+/// inside another block's body (e.g. a patch touching a file that mentions
+/// the tag, or a done-summary quoting it) — only tags outside every
+/// already-open block's body count toward the multiple-blocks check.
 pub fn scan_envelope(turn: &str) -> Result<RawAction, ActionError> {
-    let found = turn.matches(OPEN_TAG).count();
-    if found == 0 {
-        return Err(ActionError::NoAction);
+    let blocks = scan_top_level_blocks(turn);
+
+    match blocks.len() {
+        0 => Err(ActionError::NoAction),
+        1 => {
+            let block = &blocks[0];
+            let mut attrs = parse_attrs(&turn[block.attrs_start..block.tag_close]);
+            let verb = attrs.remove("verb").ok_or(ActionError::MissingAttr {
+                verb: "action",
+                attr: "verb",
+            })?;
+            let body =
+                trim_one_framing_newline(&turn[block.body_start..block.close_start]).to_string();
+            Ok(RawAction { verb, attrs, body })
+        }
+        found => Err(ActionError::MultipleActions { found }),
     }
-    if found >= 2 {
-        return Err(ActionError::MultipleActions { found });
+}
+
+/// Walks the turn left to right, identifying every well-formed top-level
+/// `<action>...</action>` block: each block's opening tag is closed with a
+/// quote-aware scan (so a `>` inside a quoted attr value doesn't end the
+/// tag early), and its body is scanned for the *matching* `</action>` via
+/// nesting depth (so a literal `<action>...</action>` embedded in the body
+/// doesn't end the block early either). Scanning resumes strictly after
+/// each found block's `</action>`, so nested tags are never recounted as
+/// siblings.
+///
+/// A `<action` that never resolves to a well-formed block (no unquoted `>`
+/// to close the opening tag, or no matching `</action>`) stops the scan at
+/// that point — the malformed remainder is treated as ordinary trailing
+/// prose rather than surfacing a new error variant, matching this task's
+/// documented NoAction-fallback rule.
+fn scan_top_level_blocks(turn: &str) -> Vec<BlockSpan> {
+    let mut blocks = Vec::new();
+    let mut pos = 0usize;
+
+    while let Some(open_rel) = turn[pos..].find(OPEN_TAG) {
+        let open_start = pos + open_rel;
+        let attrs_start = open_start + OPEN_TAG.len();
+
+        let Some(tag_close_rel) = find_unquoted_gt(&turn[attrs_start..]) else {
+            break;
+        };
+        let tag_close = attrs_start + tag_close_rel;
+        let body_start = tag_close + 1;
+
+        let Some(close_rel) = find_matching_close(&turn[body_start..]) else {
+            break;
+        };
+        let close_start = body_start + close_rel;
+
+        blocks.push(BlockSpan {
+            attrs_start,
+            tag_close,
+            body_start,
+            close_start,
+        });
+        pos = close_start + CLOSE_TAG.len();
     }
 
-    // Exactly one `<action` in the turn from here on, so any malformed
-    // structure (no closing `>`, no `</action>`) means the turn doesn't
-    // actually contain a well-formed block — treat that the same as no
-    // block found rather than inventing an unspecified error variant.
-    let open_start = turn.find(OPEN_TAG).ok_or(ActionError::NoAction)?;
-    let attrs_start = open_start + OPEN_TAG.len();
-    let tag_close = turn[attrs_start..]
-        .find('>')
-        .map(|offset| attrs_start + offset)
-        .ok_or(ActionError::NoAction)?;
+    blocks
+}
 
-    let body_start = tag_close + 1;
-    let close_start = turn[body_start..]
-        .find(CLOSE_TAG)
-        .map(|offset| body_start + offset)
-        .ok_or(ActionError::NoAction)?;
+/// Finds the offset of the `>` that closes an opening tag's attribute list,
+/// treating any `>` seen while inside a double-quoted attribute value as
+/// ordinary text (the grammar permits anything but `"` inside a quoted
+/// value). Returns the offset of the first `>` seen while not inside
+/// quotes. A malformed tail with an odd number of `"` before the true close
+/// can, in principle, misread a later `>` — an accepted limitation for
+/// grammar-illegal input, since the grammar guarantees balanced quotes.
+fn find_unquoted_gt(text: &str) -> Option<usize> {
+    let mut in_quotes = false;
+    for (i, ch) in text.char_indices() {
+        match ch {
+            '"' => in_quotes = !in_quotes,
+            '>' if !in_quotes => return Some(i),
+            _ => {}
+        }
+    }
+    None
+}
 
-    let mut attrs = parse_attrs(&turn[attrs_start..tag_close]);
-    let verb = attrs.remove("verb").ok_or(ActionError::MissingAttr {
-        verb: "action",
-        attr: "verb",
-    })?;
-    let body = trim_one_framing_newline(&turn[body_start..close_start]).to_string();
-
-    Ok(RawAction { verb, attrs, body })
+/// Given `text` starting immediately after an opening tag's `>`, finds the
+/// byte offset of the `</action>` that matches that opening tag. Any
+/// literal `<action` / `</action>` pair fully contained in the body is
+/// nesting depth, not the block's own close: depth starts at 1 (already
+/// inside the outer block); each further `<action` bumps it, each
+/// `</action>` drops it, and the `</action>` that brings depth back to 0 is
+/// the match. Returns `None` if the depth never returns to 0 (unbalanced).
+fn find_matching_close(text: &str) -> Option<usize> {
+    let mut depth = 1i32;
+    let mut pos = 0usize;
+    loop {
+        let next_open = text[pos..].find(OPEN_TAG);
+        let next_close = text[pos..].find(CLOSE_TAG);
+        match (next_open, next_close) {
+            (Some(o), Some(c)) if o < c => {
+                depth += 1;
+                pos += o + OPEN_TAG.len();
+            }
+            (_, Some(c)) => {
+                let close_abs = pos + c;
+                depth -= 1;
+                if depth == 0 {
+                    return Some(close_abs);
+                }
+                pos = close_abs + CLOSE_TAG.len();
+            }
+            _ => return None,
+        }
+    }
 }
 
 /// Parses whitespace-separated `key="value"` pairs (value may contain
