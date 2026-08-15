@@ -30,7 +30,14 @@
 //!   [`ProbeAborted`]. No `CodecVerdict` is journaled, no gate is stored, no
 //!   partial score is spliced. The model stays **unmeasured**, which reads
 //!   fail-closed at dispatch (`Pager::model_mutating_verbs`) and is never a
-//!   confident zero.
+//!   confident zero. **Amendment 1 (§9, 2026-08-15)** carves out exactly one
+//!   exception: a mid-task `PagerError::PromptTooLarge` from `infer` — the
+//!   model's measured context window filling before it finished — is a
+//!   **scored** terminal (`TaskStatus::WindowExhausted`), joining
+//!   `Done`/`StepsExhausted`/`BudgetExhausted` in [`run_one_fixture`]'s
+//!   scored arm, because it is the same shape as `BudgetExhausted`: an
+//!   envelope-bounded resource ran out, not the substrate. Every other
+//!   `infer` failure still aborts as `Error`.
 //! - **The point estimate decides (§5).** `gate_decision`'s integer form has
 //!   no float edge; the Wilson interval is recorded with every verdict and
 //!   `is_provisional` marks a straddling one, but never changes it.
@@ -314,9 +321,20 @@ fn run_one_fixture<S: Substrate + Send + 'static>(
     };
 
     match result.status {
-        // Protocol §3: all three terminal outcomes are scored.
-        TaskStatus::Done | TaskStatus::StepsExhausted | TaskStatus::BudgetExhausted => {}
-        // `Error` is §3's infrastructure abort. `Running` is unreachable from
+        // Protocol §3, as amended by §9 (Amendment 1, 2026-08-15): all four
+        // terminal outcomes are scored. `WindowExhausted` — a mid-fixture
+        // `PagerError::PromptTooLarge` — joined this arm by amendment: the
+        // model exhausted a measured, envelope-bounded resource (its
+        // context window) without landing, exactly the shape
+        // `BudgetExhausted` already scores; it is not an infrastructure
+        // failure.
+        TaskStatus::Done
+        | TaskStatus::StepsExhausted
+        | TaskStatus::BudgetExhausted
+        | TaskStatus::WindowExhausted => {}
+        // `Error` is §3's infrastructure abort — ONLY a substrate fault,
+        // journal failure, or agent-creation refusal, never a window
+        // exhaustion since Amendment 1. `Running` is unreachable from
         // `run_task`, and is treated the same way rather than scored: an
         // unfinished task has no honest score.
         TaskStatus::Error | TaskStatus::Running => {

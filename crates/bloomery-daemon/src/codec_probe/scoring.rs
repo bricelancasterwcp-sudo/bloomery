@@ -105,12 +105,18 @@ pub(crate) fn fixture_detail(result: &TaskResult) -> String {
 /// produces no `CodecFixture` event at all (protocol §3) — but the match is
 /// exhaustive rather than defaulted so adding a `TaskStatus` variant is a
 /// compile error here instead of a silent fallthrough.
+///
+/// `WindowExhausted` (protocol §9, Amendment 1) is the fallback detail for a
+/// fixture that exhausted its window before ever taking a patch step — the
+/// invariant-2 shape `codec_probe_test.rs::window_exhausted_is_scored_not_
+/// aborted` pins.
 fn terminal_status_str(status: &TaskStatus) -> &'static str {
     match status {
         TaskStatus::Running => "Running",
         TaskStatus::Done => "Done",
         TaskStatus::BudgetExhausted => "BudgetExhausted",
         TaskStatus::StepsExhausted => "StepsExhausted",
+        TaskStatus::WindowExhausted => "WindowExhausted",
         TaskStatus::Error => "Error",
     }
 }

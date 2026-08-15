@@ -679,6 +679,128 @@ fn budget_exhausted_is_scored_not_aborted() {
     drop(p);
 }
 
+/// Amendment 1 (docs/superpowers/evidence/2026-08-15-g4-protocol.md §9): a
+/// mid-fixture window exhaustion (`PagerError::PromptTooLarge`, mapped by
+/// `run_task` to `TaskStatus::WindowExhausted`) is SCORED by the same §3 arm
+/// as `Done`/`StepsExhausted`/`BudgetExhausted` — never an abort. Sits in
+/// `run_one_fixture`'s status match beside `budget_exhausted_is_scored_
+/// not_aborted` above, for the same "a mutation moving this into the abort
+/// arm survives unnoticed" reason.
+///
+/// Fixture 1 (t1-alpha)'s target file is padded to ~4000 bytes so a single
+/// `read` observation, folded into the transcript, pushes the SECOND turn's
+/// prompt over a `training_ctx` window small enough (1600 tokens) to still
+/// admit the first, short turn — `Pager::infer`'s own arithmetic gate is
+/// what refuses for real, not a substrate-error stand-in (the abort tests
+/// below use "script exhausted" instead). Fixture 2 (t2-beta) gets a
+/// brand-new agent — same window, but a short transcript — and lands
+/// normally in `[patch, done]`, proving the probe kept going past fixture
+/// 1's window exhaustion rather than treating it as an infrastructure
+/// failure.
+#[test]
+fn window_exhausted_is_scored_not_aborted() {
+    let dir = fresh_dir("window-exhausted");
+    let big = "z".repeat(4000);
+    let set_toml = format!(
+        r#"
+set = "codec-tasks-window-test"
+
+[[fixture]]
+name = "t1-alpha"
+lens = "plaintext"
+target = "a.txt"
+goal = "fix the broken line in a.txt"
+
+[[fixture.file]]
+path = "a.txt"
+contents = "{big}"
+
+[fixture.reference]
+search = "broken"
+replace = "fixed"
+
+[[fixture]]
+name = "t2-beta"
+lens = "plaintext"
+target = "b.txt"
+goal = "fix the broken line in b.txt"
+
+[[fixture.file]]
+path = "b.txt"
+contents = "beta\nbroken\n"
+
+[fixture.reference]
+search = "broken"
+replace = "fixed"
+"#
+    );
+    let set = parse_fixture_set(&set_toml).expect("inline window-test fixture set parses");
+
+    let journal = Journal::open(&dir.join("pager.jsonl")).unwrap();
+    let images = ImageStore::new(&dir.join("img")).unwrap();
+    let mut fake = FakeSubstrate::new();
+    for r in [
+        read("a.txt"),
+        sr_patch("b.txt", "broken", "fixed"),
+        done("repaired b.txt"),
+    ] {
+        fake.script_reply(r);
+    }
+    let mut pager = Pager::new(fake, journal, images, Box::new(|| Some(1024 * 1024 * 1024)));
+    let gguf = dir.join("m.gguf");
+    std::fs::write(&gguf, b"fake weights").unwrap();
+    let small_window_meta = bloomery_core::gguf::GgufMeta {
+        training_ctx: 1600,
+        ..meta()
+    };
+    pager
+        .register_model(MODEL, &gguf, small_window_meta, None)
+        .unwrap();
+    pager.set_task_journal_path(dir.join("tasks.jsonl"));
+    let pager = Mutex::new(pager);
+
+    let result = run_codec_probe(&pager, MODEL, &set, &dir.join("scratch"))
+        .expect("a WindowExhausted fixture must be SCORED, never abort the probe");
+
+    assert_eq!(result.n, 2, "both fixtures ran");
+    assert_eq!(result.landed, 1, "only t2-beta landed");
+
+    let events = pager_events(&dir);
+    let rows = fixture_rows(&events);
+    assert_eq!(rows.len(), 2, "both fixtures produced a CodecFixture row");
+    assert_eq!(rows[0].0, "t1-alpha");
+    assert!(
+        !rows[0].2,
+        "no patch step landed before the window exhausted — not landed"
+    );
+    assert_eq!(rows[0].3, 1, "only the completed read step ran");
+    assert_eq!(
+        rows[0].4, "WindowExhausted",
+        "with no patch step, detail falls back to the terminal status"
+    );
+    assert_eq!(rows[1].0, "t2-beta");
+    assert!(
+        rows[1].2,
+        "t2-beta landed on its own fresh, short transcript"
+    );
+    assert_eq!(rows[1].3, 2, "[patch, done]");
+
+    assert_eq!(
+        verdict_events(&events).len(),
+        1,
+        "a WindowExhausted fixture is scored, so the probe still completes \
+         and journals exactly one CodecVerdict — never an abort"
+    );
+
+    let p = pager.lock().unwrap();
+    assert!(
+        p.status().models[0].codec_gate.is_some(),
+        "a completed probe is a measurement recorded on the pager, not \
+         'unmeasured' — which is what an aborted probe would leave behind"
+    );
+    drop(p);
+}
+
 // ---------------------------------------------------------------------------
 // Infrastructure aborts (protocol §3) — never a fixture failure
 // ---------------------------------------------------------------------------
