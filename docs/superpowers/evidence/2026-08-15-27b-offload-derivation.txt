@@ -1,0 +1,51 @@
+# qwen3.8:27b partial-offload derivation (spec §5) — 2026-08-15
+#
+# One measured load on the enthusiast-16gb tier (RTX 5080, Vulkan),
+# bloomery @ 80e719a, blob sha256-f5f1dd89… (15.65 GiB main GGUF; the
+# 931 MB mmproj blob is NOT loaded). Provisional declared value 11264 MiB
+# was set only to admit the derivation boot (the accounting refuses an
+# undeclared 15.65 GiB model outright — the expected chicken-and-egg;
+# spec §5 step 1). Preflight check per the plan: "offloaded 30/66 layers"
+# matches the configured n_gpu_layers = 30.
+#
+# ── llama.cpp log excerpt (g27b-derive boot 2, verbatim) ──
+# bloomery-daemon serving on 127.0.0.1:8181 (data_dir=~/.cache/bloomery-27b-derive; models: 1; tier: enthusiast-16gb real-hardware; POST: disabled)
+# print_info: n_layer               = 64
+# load_tensors: offloaded 30/66 layers to GPU
+# load_tensors:   CPU_Mapped model buffer size =  8580.71 MiB
+# load_tensors:      Vulkan0 model buffer size =  7440.75 MiB
+# llama_kv_cache:        CPU KV buffer size =   324.00 MiB
+# llama_kv_cache:    Vulkan0 KV buffer size =   252.00 MiB
+# sched_reserve:    Vulkan0 compute buffer size =   514.01 MiB
+# sched_reserve: Vulkan_Host compute buffer size =    39.13 MiB
+#
+# nvidia-smi: 874 MiB before → 8366 MiB with weights resident (context
+# freed) = 7,492 MiB delta ≈ the 7,440.75 MiB Vulkan0 model buffer. ✓
+#
+# ── Measured facts ──
+# * 30 of 66 offload units → 7,440.75 MiB in VRAM ≈ 248 MiB per GPU layer.
+# * Per-context compute buffer: 514.01 MiB Vulkan0 (+39 MiB host) —
+#   EXCEEDS the global default ctx_overhead_mib = 384 (which was derived
+#   for qwen2.5-7b). Any 27B run config MUST set ctx_overhead_mib >= 640
+#   (514 observed + headroom). ctx_overhead_mib is a global key, so a
+#   multi-model config pays the larger reservation for every context.
+# * Real KV at the granted 9,034-token window: 576 MiB total (252 VRAM +
+#   324 CPU) ≈ 0.064 MiB/token — the pager's gguf-derived kv_per_token
+#   (266,240 B ≈ 0.254 MiB/token) OVERCOUNTS ~4× for this hybrid-DeltaNet
+#   arch. Conservative direction (smaller windows, never OOM), recorded.
+# * Generation speed at 30/66: 128 tokens in 24.3 s ≈ 5.3 tok/s.
+#   Full G4 probe projection ≈ 13-20 h → OS-detach territory.
+# * The model THINKS under the raw-completion lens (first reply began
+#   "<think>") — expect long turns against STEP_MAX_TOKENS = 1024.
+#
+# ── Declared values for the future gate run (Task 7, HELD 2026-08-15
+#    by Brice's decision — GPU is shared and the run holds it ~13-20 h) ──
+# [models."qwen3.8:27b"]
+# path = "/mnt/extra/ollama-models/blobs/sha256-f5f1dd8920d417aac2718b0bda3403da274301efdd6760b4f0f4b864ff2ad57d"
+# n_gpu_layers = 30
+# weights_vram_mib = 7808        # 7,440.75 observed + ~5% headroom
+# …and globally: ctx_overhead_mib = 640
+# Expected window at a ~15.4 GiB-free boot: (15429−1024−7808−640)/0.254
+# ≈ 23k tokens — the roomiest option for a thinking model, chosen over
+# faster/more-offloaded configs so the run measures codec landing, not
+# window limits.
