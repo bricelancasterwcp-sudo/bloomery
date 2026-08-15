@@ -4,14 +4,18 @@
 //! envelope; this tree turns that envelope into a typed [`Action`] the
 //! daemon's task loop (Phase 3) can execute. Task 1 (this file plus
 //! [`envelope`]) owns the envelope scanner and the full `Action`/
-//! `ActionError` vocabulary; later P1 tasks own verb validation (Task 2)
-//! and the patch body codec (Task 3). Pure, GPU-free: no I/O, no substrate.
+//! `ActionError` vocabulary; verb validation is Task 2, the patch body codec
+//! is Task 3, the applies-and-parses landing lens ([`lens`]) is Task 4, and
+//! the human-readable verb reference shown to the model each turn
+//! ([`card::verb_card`]) is Task 5. Pure, GPU-free: no I/O, no substrate.
 
+pub mod card;
 pub mod envelope;
 pub mod lens;
 pub mod patch;
 pub mod verbs;
 
+pub use card::verb_card;
 pub use envelope::{scan_envelope, RawAction};
 pub use verbs::{validate_done, validate_find, validate_read, validate_run};
 
