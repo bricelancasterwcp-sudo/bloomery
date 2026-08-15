@@ -149,6 +149,23 @@ Limits after Phase 2a, all known and none hidden:
   loop; P4 gates per-model codec landing against G4 (≥80% applies-and-parses,
   else demotion).
 
+### Capability grants (Phase 2c P2)
+
+* **Four fields, JSON, immutable:** `read_roots`, `write_roots` (absolute
+  paths), `commands` (argv-prefix allowlists), `network` (`false` only —
+  refused, not sandboxed; a granted command is *trusted* non-networking).
+* **Canonical-path escape defense.** Real `std::fs::canonicalize`
+  (symlinks followed, `..` collapsed), compared component-wise — no
+  string-prefix match (`/root-evil` never passes a `/root` grant).
+* **Argv-prefix allowlist, no shell.** `run`'s argv must start with a
+  granted prefix element-wise; exec'd directly, never `sh -c`.
+* **Structural, not persuadable.** The check takes a path/argv and a
+  `Grant`, never file content — a red-team suite proves an injection-laced
+  file can be read but its payload (exfil, `curl`, `bash -c`) is refused
+  regardless of what it says.
+* **Type + checks only.** P3 wires these into the task-loop's executors;
+  `tasks_enabled` (default `false`) gates the whole task surface.
+
 ## Quick start
 
 Needs a Rust toolchain, a llama.cpp-capable GPU stack, and a `.gguf` on disk.

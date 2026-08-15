@@ -3,9 +3,35 @@
 //! The Grant type represents a capability grant: a JSON-specified set of filesystem
 //! roots (read/write), commands (allowed prefixes), and network access.
 //!
-//! **v1 Boundary:** Grant provides structural validation and scoping. It is NOT an OS
-//! sandbox. Tasks 2–3 validate that operations (path access, command execution) comply
-//! with the grant; the daemon (P3) enforces this against the actual execution context.
+//! **The headline property:** grants are immutable for a task's life, accepted
+//! once at task creation and never widened afterward, and every check here is
+//! **structural** — it takes a path or argv and a `Grant`, never file content,
+//! model instructions, or persuasive text. So the worst-case successful
+//! injection spends the task's own budget inside its own grants: a laced file
+//! can be *read* (if it's in a read root) and a model can be talked into
+//! *trying* to obey it, but the attempt to read outside the roots or run an
+//! unlisted command is refused before anything happens, regardless of how
+//! convincing the text was. `tests/grant_redteam_test.rs` (Task 4) is the
+//! adversarial proof of this: it builds a real sandbox containing an
+//! injection-laced file and a `/`-pointing symlink, and asserts every classic
+//! escape (absolute path, `..` traversal, symlink-to-root, exfil commands)
+//! is refused structurally.
+//!
+//! **The honest boundary — read before trusting this further:** v1 is
+//! grant-*scoping*, not OS-level sandboxing. There is no namespace, cgroup,
+//! or seccomp isolation; a granted `run` command executes as a normal
+//! subprocess with normal process privileges, and a granted command prefix
+//! is *trusted* to be non-networking — `network: false` is enforced by
+//! refusing the grant field, not by cutting subprocess network access at the
+//! kernel level. If an operator grants `["curl", "https://example.com"]`,
+//! that command runs and talks to the network; the grant boundary is a
+//! contract about what the model can attempt, not a kernel-enforced sandbox
+//! around what a granted command can do once it runs. That is the actual
+//! boundary, stated here rather than overclaimed. Tasks 2–3 validate that
+//! operations (path access, command execution) comply with the grant; P3
+//! wires these checks into the task-loop's executors as the enforcement
+//! point, and `tasks_enabled` (default `false`) gates the whole task
+//! surface off until that wiring lands.
 
 pub mod command;
 pub mod path;
