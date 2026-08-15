@@ -8,8 +8,10 @@
 //! and the patch body codec (Task 3). Pure, GPU-free: no I/O, no substrate.
 
 pub mod envelope;
+pub mod verbs;
 
 pub use envelope::{scan_envelope, RawAction};
+pub use verbs::{validate_done, validate_find, validate_read, validate_run};
 
 /// A single validated action a coding agent may take, decoded from one
 /// `<action>` envelope.
@@ -92,3 +94,23 @@ pub enum ActionError {
 
 /// The complete set of recognized `verb="..."` values.
 pub const VERBS: &[&str] = &["read", "find", "patch", "run", "done"];
+
+/// Scan + validate one action end to end. Patch is added in Task 3;
+/// until then a "patch" verb returns ActionError::BadCodec with detail "patch not wired".
+pub fn parse_action(turn: &str) -> Result<Action, ActionError> {
+    let raw = scan_envelope(turn)?;
+
+    match raw.verb.as_str() {
+        "read" => validate_read(&raw),
+        "find" => validate_find(&raw),
+        "run" => validate_run(&raw),
+        "done" => validate_done(&raw),
+        "patch" => Err(ActionError::BadCodec {
+            detail: "patch not wired".into(),
+        }),
+        verb => Err(ActionError::UnknownVerb {
+            verb: verb.to_string(),
+            expected: VERBS,
+        }),
+    }
+}
