@@ -8,6 +8,7 @@
 //! and the patch body codec (Task 3). Pure, GPU-free: no I/O, no substrate.
 
 pub mod envelope;
+pub mod lens;
 pub mod patch;
 pub mod verbs;
 
