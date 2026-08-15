@@ -12,8 +12,9 @@
 
 pub mod exec;
 pub mod lens_py;
+mod run_capture;
 
-pub use exec::{exec_find, exec_patch, exec_read};
+pub use exec::{exec_find, exec_patch, exec_read, exec_run};
 
 /// The result of executing one action: what to feed back to the model, and
 /// a short outcome tag for the `TaskStep` journal entry.
