@@ -39,11 +39,22 @@ pub enum Landing {
     },
 }
 
-/// A language-specific parse check. Pure; no I/O, no external process calls.
+/// A language-specific parse check. `PlainText` is pure, but a lens is not
+/// guaranteed to be: P3's `PythonLens::parses` shells out to `python3` (up
+/// to a 10s timeout) to get a real syntax check, and that call happens under
+/// the caller's pager lock. Callers must not assume `land()` is cheap or
+/// I/O-free — a lens may block on a subprocess.
+///
+/// Fail-closed contract: if a lens's external checker is unavailable (the
+/// interpreter can't be found, spawning it fails, or it times out), the
+/// lens must treat that as a parse failure, not a pass — an unreachable
+/// checker means the patch does not land, never that it lands unverified.
 pub trait LandingLens {
     /// The name of this lens, used in every Landing outcome (named-lens law).
     fn name(&self) -> &'static str;
     /// Does this string parse as a valid document in the lens's language?
+    /// May shell out to an external checker; see the trait's fail-closed
+    /// contract above for what an unavailable checker must produce.
     fn parses(&self, contents: &str) -> Result<(), String>;
 }
 

@@ -159,6 +159,55 @@ fn an_invalid_grant_is_422() {
     handle.shutdown();
 }
 
+/// `422 budget_exceeds_grant` when a request's `budget_tokens` asks for more
+/// than the agent's own granted budget — `run_task` never reads this field
+/// back (only the pager's `Budget`, fixed at `create_agent` time, governs
+/// spend), so a number above that ceiling could never be honored; this is
+/// the review fix that catches the incoherent request rather than silently
+/// accepting it.
+#[test]
+fn a_budget_tokens_above_the_agents_grant_is_422() {
+    let (port, handle, sandbox) =
+        bloomery_daemon::test_support::serve_fake_with_tasks(true, Vec::new());
+    let sandbox = std::fs::canonicalize(&sandbox).unwrap();
+    let addr = format!("127.0.0.1:{port}");
+
+    // No `budget_tokens` in the create-agent body, so the agent's granted
+    // budget is the daemon's configured default (200_000 for the fixture
+    // pager — see `test_support::serve_fake_with_tasks`).
+    let (st, body) = http(&addr, "POST", "/agents", r#"{"model":"qwen"}"#);
+    assert_eq!(st, 201, "{body}");
+    let agent_id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let task_req = serde_json::json!({
+        "goal": "do something",
+        "grants": {
+            "read_roots": [sandbox.to_string_lossy()],
+            "write_roots": [sandbox.to_string_lossy()],
+            "commands": [],
+        },
+        "budget_tokens": 999_999_999_u64,
+    })
+    .to_string();
+
+    let (st, body) = http(
+        &addr,
+        "POST",
+        &format!("/agents/{agent_id}/task"),
+        &task_req,
+    );
+    assert_eq!(st, 422, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"], "budget_exceeds_grant");
+    assert_eq!(v["requested"], 999_999_999_u64);
+    assert_eq!(v["granted"], 200_000);
+
+    handle.shutdown();
+}
+
 /// `404` for a task request against an agent id nobody created.
 #[test]
 fn unknown_agent_is_404() {

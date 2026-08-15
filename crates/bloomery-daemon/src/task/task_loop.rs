@@ -38,7 +38,12 @@ use crate::task::{exec_find, exec_patch, exec_read, exec_run, ExecBounds, Observ
 /// `Pager::create_agent` time, by whoever builds both together — Task 5's
 /// HTTP registry) — carried here so a caller has one place to read it back
 /// from. `run_task` itself never reads this field: the pager's own budget
-/// check on every `infer` call is what actually enforces it.
+/// check on every `infer` call is what actually enforces it. Task 5's
+/// `create_task` rejects a request `budget_tokens` above the agent's granted
+/// budget with `422 budget_exceeds_grant` before a `TaskSpec` is even built
+/// (a number this loop could never honor), but any value at or below that
+/// ceiling is accepted and then simply unused here — it is not yet a
+/// separate, enforced per-task cap.
 #[derive(Debug, Clone)]
 pub struct TaskSpec {
     pub goal: String,
@@ -55,15 +60,15 @@ pub struct TaskSpec {
 }
 
 /// How a task ended. `run_task` only ever returns `Done`, `BudgetExhausted`,
-/// `StepsExhausted`, or `Error` — `Running` and `Refused` exist for a
-/// caller that tracks task status outside a single `run_task` call (Task
-/// 5's in-flight status reporting, and its grant-validation-at-creation
-/// refusal, respectively).
+/// `StepsExhausted`, or `Error` — `Running` exists for a caller that tracks
+/// task status outside a single `run_task` call (Task 5's in-flight status
+/// reporting). A grant-validation failure at task creation never produces a
+/// `TaskStatus` at all: Task 5's `create_task` returns a `422` HTTP error
+/// before a task (and therefore a status) exists.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum TaskStatus {
     Running,
     Done,
-    Refused,
     BudgetExhausted,
     StepsExhausted,
     Error,

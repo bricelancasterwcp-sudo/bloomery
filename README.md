@@ -188,7 +188,13 @@ Limits after Phase 2a, all known and none hidden:
   P1's landing lens checks it both applies and parses), and `run` (no shell,
   a scrubbed `PATH`/`HOME`/`LANG` environment, `run_output_cap_bytes` /
   `run_timeout_secs`, its whole process group killed on timeout). `done` ends
-  the task; it has no executor.
+  the task; it has no executor. **A granted command's arguments are not
+  path-scoped:** the `commands` allowlist checks only the program and its
+  argv prefix, never what paths the arguments name — a grant for `cat` lets
+  the model run `cat /etc/passwd` regardless of `read_roots`. Operators
+  choosing command grants must treat each granted program as fully trusted
+  with whatever arguments the model supplies, not as implicitly confined to
+  the grant's roots.
 * **Every filesystem open is grant-checked, then `O_NOFOLLOW`.** Each
   executor opens the *canonical* path P2's `Grant::check_read`/`check_write`
   returned — never a path re-derived from the model's own string — with

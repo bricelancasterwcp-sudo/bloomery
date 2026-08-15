@@ -7,8 +7,10 @@
 //! same `501` no matter what the client sent. Everything downstream of that
 //! gate follows the Task 5 brief's status-code table: `400` for a body that
 //! isn't the expected JSON shape, `422` for a `grants` object `Grant::from_json`
-//! refuses (or a grant with nowhere for the task to run), `404` for an
-//! agent id nobody created, `202` with the new task's id on success.
+//! refuses (or a grant with nowhere for the task to run, or a `budget_tokens`
+//! above the agent's own granted budget — `budget_exceeds_grant`, a review
+//! addition past the original brief), `404` for an agent id nobody created,
+//! `202` with the new task's id on success.
 //!
 //! [`dispatch`] returns `None` for any path that isn't one of the two task
 //! routes, so `http.rs`'s worker loop falls through to `api_native::dispatch`
@@ -88,6 +90,17 @@ fn unknown_agent(agent_id: &str) -> ApiResult {
     )
 }
 
+fn budget_exceeds_grant(requested: u64, granted: u64) -> ApiResult {
+    (
+        422,
+        Some(json!({
+            "error": "budget_exceeds_grant",
+            "requested": requested,
+            "granted": granted,
+        })),
+    )
+}
+
 fn create_task<S: Substrate + Send + 'static>(
     pager: &Arc<Mutex<Pager<S>>>,
     registry: &Arc<TaskRegistry>,
@@ -144,10 +157,23 @@ fn create_task<S: Substrate + Send + 'static>(
         };
         p.agent_budget_granted(agent_id)
     };
-    let budget_tokens = match existing_budget {
-        Some(granted) => req.budget_tokens.unwrap_or(granted),
+    let granted = match existing_budget {
+        Some(granted) => granted,
         None => return unknown_agent(agent_id),
     };
+    // A request that names a `budget_tokens` above the agent's own granted
+    // budget is incoherent — see `TaskSpec::budget_tokens`'s doc comment:
+    // `run_task` never reads this field back, only the pager's own `Budget`
+    // (set once, at `create_agent` time) governs what an `infer` call may
+    // spend. Catching the incoherent request here, rather than silently
+    // accepting a number that can never be honored, is cheap because
+    // `granted` is already in hand.
+    if let Some(requested) = req.budget_tokens {
+        if requested > granted {
+            return budget_exceeds_grant(requested, granted);
+        }
+    }
+    let budget_tokens = req.budget_tokens.unwrap_or(granted);
 
     let spec = TaskSpec {
         goal: req.goal,
