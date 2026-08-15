@@ -201,3 +201,98 @@ fn a_live_symlink_to_an_in_root_file_resolves_via_the_normal_branch() {
     let got = g.check_write(&alias).unwrap();
     assert_eq!(got, std::fs::canonicalize(&real).unwrap());
 }
+
+// Durability regression guards (opus-reviewer Minor #2): both dangling and
+// live symlinks used as a MIDDLE path component (not the final one) are the
+// nastiest resolve_missing_target inputs, since the escape isn't visible at
+// `target` itself but one component up. Pinning them here means a future
+// refactor of resolve_missing_target that reopens either path fails the
+// suite instead of shipping silently.
+
+#[test]
+fn a_middle_dangling_symlink_component_is_refused() {
+    let sb = sandbox();
+    let g = grant_for(&sb);
+    let unique = sb
+        .parent()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    // sandbox/out/deadlink -> /nonexistent-<unique>: a DANGLING symlink used
+    // as a MIDDLE path component of the target (deadlink/file.txt), not the
+    // final one.
+    let deadlink = sb.join("out").join("deadlink");
+    let _ = std::fs::remove_file(&deadlink);
+    std::os::unix::fs::symlink(format!("/nonexistent-{unique}"), &deadlink).unwrap();
+    let target = deadlink.join("file.txt");
+    // canonicalize(target) fails (deadlink itself doesn't resolve, so the
+    // path can't be traversed at all). symlink_metadata(target) also fails —
+    // there's no way to reach `file.txt` through a broken middle component,
+    // so no entry can be found there either — so this is NOT caught by the
+    // dangling-target refusal added for the direct case. It falls through to
+    // resolve_missing_target's parent check: the parent (out/deadlink) IS
+    // the broken symlink and itself doesn't canonicalize, so this is named
+    // PathParentMissing, not PathOutsideRoots. Either variant is a refusal;
+    // this test pins the specific one so intent is documented, not just
+    // "some Err".
+    match g.check_write(&target) {
+        Err(GrantViolation::PathParentMissing { .. }) => {}
+        other => panic!(
+            "expected PathParentMissing for a middle dangling symlink component, got {other:?}"
+        ),
+    }
+}
+
+#[test]
+fn a_middle_live_symlink_pointing_outside_is_refused() {
+    let sb = sandbox();
+    let g = grant_for(&sb);
+    let unique = sb
+        .parent()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let attacker = std::env::temp_dir().join(format!("{unique}-attacker"));
+    let _ = std::fs::remove_dir_all(&attacker);
+    std::fs::create_dir_all(&attacker).unwrap();
+
+    // sandbox/out/evil -> <attacker dir>: a LIVE symlink (the directory it
+    // points to genuinely exists) used as a MIDDLE path component, pointing
+    // entirely outside every granted root.
+    let evil = sb.join("out").join("evil");
+    let _ = std::fs::remove_file(&evil);
+    std::os::unix::fs::symlink(&attacker, &evil).unwrap();
+
+    // (a) final target absent: evil/new.txt doesn't exist under attacker/.
+    // canonicalize(target) fails on the missing final component, and
+    // symlink_metadata(target) fails too (nothing at that exact path), so
+    // this reaches resolve_missing_target. There, the parent (out/evil) DOES
+    // fully canonicalize — a live symlink resolves — landing on the real
+    // attacker dir, which is outside every granted root: PathOutsideRoots.
+    match g.check_write(&sb.join("out").join("evil").join("new.txt")) {
+        Err(GrantViolation::PathOutsideRoots { .. }) => {}
+        other => panic!(
+            "expected PathOutsideRoots for a middle live symlink out (absent final target), got {other:?}"
+        ),
+    }
+
+    // (b) final target present: attacker/exists.txt is a real file, so
+    // canonicalize(target) now succeeds outright through the ordinary
+    // Ok(canon) branch (not resolve_missing_target at all), resolving fully
+    // to the attacker dir — still outside every granted root, so this is
+    // PathOutsideRoots via a different branch than (a). Both must refuse;
+    // this is the exact "middle live symlink out" shape the review flagged.
+    std::fs::write(attacker.join("exists.txt"), "x").unwrap();
+    match g.check_write(&sb.join("out").join("evil").join("exists.txt")) {
+        Err(GrantViolation::PathOutsideRoots { .. }) => {}
+        other => panic!(
+            "expected PathOutsideRoots for a middle live symlink out (present final target), got {other:?}"
+        ),
+    }
+
+    let _ = std::fs::remove_dir_all(&attacker);
+}
