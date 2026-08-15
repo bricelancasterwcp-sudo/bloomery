@@ -14,7 +14,7 @@
 //! assertion here fails, that is a real Task 2/3 defect, not a spec change,
 //! and must be fixed in this task's loop before commit.
 
-use bloomery_core::grant::{Grant, GrantViolation};
+use bloomery_core::grant::{Grant, GrantViolation, PathKind};
 use std::path::PathBuf;
 
 /// Build a real, locked-down sandbox: a read root containing an
@@ -77,21 +77,49 @@ fn reading_the_injection_file_is_allowed_but_obeying_it_is_not() {
 #[test]
 fn every_classic_escape_is_structurally_refused() {
     let (sb, g) = locked_sandbox();
-    // absolute escape
-    assert!(g.check_read(std::path::Path::new("/etc/shadow")).is_err());
-    // dotdot escape
-    assert!(g
-        .check_read(&sb.join("..").join("..").join("etc").join("passwd"))
-        .is_err());
-    // symlink-to-/ escape
-    assert!(g
-        .check_read(&sb.join("root_escape").join("etc").join("passwd"))
-        .is_err());
-    // write to a system path
-    assert!(g
-        .check_write(std::path::Path::new("/etc/cron.d/x"))
-        .is_err());
-    // exfil / arbitrary commands
+    // absolute escape — a real path, unambiguously outside every root.
+    assert!(matches!(
+        g.check_read(std::path::Path::new("/etc/shadow")),
+        Err(GrantViolation::PathOutsideRoots { .. })
+    ));
+    // dotdot escape. locked_sandbox() nests two directories under the OS
+    // tempdir (`bloomery-redteam-<pid>-<n>/sandbox`), so THREE `..` are
+    // needed to reach the real filesystem root and land on a path —
+    // /etc/passwd — that actually exists and is unambiguously outside the
+    // sandbox (matching the proven construction in
+    // grant_path_test.rs::a_dotdot_traversal_out_of_the_root_is_refused).
+    // Two `..` would only reach the OS tempdir itself, landing on a
+    // synthetic path (`<tempdir>/etc/passwd`) that doesn't exist — that
+    // would be refused too, but as `PathParentMissing` (a missing-parent
+    // refusal), not `PathOutsideRoots` (the boundary actually catching a
+    // traversal). A red-team test that passes because a path is missing,
+    // rather than because the boundary caught an escape, proves nothing
+    // about the boundary.
+    match g.check_read(
+        &sb.join("..")
+            .join("..")
+            .join("..")
+            .join("etc")
+            .join("passwd"),
+    ) {
+        Err(GrantViolation::PathOutsideRoots { .. }) => {}
+        other => panic!("expected PathOutsideRoots for the dotdot escape, got {other:?}"),
+    }
+    // symlink-to-/ escape — root_escape -> /, so root_escape/etc/passwd
+    // resolves through the symlink to the real, existing /etc/passwd.
+    assert!(matches!(
+        g.check_read(&sb.join("root_escape").join("etc").join("passwd")),
+        Err(GrantViolation::PathOutsideRoots { .. })
+    ));
+    // write to a system path.
+    assert!(matches!(
+        g.check_write(std::path::Path::new("/etc/cron.d/x")),
+        Err(GrantViolation::PathOutsideRoots {
+            kind: PathKind::Write,
+            ..
+        })
+    ));
+    // exfil / arbitrary commands — none match the granted `cargo test` prefix.
     for cmd in [
         &["bash", "-c", "..."][..],
         &["sh"][..],
@@ -99,8 +127,11 @@ fn every_classic_escape_is_structurally_refused() {
         &["nc", "host", "1"][..],
     ] {
         assert!(
-            g.check_command(&argv(cmd)).is_err(),
-            "command {cmd:?} should be refused"
+            matches!(
+                g.check_command(&argv(cmd)),
+                Err(GrantViolation::CommandNotAllowed { .. })
+            ),
+            "command {cmd:?} should be refused as CommandNotAllowed"
         );
     }
 }
