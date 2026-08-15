@@ -28,6 +28,7 @@ mod journal;
 mod paging;
 mod status;
 mod task_config;
+mod tuning;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -140,6 +141,10 @@ struct ModelEntry {
     /// under the new file, and carrying the old verdict forward would be
     /// exactly the silent reuse law 5 forbids.
     codec_gate: Option<codec_gate::CodecGateResult>,
+    /// Per-model `n_gpu_layers` override (`pager::tuning`); `None` -> default.
+    n_gpu_layers_override: Option<u32>,
+    /// Declared weights-VRAM ceiling in bytes (`pager::tuning`); `None` -> full charge.
+    weights_vram_bytes: Option<u64>,
 }
 
 pub struct Pager<S: Substrate> {
@@ -464,6 +469,8 @@ impl<S: Substrate> Pager<S> {
                 provisional_logged: false,
                 unprofiled_logged: false,
                 codec_gate: None,
+                n_gpu_layers_override: None,
+                weights_vram_bytes: None,
             },
         );
         Ok(())
@@ -500,7 +507,7 @@ impl<S: Substrate> Pager<S> {
             (
                 entry.kv_per_token,
                 entry.meta.training_ctx,
-                entry.meta.weights_bytes,
+                entry.effective_weights_bytes(), // Task 3: see `pager::tuning`
                 // The anti-ratchet rule, in one expression: a self-probe
                 // measures our own refusal gate, so clamping by it would
                 // ratchet the window down on every re-probe.
