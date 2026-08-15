@@ -7,6 +7,8 @@
 //! sandbox. Tasks 2–3 validate that operations (path access, command execution) comply
 //! with the grant; the daemon (P3) enforces this against the actual execution context.
 
+pub mod path;
+
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -118,5 +120,22 @@ impl Grant {
     /// Network access permitted (always false in v1).
     pub fn network(&self) -> bool {
         self.network
+    }
+
+    /// Resolve `target` (which MUST be absolute) against the read roots.
+    ///
+    /// Returns the canonical path on success. Follows symlinks and collapses
+    /// `..` via `std::fs::canonicalize`, so no traversal or symlink can
+    /// escape a granted root — see [`path::resolve_within`] for the security
+    /// boundary itself.
+    pub fn check_read(&self, target: &std::path::Path) -> Result<PathBuf, GrantViolation> {
+        path::resolve_within(target, self.read_roots(), PathKind::Read)
+    }
+
+    /// As [`Grant::check_read`], against write roots; if `target` does not
+    /// exist yet, its immediate parent must exist and be within a write
+    /// root (creating a new file in a granted directory).
+    pub fn check_write(&self, target: &std::path::Path) -> Result<PathBuf, GrantViolation> {
+        path::resolve_within(target, self.write_roots(), PathKind::Write)
     }
 }
