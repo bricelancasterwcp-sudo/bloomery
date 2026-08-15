@@ -28,7 +28,7 @@ llama = "/models/llama.gguf"
         std::path::PathBuf::from("/tmp/bloomery-daemon-test-data")
     );
     assert_eq!(
-        config.models.get("llama").unwrap(),
+        config.models.get("llama").unwrap().path(),
         std::path::Path::new("/models/llama.gguf")
     );
     assert_eq!(config.tier.name, "enthusiast-16gb");
@@ -100,5 +100,186 @@ assay = { enabled = false, python = "python3" }
     assert!(
         err.contains("models"),
         "error should name the missing field: {err}"
+    );
+}
+
+/// A bare string entry in the models table parses as a ModelSpec::Path
+/// variant, with all accessors returning the path and None for the tuning
+/// fields.
+#[test]
+fn bare_string_model_entry_parses() {
+    let toml = r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = { name = "enthusiast-16gb", emulated = false }
+assay = { enabled = false, python = "python3" }
+
+[models]
+"qwen3:14b" = "/mnt/extra/models/qwen3-14b.gguf"
+"#;
+    let path = write_temp_toml("bare-string-model.toml", toml);
+    let config = load_config(&path).unwrap();
+
+    assert_eq!(config.models.len(), 1);
+    let model = config.models.get("qwen3:14b").unwrap();
+    assert_eq!(
+        model.path(),
+        std::path::Path::new("/mnt/extra/models/qwen3-14b.gguf")
+    );
+    assert_eq!(model.n_gpu_layers(), None);
+    assert_eq!(model.weights_vram_mib(), None);
+}
+
+/// A table entry with path, n_gpu_layers, and weights_vram_mib parses and
+/// all accessors return the configured values.
+#[test]
+fn tuned_model_entry_with_all_fields_parses() {
+    let toml = r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = { name = "enthusiast-16gb", emulated = false }
+assay = { enabled = false, python = "python3" }
+
+[models."qwen3.8:27b"]
+path = "/mnt/extra/models/qwen3.8-27b.gguf"
+n_gpu_layers = 28
+weights_vram_mib = 11264
+"#;
+    let path = write_temp_toml("tuned-model-full.toml", toml);
+    let config = load_config(&path).unwrap();
+
+    assert_eq!(config.models.len(), 1);
+    let model = config.models.get("qwen3.8:27b").unwrap();
+    assert_eq!(
+        model.path(),
+        std::path::Path::new("/mnt/extra/models/qwen3.8-27b.gguf")
+    );
+    assert_eq!(model.n_gpu_layers(), Some(28));
+    assert_eq!(model.weights_vram_mib(), Some(11264));
+}
+
+/// A table entry with only a path (omitting optional tuning fields) parses,
+/// and the tuning accessors return None.
+#[test]
+fn tuned_model_entry_with_only_path_parses() {
+    let toml = r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = { name = "enthusiast-16gb", emulated = false }
+assay = { enabled = false, python = "python3" }
+
+[models."qwen3:14b"]
+path = "/mnt/extra/models/qwen3-14b.gguf"
+"#;
+    let path = write_temp_toml("tuned-model-minimal.toml", toml);
+    let config = load_config(&path).unwrap();
+
+    assert_eq!(config.models.len(), 1);
+    let model = config.models.get("qwen3:14b").unwrap();
+    assert_eq!(
+        model.path(),
+        std::path::Path::new("/mnt/extra/models/qwen3-14b.gguf")
+    );
+    assert_eq!(model.n_gpu_layers(), None);
+    assert_eq!(model.weights_vram_mib(), None);
+}
+
+/// A config mixing both bare-string and table-entry model shapes parses
+/// correctly.
+#[test]
+fn mixed_model_entries_parse() {
+    let toml = r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = { name = "enthusiast-16gb", emulated = false }
+assay = { enabled = false, python = "python3" }
+
+[models]
+"qwen3:14b" = "/mnt/extra/models/qwen3-14b.gguf"
+
+[models."qwen3.8:27b"]
+path = "/mnt/extra/models/qwen3.8-27b.gguf"
+n_gpu_layers = 28
+weights_vram_mib = 11264
+"#;
+    let path = write_temp_toml("mixed-models.toml", toml);
+    let config = load_config(&path).unwrap();
+
+    assert_eq!(config.models.len(), 2);
+
+    let model1 = config.models.get("qwen3:14b").unwrap();
+    assert_eq!(
+        model1.path(),
+        std::path::Path::new("/mnt/extra/models/qwen3-14b.gguf")
+    );
+    assert_eq!(model1.n_gpu_layers(), None);
+    assert_eq!(model1.weights_vram_mib(), None);
+
+    let model2 = config.models.get("qwen3.8:27b").unwrap();
+    assert_eq!(
+        model2.path(),
+        std::path::Path::new("/mnt/extra/models/qwen3.8-27b.gguf")
+    );
+    assert_eq!(model2.n_gpu_layers(), Some(28));
+    assert_eq!(model2.weights_vram_mib(), Some(11264));
+}
+
+/// The design spec §2 example block parses verbatim.
+#[test]
+fn spec_section_2_example_parses() {
+    let toml = r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = { name = "enthusiast-16gb", emulated = false }
+assay = { enabled = false, python = "python3" }
+
+[models]
+"qwen3:14b" = "/mnt/extra/ollama-models/blobs/sha256-abc123"
+
+[models."qwen3.8:27b"]
+path = "/mnt/extra/ollama-models/blobs/sha256-f5f1dd89"
+n_gpu_layers = 28
+weights_vram_mib = 11264
+"#;
+    let path = write_temp_toml("spec-example.toml", toml);
+    let config = load_config(&path).unwrap();
+
+    assert_eq!(config.models.len(), 2);
+
+    let model1 = config.models.get("qwen3:14b").unwrap();
+    assert_eq!(
+        model1.path(),
+        std::path::Path::new("/mnt/extra/ollama-models/blobs/sha256-abc123")
+    );
+    assert_eq!(model1.n_gpu_layers(), None);
+    assert_eq!(model1.weights_vram_mib(), None);
+
+    let model2 = config.models.get("qwen3.8:27b").unwrap();
+    assert_eq!(
+        model2.path(),
+        std::path::Path::new("/mnt/extra/ollama-models/blobs/sha256-f5f1dd89")
+    );
+    assert_eq!(model2.n_gpu_layers(), Some(28));
+    assert_eq!(model2.weights_vram_mib(), Some(11264));
+}
+
+/// A table entry missing the required `path` field fails to parse (serde
+/// untagged requires a distinguishing field per variant).
+#[test]
+fn table_entry_without_path_fails() {
+    let toml = r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = { name = "enthusiast-16gb", emulated = false }
+assay = { enabled = false, python = "python3" }
+
+[models."invalid-model"]
+n_gpu_layers = 5
+"#;
+    let path = write_temp_toml("missing-path.toml", toml);
+    let err = load_config(&path).unwrap_err();
+    assert!(
+        err.contains("path") || err.contains("data"),
+        "error should indicate missing path field: {err}"
     );
 }

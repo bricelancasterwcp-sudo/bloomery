@@ -158,7 +158,8 @@ fn run(config: Config, journal: Journal) -> ! {
 
     // Unprofiled on purpose: POST is the only source of a profile, and it
     // cannot run until this daemon is serving.
-    for (name, path) in &config.models {
+    for (name, spec) in &config.models {
+        let path = spec.path();
         let meta = parse_gguf_meta(path).unwrap_or_else(|e| {
             fail(format!(
                 "model {name}: could not read {}: {e}",
