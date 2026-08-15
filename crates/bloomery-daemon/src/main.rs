@@ -131,9 +131,11 @@ fn run(config: Config, journal: Journal) -> ! {
     // permissive/zero values precisely so this one site is the only place
     // an operator's config takes effect.
     pager.set_overhead_bytes(config.overhead_mib.saturating_mul(1024 * 1024));
+    pager.set_ctx_overhead_bytes(config.ctx_overhead_mib.saturating_mul(1024 * 1024));
     pager.set_defaults(config.default_priority, config.default_budget_tokens);
     pager.set_allow_unprofiled(config.allow_unprofiled);
     pager.set_tier(&config.tier.name, config.tier.emulated);
+    pager.set_time_share_quantum_ms(config.time_share_quantum_secs.saturating_mul(1000));
 
     // Unprofiled on purpose: POST is the only source of a profile, and it
     // cannot run until this daemon is serving.

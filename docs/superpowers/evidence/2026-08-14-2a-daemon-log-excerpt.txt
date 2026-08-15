@@ -1,0 +1,37 @@
+bloomery — provenance for config.rs's ctx_overhead_mib default (384 MiB)
+
+Verbatim excerpt from the daemon log of the ABORTED first natural-pressure
+attempt, 2026-08-14 16:45:02-05:00 (see 2026-08-14-2a-natural-pressure.md,
+"Attempt 1"). Model qwen2.5-coder:7b-instruct-q8_0, --window 16384,
+llama.cpp on the Vulkan backend, NVIDIA RTX 5080.
+
+The full log is machine-local scratch and is not committed; these are the
+lines the 384 MiB default is derived from, plus the failure that made them
+matter. Line numbers are from the original file.
+
+--- device and weights ---------------------------------------------------
+45:llama_prepare_model_devices: using device Vulkan0 (NVIDIA GeForce RTX 5080) (0000:01:00.0) - 13602 MiB free
+510:load_tensors:   CPU_Mapped model buffer size =   552.23 MiB
+511:load_tensors:      Vulkan0 model buffer size =  7165.44 MiB
+
+--- per-context buffers: one such pair per context, five in all ----------
+587:sched_reserve:    Vulkan0 compute buffer size =   304.00 MiB
+588:sched_reserve: Vulkan_Host compute buffer size =    30.01 MiB
+666:sched_reserve:    Vulkan0 compute buffer size =   304.00 MiB
+667:sched_reserve: Vulkan_Host compute buffer size =    30.01 MiB
+
+--- context #6: the allocation the pager believed would fit --------------
+952:ggml_vulkan: Device memory allocation of size 939524096 failed.
+953:ggml_vulkan: vk::Device::allocateMemory: ErrorOutOfDeviceMemory
+954:alloc_tensor_range: failed to allocate Vulkan0 buffer of size 939524096
+955:llama_init_from_model: failed to initialize the context: failed to allocate buffer for kv cache
+
+Arithmetic recorded at the time:
+  13602 MiB free − 7165.44 MiB model buffer = 6436.56 MiB headroom
+  per context: 896 MiB KV + 304.00 MiB Vulkan0 compute = 1200 MiB device
+  6436.56 / 1200 = 5.36  ->  5 contexts fit; the 6th OOM'd.
+
+The 30.01 MiB Vulkan_Host buffer is host memory, not device; it is included
+in the 384 MiB default anyway because the default is a floor, not a model.
+
+Default derived: 304.00 + 30.01 = 334.01 MiB measured  ->  384 MiB configured.

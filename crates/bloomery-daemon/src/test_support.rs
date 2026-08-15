@@ -23,7 +23,15 @@ use crate::pager::Pager;
 const SCRIPTED_REPLIES: usize = 32;
 
 /// The fixture's static VRAM budget, per the Task 14 brief.
-const FIXTURE_FREE_VRAM_BYTES: u64 = 1024 * 1024 * 1024;
+///
+/// Task 3 bumped this by `qwen_like_meta().weights_bytes` (1000 B): weights
+/// now enter the reservation budget too, so once a request loads `qwen` that
+/// many bytes are permanently charged against `avail` for every placement
+/// after it. The `+ 1000` keeps every byte-exact `free`/`needed` assertion
+/// pinned against this fixture (e.g.
+/// `api_native_test.rs::infer_residency_refusal_returns_409_with_arithmetic`)
+/// unchanged rather than rederiving them around the new weights term.
+const FIXTURE_FREE_VRAM_BYTES: u64 = 1024 * 1024 * 1024 + 1000;
 
 /// Small and nonzero: exercises the same `set_overhead_bytes` call
 /// `main.rs` makes from `config.overhead_mib`, without pinning this

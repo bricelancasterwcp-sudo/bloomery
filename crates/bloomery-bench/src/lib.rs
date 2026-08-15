@@ -11,5 +11,6 @@
 //! names — the bench cannot inflate or flatter a number it never takes.
 
 pub mod http;
+pub mod pressure;
 pub mod report;
 pub mod switch;

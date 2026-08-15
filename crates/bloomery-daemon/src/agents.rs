@@ -30,8 +30,21 @@ pub struct Agent {
     pub priority: u8,
     pub window: bloomery_core::geometry::Window,
     pub budget: bloomery_core::budget::Budget,
-    /// `window.tokens * kv_per_token` for this agent's model.
+    /// `window.tokens * kv_per_token` for this agent's model — the KV cache
+    /// alone. **Not** what residency plans against; see [`Agent::reserved_bytes`].
     pub kv_bytes: u64,
+    /// What making this agent resident actually costs the VRAM budget:
+    /// `kv_bytes` plus the per-context runtime overhead
+    /// (`Pager::set_ctx_overhead_bytes`).
+    ///
+    /// The two are different numbers because llama.cpp allocates more than a
+    /// KV cache per context: the 2026-08-14 natural-pressure run measured a
+    /// 304 MiB `Vulkan0` compute buffer and a 30 MiB host buffer alongside
+    /// every 896 MiB KV cache, and planning against the KV alone put six
+    /// contexts where five fit and OOM'd the device. Every residency
+    /// decision — placement, eviction sufficiency, the time-sharing
+    /// tiebreak — reads this field, never `kv_bytes`.
+    pub reserved_bytes: u64,
     pub state: AgentState,
 }
 
@@ -85,6 +98,12 @@ impl AgentTable {
     /// consumes. Task 12 does not yet track in-flight requests, so `busy`
     /// is always reported `false` here; a later task that adds request
     /// tracking is responsible for threading a real value through.
+    ///
+    /// The planner's `kv_bytes` field is fed [`Agent::reserved_bytes`], not
+    /// [`Agent::kv_bytes`]. The planner is untouched by that: its field means
+    /// "bytes this residency holds, and therefore bytes freed by evicting
+    /// it", and the per-context runtime overhead satisfies both halves —
+    /// llama.cpp frees the compute buffer with the context.
     pub fn residents(&self) -> Vec<bloomery_core::scheduler::Resident> {
         self.agents
             .values()
@@ -92,7 +111,7 @@ impl AgentTable {
                 AgentState::Resident { .. } => Some(bloomery_core::scheduler::Resident {
                     id: a.id.clone(),
                     priority: a.priority,
-                    kv_bytes: a.kv_bytes,
+                    kv_bytes: a.reserved_bytes,
                     busy: false,
                 }),
                 _ => None,
@@ -264,25 +283,32 @@ impl ImageStore {
     }
 }
 
-/// Cheap blob identity for a `.gguf` file: `sha256(first 1 MiB || file_len)`.
+/// Full-file blob identity for a `.gguf` file: `sha256(whole file)`.
 ///
-/// Reading only the first 1 MiB (rather than the whole, potentially
-/// multi-gigabyte, weights file) keeps this fast enough to call on every
-/// boot and every profile check; mixing in the total file length catches
-/// the case where two files happen to share an identical first 1 MiB but
-/// differ afterward.
+/// Streams the entire file through sha256 in 1 MiB chunks (fixed reusable buffer,
+/// no whole-file allocation — models can be 8+ GB). This is a pinned precondition
+/// for restart-survivable images (spec 2a item 2): the digest must cover the
+/// entire model, not just a prefix. Boot-time cost is seconds per model.
 pub fn model_digest(gguf: &Path) -> std::io::Result<String> {
     use sha2::{Digest, Sha256};
     use std::io::Read;
 
-    let file_len = std::fs::metadata(gguf)?.len();
-    let file = std::fs::File::open(gguf)?;
-    let mut prefix = Vec::new();
-    file.take(1024 * 1024).read_to_end(&mut prefix)?;
-
+    let mut file = std::fs::File::open(gguf)?;
     let mut hasher = Sha256::new();
-    hasher.update(&prefix);
-    hasher.update(file_len.to_le_bytes());
+    let mut buffer = vec![0u8; 1024 * 1024]; // 1 MiB fixed buffer
+
+    loop {
+        let n = match file.read(&mut buffer) {
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+
     let digest = hasher.finalize();
     Ok(digest.iter().map(|b| format!("{b:02x}")).collect())
 }

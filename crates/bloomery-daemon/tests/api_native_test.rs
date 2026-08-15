@@ -84,6 +84,14 @@ fn infer_over_budget_returns_402_with_arithmetic() {
 /// number that overflows a 1 GiB budget at that size: four fit with
 /// 134 217 728 B left over, and the fifth — no higher priority than any
 /// resident, so nothing is evictable for it — cannot fit in what's left.
+///
+/// `FREE_VRAM_BYTES` deliberately stays `1024 * 1024 * 1024`, *not*
+/// `test_support::FIXTURE_FREE_VRAM_BYTES` (Task 3 bumped that private
+/// constant by `+ 1000`, `qwen_like_meta`'s `weights_bytes`, so weights
+/// entering the reservation budget don't change what `qwen` alone can
+/// place). That `+ 1000` is exactly offset by the `− 1000` the real budget
+/// now carries for `qwen`'s loaded weights, so the *observed* `free` this
+/// test asserts against lands back on the original, unbumped number.
 #[test]
 fn infer_residency_refusal_returns_409_with_arithmetic() {
     const KV_PER_TOKEN: u64 = 57_344;
@@ -125,7 +133,17 @@ fn infer_residency_refusal_returns_409_with_arithmetic() {
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(v["error"], "refused");
     assert_eq!(v["needed"], PER_AGENT_KV_BYTES);
-    assert_eq!(v["free"], FREE_VRAM_BYTES - 4 * PER_AGENT_KV_BYTES);
+    // Task 5's live-run fix added the daemon-level overhead margin to the
+    // placement budget (it had only ever been in the window law), so the
+    // observed `free` is now short by exactly the fixture's
+    // `FIXTURE_OVERHEAD_BYTES`. Nothing about *why* this refuses changed —
+    // same-priority residents, `reclaimable: 0` — only the supply side of
+    // the arithmetic gained the term it was always meant to hold back.
+    const FIXTURE_OVERHEAD_BYTES: u64 = 16 * 1024 * 1024;
+    assert_eq!(
+        v["free"],
+        FREE_VRAM_BYTES - FIXTURE_OVERHEAD_BYTES - 4 * PER_AGENT_KV_BYTES
+    );
     assert_eq!(
         v["reclaimable"], 0,
         "same-priority residents are never evictable"

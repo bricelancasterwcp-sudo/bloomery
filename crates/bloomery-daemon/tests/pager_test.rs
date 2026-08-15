@@ -260,7 +260,12 @@ fn budget_exhaustion_refuses_before_the_call() {
 #[test]
 fn residency_refusal_is_pre_checked_and_never_touches_the_substrate() {
     let dir = fresh_dir("bloomery-pager-refuse");
-    let (mut p, jpath, _) = pager_in(&dir, 2, Some(300 * 1024 * 1024));
+    // Task 3: weights now enter the reservation budget too, so the fixture's
+    // free-VRAM budget is bumped by `meta().weights_bytes` (1000 B) to keep
+    // this test's literal `free` assertion below unchanged — `high`'s model
+    // load charges that 1000 B against `avail` for every placement after it,
+    // which this test's numbers were pinned before that charge existed.
+    let (mut p, jpath, _) = pager_in(&dir, 2, Some(300 * 1024 * 1024 + 1000));
     let gguf = write_gguf(&dir, b"weights");
     p.register_model("qwen", &gguf, meta(), None).unwrap();
     let high = p.create_agent("qwen", 200, None, 10_000).unwrap();

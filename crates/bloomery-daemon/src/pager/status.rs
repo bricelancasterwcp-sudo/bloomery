@@ -25,8 +25,29 @@ pub struct StatusReport {
     /// bloomery's static VRAM budget (see `Pager::new`), not a live driver
     /// read; `None` = unmeasured, not zero.
     pub free_vram_bytes: Option<u64>,
-    /// Sum of the KV footprints the pager believes are currently resident.
+    /// Sum of what the pager believes currently-resident contexts
+    /// **reserve**: KV cache plus the per-context runtime overhead
+    /// ([`StatusReport::ctx_overhead_bytes`]). The name is Phase 1's and is
+    /// kept for wire compatibility; the value is the residency term, which
+    /// is the number placement decides on.
     pub resident_kv_bytes: u64,
+    /// The daemon-level VRAM margin held back from *both* the window law and
+    /// the placement budget (`config.overhead_mib`).
+    pub overhead_bytes: u64,
+    /// What each resident context reserves beyond its KV cache
+    /// (`config.ctx_overhead_mib`) — llama.cpp's per-context compute and
+    /// host buffers, which the 2026-08-14 natural-pressure run measured at
+    /// 304 MiB + 30 MiB against an 896 MiB KV cache.
+    pub ctx_overhead_bytes: u64,
+    /// Sum of `weights_bytes` over every model whose weights are currently
+    /// loaded into the substrate — the weights term of the reservation
+    /// budget (`avail = budget − overhead − Σ loaded weights − Σ resident
+    /// reservations`; Task 3 added the weights term, Task 5's live run added
+    /// the other two — see the accounting rule on `Pager::place`). Derived from the loaded
+    /// set on every call rather than tracked as a counter, so `unload_model`
+    /// crediting weights back is just this sum recomputing; `0` when
+    /// nothing is loaded.
+    pub loaded_weights_bytes: u64,
     /// The operator-declared hardware tier every profile here is marked
     /// with. `None` = the daemon was never told one, never a guessed name.
     pub tier: Option<TierStatus>,
@@ -58,6 +79,11 @@ pub struct AgentStatus {
     pub bound_by: &'static str,
     /// True when this agent's window was computed without a VRAM measurement.
     pub vram_unmeasured: bool,
+    /// What this agent reserves when resident: KV cache plus
+    /// [`StatusReport::ctx_overhead_bytes`]. Name kept from Phase 1; the
+    /// value now includes the reservation, because that is what residency
+    /// plans against and reporting the bare KV here would be a number that
+    /// looks like the accounting and is not.
     pub kv_bytes: u64,
     pub budget_granted: u64,
     pub budget_spent: u64,
@@ -93,5 +119,59 @@ pub(crate) fn state_str(s: &AgentState) -> &'static str {
         AgentState::Resident { .. } => "resident",
         AgentState::Suspended => "suspended",
         AgentState::Fresh => "fresh",
+    }
+}
+
+/// The `/status` document builder.
+///
+/// Lives beside the types it fills rather than in `pager.rs`: every field
+/// below has a doc comment a few lines up explaining what it means, and a
+/// builder that drifts from those comments is the failure mode worth
+/// designing against.
+impl<S: bloomery_substrate::Substrate> crate::pager::Pager<S> {
+    /// A serializable snapshot of everything the pager is holding, sorted so
+    /// two calls with the same state produce the same document.
+    pub fn status(&self) -> StatusReport {
+        let mut agents: Vec<AgentStatus> = self
+            .table
+            .iter()
+            .map(|a| AgentStatus {
+                id: a.id.clone(),
+                model: a.model.clone(),
+                priority: a.priority,
+                state: state_str(&a.state),
+                window_tokens: a.window.tokens,
+                bound_by: bound_by_str(a.window.bound_by),
+                vram_unmeasured: a.window.vram_unmeasured,
+                kv_bytes: a.reserved_bytes,
+                budget_granted: a.budget.granted(),
+                budget_spent: a.budget.spent(),
+            })
+            .collect();
+        agents.sort_by(|x, y| x.id.cmp(&y.id));
+        let mut models: Vec<ModelStatus> = self
+            .models
+            .iter()
+            .map(|(name, m)| ModelStatus {
+                name: name.clone(),
+                digest: m.digest.clone(),
+                loaded: m.handle.is_some(),
+                profiled: m.profile.is_some(),
+                kv_per_token: m.kv_per_token,
+                training_ctx: m.meta.training_ctx,
+            })
+            .collect();
+        models.sort_by(|x, y| x.name.cmp(&y.name));
+        StatusReport {
+            free_vram_bytes: (self.free_vram)(),
+            overhead_bytes: self.overhead_bytes,
+            ctx_overhead_bytes: self.ctx_overhead_bytes,
+            resident_kv_bytes: self.resident_reserved_bytes(),
+            loaded_weights_bytes: self.loaded_weights_bytes(),
+            tier: self.tier.clone(),
+            posting: self.posting,
+            agents,
+            models,
+        }
     }
 }

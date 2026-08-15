@@ -29,6 +29,7 @@ mod status;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use bloomery_core::budget::{Budget, BudgetExhausted};
 use bloomery_core::geometry::{kv_bytes_per_token, usable_window, GeometryInput};
@@ -41,7 +42,7 @@ use bloomery_substrate::{ModelHandle, Substrate};
 use crate::agents::{model_digest, Agent, AgentState, AgentTable, ImageStore};
 use error::sub;
 use journal as jrnl;
-use status::{bound_by_str, state_str};
+use status::bound_by_str;
 
 pub use error::PagerError;
 pub use status::{AgentInfo, AgentStatus, ModelStatus, StatusReport, TierStatus};
@@ -52,6 +53,15 @@ pub use status::{AgentInfo, AgentStatus, ModelStatus, StatusReport, TierStatus};
 /// an unmeasured term is not silently invented (law 5). The daemon wires the
 /// operator's `config.overhead_mib` in via [`Pager::set_overhead_bytes`].
 const DEFAULT_OVERHEAD_BYTES: u64 = 0;
+
+/// VRAM reserved per resident context *on top of* its KV cache.
+///
+/// Zero by default for the same reason as [`DEFAULT_OVERHEAD_BYTES`]: the
+/// pager has measured nothing about this machine and will not invent a
+/// number. The daemon wires `config.ctx_overhead_mib` in via
+/// [`Pager::set_ctx_overhead_bytes`], and that config key carries the
+/// measured rationale.
+const DEFAULT_CTX_OVERHEAD_BYTES: u64 = 0;
 
 /// Offload every layer by default — llama.cpp clamps a too-large value down
 /// to the model's layer count. The pager's VRAM accounting assumes the KV
@@ -72,12 +82,28 @@ const CHARS_PER_TOKEN: u64 = 3;
 const DEFAULT_PRIORITY: u8 = 100;
 const DEFAULT_BUDGET_TOKENS: u64 = 200_000;
 
+/// Default equal-priority time-sharing quantum (Task 4, spec §2 item 4):
+/// how long a qualifying refusal must wait before the pager takes the
+/// least-recently-used equal-priority resident anyway. `main.rs` wires the
+/// operator's `config.time_share_quantum_secs` in via
+/// [`Pager::set_time_share_quantum_ms`].
+const DEFAULT_TIME_SHARE_QUANTUM_MS: u64 = 30_000;
+
 /// Source of bloomery's static VRAM budget — see [`Pager::new`].
 ///
 /// `Send + Sync` from the start: Task 14 shares one pager across request
 /// threads behind a lock, and adding the bounds later would be a breaking
 /// change to every caller that built one.
 pub type FreeVramFn = Box<dyn Fn() -> Option<u64> + Send + Sync>;
+
+/// The pager's one source of "now" — monotonic milliseconds, never wall
+/// time. `Pager::new` closes over an `Instant` captured at construction and
+/// reports its own elapsed time by default; `set_clock` swaps in a
+/// deterministic fake for tests. Every scheduling decision that needs a
+/// timestamp (Task 4's time-sharing tiebreak) reads through this closure —
+/// see `paging::try_time_share`'s doc comment for the determinism argument
+/// this exists to support.
+pub type ClockFn = Box<dyn Fn() -> u64 + Send + Sync>;
 
 /// A registered model: its file, geometry, blob identity, optional profile,
 /// and the substrate handle once its weights are actually loaded.
@@ -112,6 +138,9 @@ pub struct Pager<S: Substrate> {
     /// bloomery's static VRAM budget — see [`Pager::new`].
     free_vram: FreeVramFn,
     overhead_bytes: u64,
+    /// Per-context runtime reservation; see [`DEFAULT_CTX_OVERHEAD_BYTES`]
+    /// and [`Pager::set_ctx_overhead_bytes`].
+    ctx_overhead_bytes: u64,
     n_gpu_layers: u32,
     /// Monotonic: agent ids are the pager's to keep unique, because
     /// `plan_residency`'s behavior is unspecified for duplicate ids.
@@ -128,6 +157,29 @@ pub struct Pager<S: Substrate> {
     /// daemon wires one: an undeclared tier is reported as unknown, never
     /// invented (law 5's None-vs-zero, applied to a label).
     tier: Option<TierStatus>,
+    /// The pager's one clock — see [`ClockFn`]. Defaults to an `Instant`
+    /// captured at [`Pager::new`]; [`Pager::set_clock`] swaps in a fake for
+    /// deterministic tests.
+    clock: ClockFn,
+    /// How long a qualifying equal-priority refusal must wait before
+    /// [`paging::try_time_share`] evicts the LRU resident anyway — see
+    /// [`Pager::set_time_share_quantum_ms`].
+    time_share_quantum_ms: u64,
+    /// `agent id -> clock reading at the FIRST qualifying refusal it hit`
+    /// (Task 4). Cleared on any successful placement and on
+    /// [`Pager::remove_agent`], so a stale mark from an earlier stand-off
+    /// can never make a later, unrelated refusal look like it has already
+    /// waited a full quantum.
+    waiting_since: HashMap<String, u64>,
+    /// `agent id -> clock reading at that agent's most recent "use"`
+    /// (Task 4), the LRU tiebreak's ordering key. **Set at two points, by
+    /// ruling:** (1) the transition to `Resident` — a successful placement,
+    /// whether via `resume` or via `infer` paging an agent in — and (2) a
+    /// completed `infer`. Point (1) is what keeps a just-resumed-but-never-
+    /// inferred agent from reading as "oldest" at the `unwrap_or(0)` map
+    /// default and being picked as the instant victim; point (2) then keeps
+    /// it accurate for an agent that goes on to actually do work.
+    last_use: HashMap<String, u64>,
 }
 
 impl<S: Substrate> Pager<S> {
@@ -149,6 +201,7 @@ impl<S: Substrate> Pager<S> {
         image_store: ImageStore,
         free_vram: FreeVramFn,
     ) -> Pager<S> {
+        let start = Instant::now();
         Pager {
             substrate,
             journal,
@@ -157,6 +210,7 @@ impl<S: Substrate> Pager<S> {
             models: HashMap::new(),
             free_vram,
             overhead_bytes: DEFAULT_OVERHEAD_BYTES,
+            ctx_overhead_bytes: DEFAULT_CTX_OVERHEAD_BYTES,
             n_gpu_layers: DEFAULT_N_GPU_LAYERS,
             next_agent_seq: 0,
             vram_unmeasured_logged: false,
@@ -172,11 +226,29 @@ impl<S: Substrate> Pager<S> {
             default_priority: DEFAULT_PRIORITY,
             default_budget_tokens: DEFAULT_BUDGET_TOKENS,
             tier: None,
+            // The determinism law (Task 4): this closure is the *only*
+            // place production code calls `Instant::now()`-derived time for
+            // scheduling purposes — everywhere else reads through
+            // `self.clock`. `set_clock` replaces it wholesale for tests, so
+            // nothing here needs to be swappable piecemeal.
+            clock: Box::new(move || u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)),
+            time_share_quantum_ms: DEFAULT_TIME_SHARE_QUANTUM_MS,
+            waiting_since: HashMap::new(),
+            last_use: HashMap::new(),
         }
     }
 
     pub fn set_overhead_bytes(&mut self, bytes: u64) {
         self.overhead_bytes = bytes;
+    }
+
+    /// Sets what each resident context reserves beyond its KV cache.
+    ///
+    /// Applies to agents created *after* this call: `reserved_bytes` is
+    /// computed once, at creation, so an agent's reservation cannot change
+    /// under a placement decision that already read it.
+    pub fn set_ctx_overhead_bytes(&mut self, bytes: u64) {
+        self.ctx_overhead_bytes = bytes;
     }
 
     pub fn set_n_gpu_layers(&mut self, n: u32) {
@@ -228,6 +300,30 @@ impl<S: Substrate> Pager<S> {
             name: name.to_string(),
             emulated,
         });
+    }
+
+    /// Replaces the pager's clock (Task 4). Production code never needs
+    /// this — [`Pager::new`]'s default is an `Instant`-backed monotonic
+    /// clock — but a deterministic fake lets tests drive the equal-priority
+    /// time-sharing tiebreak (`paging::try_time_share`) with an exact,
+    /// controllable notion of elapsed time instead of a real wall clock.
+    pub fn set_clock(&mut self, clock: ClockFn) {
+        self.clock = clock;
+    }
+
+    /// Sets the equal-priority time-sharing quantum
+    /// (`config.time_share_quantum_secs`, default 30s / 30_000ms) — how
+    /// long a qualifying refusal must wait before
+    /// `paging::try_time_share` evicts the LRU resident anyway.
+    ///
+    /// `0` is a valid, if extreme, setting: it degrades the wait to nothing,
+    /// so the LRU equal-priority resident is evicted on the very *first*
+    /// qualifying refusal rather than after any wait at all — a pure
+    /// round-robin escape hatch, not this module's default
+    /// wait-one-quantum semantics. Intentional, not a special case in the
+    /// implementation: `waited_ms (0) < quantum_ms (0)` is simply false.
+    pub fn set_time_share_quantum_ms(&mut self, ms: u64) {
+        self.time_share_quantum_ms = ms;
     }
 
     /// Attaches a measured [`Profile`] to a registered model — POST's whole
@@ -414,11 +510,16 @@ impl<S: Substrate> Pager<S> {
             window_tokens: window.tokens,
             bound_by: bound_by.to_string(),
         };
+        // The KV cache alone. What residency plans against is
+        // `reserved_bytes` just below — see `Agent::reserved_bytes` for the
+        // measurement that separated the two.
+        let kv_bytes = u64::from(window.tokens).saturating_mul(kv_per_token);
         self.table.insert(Agent {
             id,
             model: model.to_string(),
             priority,
-            kv_bytes: u64::from(window.tokens).saturating_mul(kv_per_token),
+            kv_bytes,
+            reserved_bytes: kv_bytes.saturating_add(self.ctx_overhead_bytes),
             window,
             budget: Budget::new(budget_tokens),
             state: AgentState::Fresh,
@@ -571,6 +672,14 @@ impl<S: Substrate> Pager<S> {
             .budget
             .charge(charged);
         jrnl::infer_completed(&mut self.journal, id, &verified)?;
+        // The second of `last_use`'s two write points (see the field doc):
+        // a completed inference. `ensure_resident` (in `paging`) already
+        // recorded the first write when this agent was placed, moments ago
+        // in this same call — this one supersedes it with the more precise
+        // "actually did work" timestamp. Read through the pager's own
+        // clock (never `Instant::now()` ad hoc) so the eviction decision
+        // built from it stays deterministic under a fake clock.
+        self.last_use.insert(id.to_string(), (self.clock)());
         Ok(verified)
     }
 
@@ -629,61 +738,25 @@ impl<S: Substrate> Pager<S> {
     /// let it accumulate in the table forever. Unlike [`Pager::suspend`],
     /// no image is *saved* on the way out: the context is being discarded,
     /// not paged out for a later resume, so persisting an image nobody will
-    /// ever `take` back would just be wasted work. No existing [`Event`]
-    /// variant fits "agent removed", so this journals nothing new — it is
-    /// bookkeeping cleanup, not a paging decision.
+    /// ever `take` back would just be wasted work. `reason` is journaled
+    /// verbatim via [`Event::AgentRemoved`] on the successful path only —
+    /// a refused removal (unknown id) leaves nothing to explain.
     ///
     /// [`Event`]: bloomery_core::journal::Event
-    pub fn remove_agent(&mut self, id: &str) -> Result<(), PagerError> {
+    pub fn remove_agent(&mut self, id: &str, reason: &str) -> Result<(), PagerError> {
         if self.table.get(id).is_none() {
             return Err(PagerError::UnknownAgent(id.to_string()));
         }
         self.destroy_context(id)?;
         self.images.drop_image(id);
         self.table.remove(id);
+        // Task 4: a removed agent can never be "waiting" or have a
+        // "last use" again — an id is never reused (monotonic
+        // `next_agent_seq`), so leaving either mark behind would just be a
+        // permanent, meaningless entry in both maps.
+        self.waiting_since.remove(id);
+        self.last_use.remove(id);
+        jrnl::agent_removed(&mut self.journal, id, reason)?;
         Ok(())
-    }
-
-    /// A serializable snapshot of everything the pager is holding, sorted so
-    /// two calls with the same state produce the same document.
-    pub fn status(&self) -> StatusReport {
-        let mut agents: Vec<AgentStatus> = self
-            .table
-            .iter()
-            .map(|a| AgentStatus {
-                id: a.id.clone(),
-                model: a.model.clone(),
-                priority: a.priority,
-                state: state_str(&a.state),
-                window_tokens: a.window.tokens,
-                bound_by: bound_by_str(a.window.bound_by),
-                vram_unmeasured: a.window.vram_unmeasured,
-                kv_bytes: a.kv_bytes,
-                budget_granted: a.budget.granted(),
-                budget_spent: a.budget.spent(),
-            })
-            .collect();
-        agents.sort_by(|x, y| x.id.cmp(&y.id));
-        let mut models: Vec<ModelStatus> = self
-            .models
-            .iter()
-            .map(|(name, m)| ModelStatus {
-                name: name.clone(),
-                digest: m.digest.clone(),
-                loaded: m.handle.is_some(),
-                profiled: m.profile.is_some(),
-                kv_per_token: m.kv_per_token,
-                training_ctx: m.meta.training_ctx,
-            })
-            .collect();
-        models.sort_by(|x, y| x.name.cmp(&y.name));
-        StatusReport {
-            free_vram_bytes: (self.free_vram)(),
-            resident_kv_bytes: self.resident_kv_bytes(),
-            tier: self.tier.clone(),
-            posting: self.posting,
-            agents,
-            models,
-        }
     }
 }

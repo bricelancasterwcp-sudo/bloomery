@@ -72,7 +72,7 @@ fn remove_agent_destroys_context_and_forgets_the_agent() {
         .iter()
         .any(|c| c.starts_with("create_context")));
 
-    p.remove_agent(&a.id).unwrap();
+    p.remove_agent(&a.id, "test teardown").unwrap();
 
     assert!(p
         .substrate()
@@ -83,7 +83,7 @@ fn remove_agent_destroys_context_and_forgets_the_agent() {
         Err(PagerError::UnknownAgent(id)) => assert_eq!(id, a.id),
         other => panic!("expected UnknownAgent after removal, got {other:?}"),
     }
-    match p.remove_agent(&a.id) {
+    match p.remove_agent(&a.id, "test teardown") {
         Err(PagerError::UnknownAgent(id)) => assert_eq!(id, a.id),
         other => panic!("expected UnknownAgent on double removal, got {other:?}"),
     }
@@ -98,7 +98,7 @@ fn remove_agent_on_a_fresh_agent_is_not_an_error() {
     let gguf = write_gguf(&dir, b"w");
     p.register_model("qwen", &gguf, meta(), None).unwrap();
     let a = p.create_agent("qwen", 50, None, 1000).unwrap();
-    p.remove_agent(&a.id).unwrap();
+    p.remove_agent(&a.id, "test teardown").unwrap();
     assert!(p.status().agents.is_empty());
 }
 
@@ -107,8 +107,28 @@ fn remove_agent_on_a_fresh_agent_is_not_an_error() {
 fn remove_agent_on_unknown_id_is_named() {
     let dir = fresh_dir("bloomery-pager-remove-unknown");
     let mut p = pager_in(&dir, 0, Some(10u64.pow(9)));
-    match p.remove_agent("nope") {
+    match p.remove_agent("nope", "test teardown") {
         Err(PagerError::UnknownAgent(id)) => assert_eq!(id, "nope"),
         other => panic!("expected UnknownAgent, got {other:?}"),
     }
+}
+
+/// The reason travels into the journal verbatim on the successful path —
+/// 2b's task loop and any operator reading the journal must see *why* an
+/// agent left the table, not just that it did.
+#[test]
+fn remove_agent_journals_the_removal_with_its_reason() {
+    let dir = fresh_dir("bloomery-pager-remove-journals-reason");
+    let journal_path = dir.join("j.jsonl");
+    let mut p = pager_in(&dir, 0, Some(10u64.pow(9)));
+    let gguf = write_gguf(&dir, b"w");
+    p.register_model("qwen", &gguf, meta(), None).unwrap();
+    let a = p.create_agent("qwen", 50, None, 1000).unwrap();
+
+    p.remove_agent(&a.id, "test teardown").unwrap();
+
+    let events = bloomery_core::journal::replay(&journal_path).unwrap();
+    assert!(events.iter().any(|e| matches!(e,
+        bloomery_core::journal::Event::AgentRemoved { id: rid, reason }
+            if rid == &a.id && reason == "test teardown")));
 }

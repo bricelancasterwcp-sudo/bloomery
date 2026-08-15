@@ -31,6 +31,46 @@ fn default_budget_tokens() -> u64 {
     200_000
 }
 
+/// Task 4's equal-priority time-sharing quantum, in seconds — how long a
+/// qualifying refusal waits before the pager takes the LRU equal-priority
+/// resident anyway. Matches `pager::DEFAULT_TIME_SHARE_QUANTUM_MS` (30s);
+/// `main.rs` wires this through `Pager::set_time_share_quantum_ms` as
+/// milliseconds.
+fn default_time_share_quantum_secs() -> u64 {
+    30
+}
+
+/// What each resident context reserves beyond its KV cache, in MiB.
+///
+/// **This default is derived from a measured floor; the active value is
+/// configured, not measured per-run.** bloomery never reads this number back
+/// from the substrate — see the honest limit in the README and carried-debt
+/// item 7. The derivation is committed as
+/// `docs/superpowers/evidence/2026-08-14-2a-daemon-log-excerpt.txt`: the
+/// 2026-08-14 natural-pressure run's `daemon.log` recorded, for every
+/// `n_ctx = 16384` context of qwen2.5-coder-7b-q8_0 on a Vulkan RTX 5080:
+///
+/// ```text
+/// sched_reserve:    Vulkan0 compute buffer size =   304.00 MiB
+/// sched_reserve: Vulkan_Host compute buffer size =    30.01 MiB
+/// ```
+///
+/// against an 896 MiB KV cache. Charging the KV alone let the pager plan a
+/// sixth resident where five fit; the sixth allocation returned
+/// `ErrorOutOfDeviceMemory` and the run died. 384 MiB sits above the
+/// observed 334 with room for a device whose buffers are larger, and an
+/// operator who has measured their own may lower it.
+///
+/// **Asymmetry to know about**: `usable_window`'s VRAM term subtracts
+/// `weights` and `overhead_mib` but *not* this value, so a window that comes
+/// out VRAM-bound reserves exactly `ctx_overhead_bytes` more than the budget
+/// it was sized against and can never be placed. That refuses safely (law 1,
+/// pre-checked) but it does not recover on its own; the fix is a core
+/// geometry change and is deferred (carried-debt item 7).
+fn default_ctx_overhead_mib() -> u64 {
+    384
+}
+
 /// `pub(crate)` so `post.rs` builds its test runner against the same
 /// spelling this config defaults to, rather than a second literal that
 /// could drift from it.
@@ -49,12 +89,16 @@ pub struct Config {
     pub tier: Tier,
     #[serde(default = "default_overhead_mib")]
     pub overhead_mib: u64,
+    #[serde(default = "default_ctx_overhead_mib")]
+    pub ctx_overhead_mib: u64,
     #[serde(default = "default_priority")]
     pub default_priority: u8,
     #[serde(default = "default_budget_tokens")]
     pub default_budget_tokens: u64,
     #[serde(default)]
     pub allow_unprofiled: bool,
+    #[serde(default = "default_time_share_quantum_secs")]
+    pub time_share_quantum_secs: u64,
     pub assay: AssayConfig,
 }
 
