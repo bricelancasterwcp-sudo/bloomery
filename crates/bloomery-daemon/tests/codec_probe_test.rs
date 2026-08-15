@@ -609,6 +609,76 @@ fn steps_exhausted_is_scored_not_aborted() {
     }
 }
 
+/// `BudgetExhausted` is a scored outcome too (protocol §3), sitting in the
+/// exact same match arm as `Done`/`StepsExhausted` in `run_one_fixture` —
+/// right beside the arm that aborts the whole probe on `Error`. Nothing else
+/// in this file exercises it, so a mutation moving `BudgetExhausted` into the
+/// abort arm would otherwise survive the suite unnoticed.
+///
+/// Fixture 1 (t1-alpha) gets a single scripted `read` whose reported
+/// `completion_tokens` alone overruns `FIXTURE_BUDGET_TOKENS`; the agent's
+/// pager-level `Budget` (`Pager::infer`'s pre-substrate `check`) is what
+/// stops step 2 — never a "script exhausted" substrate error, which is the
+/// trigger the abort tests below use instead. Fixture 2 (t2-beta) gets a
+/// brand-new agent and a fresh budget from `create_agent`, and lands
+/// normally, proving the probe kept going past fixture 1's exhaustion rather
+/// than treating it as an infrastructure failure.
+#[test]
+fn budget_exhausted_is_scored_not_aborted() {
+    let dir = fresh_dir("budget-exhausted");
+    let exhausting_read = Reply {
+        text: "<action verb=\"read\" path=\"a.txt\">\n</action>".to_string(),
+        prompt_tokens: Some(8),
+        completion_tokens: Some(FIXTURE_BUDGET_TOKENS as u32),
+        duration_ms: 1,
+    };
+    let pager = Mutex::new(build_pager(
+        &dir,
+        vec![
+            exhausting_read,
+            sr_patch("b.txt", "broken", "fixed"),
+            done("repaired b.txt"),
+        ],
+    ));
+
+    let result = run_codec_probe(&pager, MODEL, &test_set(), &dir.join("scratch"))
+        .expect("a BudgetExhausted fixture must be SCORED, never abort the probe");
+
+    assert_eq!(result.n, 2, "both fixtures ran");
+    assert_eq!(result.landed, 1, "only t2-beta landed");
+
+    let events = pager_events(&dir);
+    let rows = fixture_rows(&events);
+    assert_eq!(rows.len(), 2, "both fixtures produced a CodecFixture row");
+    assert_eq!(rows[0].0, "t1-alpha");
+    assert!(
+        !rows[0].2,
+        "no patch step ran before the budget ran out — not landed"
+    );
+    assert_eq!(rows[0].3, 1, "only the exhausting read step ran");
+    assert_eq!(
+        rows[0].4, "BudgetExhausted",
+        "with no patch step, detail falls back to the terminal status"
+    );
+    assert_eq!(rows[1].0, "t2-beta");
+    assert!(rows[1].2, "t2-beta landed on its own fresh budget");
+
+    assert_eq!(
+        verdict_events(&events).len(),
+        1,
+        "a BudgetExhausted fixture is scored, so the probe still completes \
+         and journals exactly one CodecVerdict — never an abort"
+    );
+
+    let p = pager.lock().unwrap();
+    assert!(
+        p.status().models[0].codec_gate.is_some(),
+        "a completed probe is a measurement recorded on the pager, not \
+         'unmeasured' — which is what an aborted probe would leave behind"
+    );
+    drop(p);
+}
+
 // ---------------------------------------------------------------------------
 // Infrastructure aborts (protocol §3) — never a fixture failure
 // ---------------------------------------------------------------------------

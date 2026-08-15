@@ -238,6 +238,7 @@ replace = "listen_port = 8181"
 - 10 `python` (`py-` prefix) + 10 `plaintext` (`txt-` prefix), unique names.
 - One planted defect each, robigo shape: the goal states the failing symptom AND names the target file AND ends with the patch-then-done instruction.
 - Target files 5–60 lines. Reference = one contiguous-region change, `search` matching the file exactly once (indentation included).
+  [Recorded at final review: the mandated serve.conf example itself has 4 content lines; the 5–60 guidance governed the other 18 fixtures — plan-text inconsistency, protocol unaffected.]
 - ≥3 python fixtures with indentation-sensitive `search` lines (leading spaces — the robigo-measured 7B failure mode).
 - ≥2 python fixtures include a second distractor file the goal's symptom references (forces a `read` before the patch).
 - Plaintext fixtures span config-file and prose shapes.

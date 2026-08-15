@@ -81,7 +81,7 @@ impl<S: Substrate> crate::pager::Pager<S> {
         Ok(())
     }
 
-    /// Whether `model` may dispatch mutating verbs (`patch`/`write`/`run`)
+    /// Whether `model` may dispatch mutating verbs (`patch`/`run`)
     /// right now — protocol §3/§6's fail-closed gate. `true` iff a gate is
     /// stored **and** `gate.mutating_verbs`; `false` for an unmeasured
     /// model, an unknown model, and a model whose stored gate demoted it.

@@ -191,10 +191,13 @@ above. Branch `feat/phase2bc-p4-codec-gate`.
     file's item 6 extension above covers the boots-only half of the same
     boot cost). A boot with `tasks_enabled` and the codec probe running
     therefore serializes daemon-wide inference for however long that
-    model's fixtures take — up to ~120 sequential inference calls per
-    model (20 fixtures × up to `FIXTURE_MAX_STEPS` = 6 steps) — which is
-    strictly longer than POST's own ~110 s per model. See the "G4 codec
-    probe costs real GPU minutes" line in the README's Honest limits.
+    model's fixtures take — up to 120 steps per model (20 fixtures × up to
+    `FIXTURE_MAX_STEPS` = 6 steps), each step up to `MAX_PARSE_ATTEMPTS` = 3
+    inference calls on a re-ask, a strict ceiling of ~360 inference calls
+    per model, bounded in practice by the 30k `FIXTURE_BUDGET_TOKENS`
+    per-fixture budget — which is strictly longer than POST's own ~110 s
+    per model. See the "G4 codec probe costs real GPU minutes" line in the
+    README's Honest limits.
 11. **Demotion is per-boot state, never persisted, item (d) of the
     2026-08-15 batch.** A completed G4 verdict lives only in the pager's
     in-memory `codec_gate` field (`crates/bloomery-daemon/src/pager/codec_gate.rs`);

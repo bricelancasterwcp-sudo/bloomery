@@ -136,16 +136,17 @@ Limits after Phase 2a, all known and none hidden:
   plainly.** With `tasks_enabled = true` and `assay.enabled = true`, boot runs
   the codec probe against the frozen `codec-tasks-v1` set (N=20) for every
   configured model, strictly after POST finishes — up to 20 fixtures × 6
-  steps (`FIXTURE_MAX_STEPS`) = **up to ~120 sequential inference calls per
-  model** before that model's boot probe completes, each fixture holding the
-  same coarse whole-task pager lock the task loop already does (see "One
-  lock, held for a whole task" above), so this is minutes of GPU-busy,
-  daemon-wide-blocking time per model, not seconds — and, like POST, this is
-  a **per-boot** measurement only: there is no continuous re-probing (same
-  honest limit as the POST line above). Turn `tasks_enabled` off, or
-  `assay.enabled` off, to skip it — either one leaves every model's mutating
-  verbs (`patch`/`write`/`run`) refused (see [Codec gate](#codec-gate-phase-2b2c-p4)
-  below).
+  steps (`FIXTURE_MAX_STEPS`) = **up to 120 steps (≤3 inference calls each —
+  a strict ceiling of ~360 calls, bounded in practice by the 30k
+  per-fixture budget) per model** before that model's boot probe completes,
+  each fixture holding the same coarse whole-task pager lock the task loop
+  already does (see "One lock, held for a whole task" above), so this is
+  minutes of GPU-busy, daemon-wide-blocking time per model, not seconds —
+  and, like POST, this is a **per-boot** measurement only: there is no
+  continuous re-probing (same honest limit as the POST line above). Turn
+  `tasks_enabled` off, or `assay.enabled` off, to skip it — either one
+  leaves every model's mutating verbs (`patch`/`run`) refused (see
+  [Codec gate](#codec-gate-phase-2b2c-p4) below).
 * **KV images are boot-scoped.** The image store's index lives in memory, so
   spilled images from a previous boot are unreachable litter. A restart is a
   cold start for every agent.
@@ -243,7 +244,7 @@ Limits after Phase 2a, all known and none hidden:
   sharing a step number, so nothing here assumes one record per step.
 * **Codec choice and mutating-verb gating are P4's, not P3's.** A task now
   resolves its per-model `patch` codec and whether mutating verbs
-  (`patch`/`write`/`run`) are even available from the pager's G4 verdict —
+  (`patch`/`run`) are even available from the pager's G4 verdict —
   see [Codec gate](#codec-gate-phase-2b2c-p4) below. Otherwise still
   local-only and buffered like the rest of this daemon: no remote execution,
   no streaming of a task's progress beyond polling `GET`.
@@ -251,13 +252,13 @@ Limits after Phase 2a, all known and none hidden:
 ### Codec gate (Phase 2b/2c P4)
 
 * **Fail-closed, unmeasured is never permission.** Every model's mutating
-  verbs (`patch`/`write`/`run`) are refused by default. They are enabled
+  verbs (`patch`/`run`) are refused by default. They are enabled
   **only** for a model that has a *stored* G4 verdict recorded on the pager
   **and** whose verdict itself says keep (`landed * 5 >= n * 4`, no float
   edge) — a model that was never probed, is still probing, or whose probe
   aborted mid-run reads exactly like a demoted model, never like a
   permissive default. `read`/`find`/`done` are never gated; only the
-  mutating three are.
+  mutating two are.
 * **What the gate measures.** The frozen `codec-tasks-v1` fixture set (N=20
   single-defect repair tasks, embedded in the daemon binary) run through the
   *real* `run_task` loop — real prompts, real envelope decoding, real
