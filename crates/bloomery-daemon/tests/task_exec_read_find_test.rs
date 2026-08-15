@@ -142,3 +142,25 @@ fn find_does_not_hang_on_a_directory_symlink_cycle() {
     assert!(!obs.failed);
     assert!(obs.content.contains("file.txt"));
 }
+
+/// Attention point called out in the brief: opening a directory with
+/// `O_NOFOLLOW`+`read(true)` succeeds at the `open(2)` call (directories
+/// open fine for reading their metadata), but the subsequent `read(2)`
+/// call `open_nofollow_read` makes to pull bytes out of it fails with
+/// `EISDIR` — a real OS error at a different point than the symlink/ELOOP
+/// case. `exec_read` must surface that as a failed `Observation`, not
+/// propagate a panic or an `Err` out of the function.
+#[test]
+fn read_a_directory_is_a_failed_observation_not_a_panic() {
+    let (sb, g) = sandbox();
+    // `out/` is a real directory inside the read root (read_roots covers
+    // the whole sandbox; write_roots is the narrower `out/` scope, which
+    // doesn't affect what's readable).
+    let obs = exec_read(&g, &sb, "out", None, &bounds());
+    assert!(obs.failed);
+    assert!(
+        obs.outcome.to_lowercase().contains("directory"),
+        "expected an EISDIR-shaped message, got: {}",
+        obs.outcome
+    );
+}

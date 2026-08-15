@@ -267,6 +267,14 @@ fn match_file(path: &Path, re: &Regex, cap: usize, out: &mut Vec<String>) {
 /// path already absolutized against it), so this fallback is a defensive
 /// default for a case the real call path shouldn't hit, not the primary
 /// contract.
+///
+/// **Caveat debuggers/Task 4-5 authors need:** the walk never descends
+/// into *any* symlinked directory, in-root or not (see [`walk_and_match`]'s
+/// doc comment for why). So a zero-match result does not mean "no line in
+/// the read root matches" — it can also mean a real match sits behind a
+/// symlink this walk deliberately never opened. That is a stated v1 limit,
+/// not a bug to chase if a `find` misses something reachable only through
+/// a symlinked path.
 pub fn exec_find(
     grant: &Grant,
     pattern: &str,
@@ -314,5 +322,69 @@ pub fn exec_find(
         outcome,
         content: out.join("\n"),
         failed: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a fresh tempdir under a caller-chosen name suffix (so two
+    /// tests in this module never collide on the same directory).
+    fn tempdir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "bloomery-exec-nofollow-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Pins the O_NOFOLLOW/ELOOP mechanism structurally.
+    ///
+    /// Every escape-symlink test in `task_exec_read_find_test.rs` refuses
+    /// *before* `open_nofollow_read` is ever reached — `grant.check_read`
+    /// already canonicalizes and rejects an out-of-root target, so those
+    /// tests exercise the grant boundary, not this function's own
+    /// `custom_flags(libc::O_NOFOLLOW)` call. Without a test that calls
+    /// `open_nofollow_read` directly on a symlink, a future refactor could
+    /// silently drop the flag (or typo the constant) and every existing
+    /// test would stay green. This test bypasses the grant layer entirely
+    /// on purpose, building a real symlink pointing at a real file and
+    /// asserting the open itself is refused with `ELOOP` — the OS error
+    /// `O_NOFOLLOW` produces when the final path component is a symlink.
+    /// `raw_os_error()` is asserted rather than `ErrorKind`, because
+    /// `ErrorKind` has no stably-named ELOOP variant to match on.
+    #[test]
+    fn open_nofollow_read_refuses_a_symlink_with_eloop() {
+        let dir = tempdir("eloop");
+        let target = dir.join("target.txt");
+        std::fs::write(&target, b"hello").unwrap();
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let err = open_nofollow_read(&link, 1024).expect_err("O_NOFOLLOW must refuse a symlink");
+        assert_eq!(
+            err.raw_os_error(),
+            Some(libc::ELOOP),
+            "expected ELOOP, got {err:?}"
+        );
+    }
+
+    /// Regression companion to the test above: `O_NOFOLLOW` must not
+    /// affect opening a real, non-symlink file — only a symlink at the
+    /// final path component is refused. Without this test, a fix for the
+    /// test above could overcorrect (e.g. by refusing every open) and
+    /// nothing would catch it.
+    #[test]
+    fn open_nofollow_read_opens_a_regular_file_fine() {
+        let dir = tempdir("regular");
+        let target = dir.join("target.txt");
+        std::fs::write(&target, b"hello").unwrap();
+
+        let (bytes, truncated) = open_nofollow_read(&target, 1024).unwrap();
+        assert_eq!(bytes, b"hello");
+        assert!(!truncated);
     }
 }
