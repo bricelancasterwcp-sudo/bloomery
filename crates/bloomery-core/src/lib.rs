@@ -6,4 +6,5 @@ pub mod grant;
 pub mod journal;
 pub mod profile;
 pub mod scheduler;
+pub mod stats;
 pub mod vram;
