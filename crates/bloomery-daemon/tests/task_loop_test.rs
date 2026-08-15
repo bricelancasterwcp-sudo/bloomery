@@ -1,4 +1,6 @@
-//! The task loop's five binding tests (Phase 2b/2c P3 Task 4 brief).
+//! The task loop's five binding tests (Phase 2b/2c P3 Task 4 brief), plus a
+//! regression guard for a carried obligation the review flagged as untested
+//! (`a_find_resolves_against_the_task_cwd_not_the_process_cwd`).
 //!
 //! Mirrors `task_exec_read_find_test.rs`'s real-sandbox pattern (a real
 //! tempdir, a real `Grant` scoped to it) layered on `pager_test.rs`'s
@@ -291,4 +293,76 @@ fn budget_exhaustion_ends_the_task() {
         .filter(|e| matches!(e, Event::TaskStep { .. }))
         .count();
     assert_eq!(task_steps, 0, "nothing executed, nothing journaled");
+}
+
+/// Regression guard for a carried obligation from Task 1: `exec_find` takes
+/// no `cwd` parameter, so `execute_action`'s `Find` dispatch arm MUST
+/// absolutize a relative `path` against `spec.cwd` before calling it — a
+/// relative prefix that skipped that step would silently fall back to
+/// `exec_find`'s own default, the *daemon/test process's* current
+/// directory (the repo root under `cargo test`), not the task's sandbox.
+///
+/// The mechanism this test pins: a needle string unique to this test run
+/// (`ZQXFINDME-<pid>`, guaranteed not to exist anywhere else on disk) is
+/// planted in a file *inside* the sandbox, in a subdirectory (`subdir/`),
+/// and the scripted `find` turn uses the relative path `"."` — deliberately
+/// relative, so the test actually exercises the absolutize step rather than
+/// trivially passing with an already-absolute path. Two things would go
+/// wrong if `absolutize` were ever dropped from that dispatch arm:
+/// - `"."` would resolve against the real process cwd instead of `spec.cwd`;
+/// - that resolved path sits outside the sandbox's granted read root, so
+///   `grant.check_read` refuses it — the `find` step's outcome would flip
+///   from `"found 1 matches"` to a `"grant violation"` string.
+///
+/// That's a structural signal (a different, assertable outcome string), not
+/// a fragile "did it happen to see real repo content" check.
+#[test]
+fn a_find_resolves_against_the_task_cwd_not_the_process_cwd() {
+    let dir = fresh_dir("find-cwd");
+    let (sb, g) = sandbox(&dir);
+    let needle = format!("ZQXFINDME-{}", std::process::id());
+    std::fs::create_dir_all(sb.join("subdir")).unwrap();
+    std::fs::write(sb.join("subdir").join("needle.txt"), format!("{needle}\n")).unwrap();
+
+    let (mut pager, agent_id) = fixture(
+        &dir,
+        1_000_000,
+        vec![
+            scripted(&format!(
+                "<action verb=\"find\" pattern=\"{needle}\" path=\".\">\n</action>"
+            )),
+            scripted("<action verb=\"done\">\nfound it\n</action>"),
+        ],
+    );
+    let task_journal_path = dir.join("task.jsonl");
+    let mut task_journal = Journal::open(&task_journal_path).unwrap();
+    let spec = spec(g, sb, 5);
+
+    let result = run_task(&mut pager, &agent_id, &spec, &mut task_journal);
+
+    assert_eq!(result.status, TaskStatus::Done);
+    assert_eq!(
+        result.steps.len(),
+        2,
+        "expected [find, done], got {:?}",
+        result.steps
+    );
+    assert_eq!(result.steps[0].verb, "find");
+    assert!(
+        !result.steps[0].outcome.contains("grant violation"),
+        "relative '.' must resolve against spec.cwd (the sandbox), not the \
+         process cwd — got outcome {:?}",
+        result.steps[0].outcome
+    );
+    assert!(
+        result.steps[0].outcome.contains("found 1 matches"),
+        "expected exactly 1 match for the unique needle, got {:?}",
+        result.steps[0].outcome
+    );
+    assert!(
+        result.steps[0].content.contains("needle.txt"),
+        "expected the match to name the needle file, got {:?}",
+        result.steps[0].content
+    );
+    assert_eq!(result.steps[1].verb, "done");
 }
