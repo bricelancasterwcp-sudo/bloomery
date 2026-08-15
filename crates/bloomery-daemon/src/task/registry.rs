@@ -31,7 +31,29 @@
 //! against, unlike `Pager::journal_post`'s boot-time concern (see that
 //! method's doc comment) where POST really does run concurrently with
 //! request-serving threads.
+//!
+//! **Panic containment (review fix).** `run_task` is unwrap-free in
+//! production, but a worker thread holds the pager's `MutexGuard` for the
+//! whole call above, so a panic anywhere under it would do two bad things
+//! at once if left uncaught: the closure unwinds straight past the entry's
+//! terminal write, so the registry entry is stuck `Running` forever (a
+//! poller has no way to observe the failure); and the unwind carries past
+//! the live `MutexGuard`, which poisons the shared `Mutex<Pager<S>>` —
+//! `api_native::lock_pager`'s sticky-poison handling then degrades *every*
+//! other request on the daemon to a `500`, so one task's panic takes down
+//! everything, not just its own poll. [`TaskRegistry::spawn_task`] wraps
+//! the `run_task` call itself in `std::panic::catch_unwind`, **inside** the
+//! locked scope: the panic is caught before it ever reaches the guard's
+//! `Drop`, so the guard is dropped the ordinary way (not via unwind) and
+//! the mutex is never poisoned. A caught panic still ends the task —
+//! `TaskStatus::Error`, with a message extracted from the payload where
+//! possible — so a poller sees a terminal state either way. This closes
+//! the availability gap; it does **not** prove the pager's own in-memory
+//! state (`table`, `models`) is still fully consistent after a panic
+//! mid-mutation — only that the *lock* itself survives clean, which is
+//! what stops the failure from cascading to every other request.
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -49,6 +71,22 @@ use crate::task::{run_task, TaskResult, TaskSpec, TaskStatus};
 /// empty, and `summary` is still `None` — no separate "in-flight" type is
 /// needed alongside it.
 type Entries = Arc<Mutex<HashMap<String, TaskResult>>>;
+
+/// Extracts a human-readable message from a caught panic's payload.
+/// `panic!("...")`, `.expect("...")`, and `.unwrap()` all carry either
+/// `&'static str` or `String` — the two cases this checks — so this covers
+/// every panic this codebase's own code can raise; a payload of any other
+/// type (a foreign dependency's custom panic value) falls back to a named
+/// generic message rather than guessing at its shape.
+fn panic_message(payload: &(dyn Any + Send + 'static)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        format!("task worker panicked: {s}")
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        format!("task worker panicked: {s}")
+    } else {
+        "task worker panicked (no string message on the payload)".to_string()
+    }
+}
 
 /// Locks `entries`, recovering from poison rather than propagating it.
 ///
@@ -149,7 +187,25 @@ impl TaskRegistry {
             // The v1 locking decision, exactly: one lock, held for the
             // whole task — see this module's docs.
             let result = match pager.lock() {
-                Ok(mut guard) => run_task(&mut guard, &agent_id, &spec, &mut journal),
+                Ok(mut guard) => {
+                    // Catch a panic from `run_task` HERE, inside the locked
+                    // scope, so it is caught before it would ever reach
+                    // `guard`'s `Drop` — see this module's "Panic
+                    // containment" doc section for the full reasoning. A
+                    // caught panic lets `guard` drop the ordinary way
+                    // (never via unwind), so the mutex is never poisoned.
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        run_task(&mut guard, &agent_id, &spec, &mut journal)
+                    }));
+                    match outcome {
+                        Ok(result) => result,
+                        Err(payload) => TaskResult {
+                            status: TaskStatus::Error,
+                            steps: Vec::new(),
+                            summary: Some(panic_message(payload.as_ref())),
+                        },
+                    }
+                }
                 Err(_) => {
                     // Deliberately NOT `.into_inner()` here: this is the
                     // pager's own mutex, not the registry's bookkeeping
@@ -338,5 +394,143 @@ mod tests {
             dir.join("tasks.jsonl"),
         );
         assert_ne!(id1, id2);
+    }
+
+    /// A `Substrate` whose `infer` always panics — exists only to prove
+    /// `spawn_task`'s `catch_unwind` does its job. Every other method is a
+    /// trivial success; `run_task`'s first step reaches `infer` and nothing
+    /// past it. Mirrors `api_native_test.rs`'s `PanicSubstrate`.
+    struct PanicSubstrate;
+
+    impl bloomery_substrate::Substrate for PanicSubstrate {
+        fn load_model(
+            &mut self,
+            _path: &std::path::Path,
+            _n_gpu_layers: u32,
+        ) -> Result<bloomery_substrate::ModelHandle, bloomery_substrate::SubstrateError> {
+            Ok(1)
+        }
+
+        fn unload_model(
+            &mut self,
+            _m: bloomery_substrate::ModelHandle,
+        ) -> Result<(), bloomery_substrate::SubstrateError> {
+            Ok(())
+        }
+
+        fn create_context(
+            &mut self,
+            _m: bloomery_substrate::ModelHandle,
+            _n_ctx: u32,
+        ) -> Result<bloomery_substrate::CtxHandle, bloomery_substrate::SubstrateError> {
+            Ok(1)
+        }
+
+        fn destroy_context(
+            &mut self,
+            _c: bloomery_substrate::CtxHandle,
+        ) -> Result<(), bloomery_substrate::SubstrateError> {
+            Ok(())
+        }
+
+        fn infer(
+            &mut self,
+            _c: bloomery_substrate::CtxHandle,
+            _prompt: &str,
+            _max_tokens: u32,
+        ) -> Result<bloomery_substrate::Reply, bloomery_substrate::SubstrateError> {
+            panic!("scripted panic: proves catch_unwind keeps the registry and pager healthy");
+        }
+
+        fn save_state(
+            &mut self,
+            _c: bloomery_substrate::CtxHandle,
+        ) -> Result<Vec<u8>, bloomery_substrate::SubstrateError> {
+            Ok(Vec::new())
+        }
+
+        fn load_state(
+            &mut self,
+            _c: bloomery_substrate::CtxHandle,
+            _bytes: &[u8],
+        ) -> Result<(), bloomery_substrate::SubstrateError> {
+            Ok(())
+        }
+    }
+
+    /// The regression this fix closes, stated as the two properties the
+    /// review named: (1) a panicking worker still reaches a terminal
+    /// `TaskStatus::Error` — `get` never reports `Running` forever, so a
+    /// poller has a bounded wait, not an infinite one; and (2) the shared
+    /// pager `Mutex` is NOT left poisoned — a completely ordinary
+    /// subsequent lock-and-use of the *same* `Arc<Mutex<Pager<_>>>>`
+    /// still succeeds, proving `catch_unwind` let the `MutexGuard` drop
+    /// the normal way rather than via unwind.
+    #[test]
+    fn a_panicking_worker_becomes_error_not_stuck_running_and_does_not_poison_the_pager() {
+        let dir = fresh_dir("panic");
+        let journal = Journal::open(&dir.join("pager.jsonl")).unwrap();
+        let images = ImageStore::new(&dir.join("img")).unwrap();
+        let mut pager = Pager::new(
+            PanicSubstrate,
+            journal,
+            images,
+            Box::new(|| Some(1024 * 1024 * 1024)),
+        );
+        let gguf = dir.join("panic.gguf");
+        std::fs::write(&gguf, b"weights").unwrap();
+        pager
+            .register_model("panic-model", &gguf, meta(), None)
+            .unwrap();
+        let info = pager
+            .create_agent("panic-model", 100, None, 1_000_000)
+            .unwrap();
+        let agent_id = info.id;
+
+        let pager = Arc::new(Mutex::new(pager));
+        let registry = TaskRegistry::new();
+        let spec = TaskSpec {
+            goal: "trigger a panic".to_string(),
+            grant: ok_grant(&dir),
+            budget_tokens: 1_000_000,
+            max_steps: 3,
+            cwd: std::fs::canonicalize(&dir).unwrap(),
+            patch_codec: PatchCodec::SearchReplace,
+            bounds: ExecBounds::default(),
+        };
+
+        let task_id =
+            registry.spawn_task(Arc::clone(&pager), agent_id, spec, dir.join("tasks.jsonl"));
+
+        // Property 1: bounded wait to a terminal state, never a stuck
+        // `Running`.
+        let mut entry = registry.get(&task_id).expect("entry exists immediately");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while entry.status == TaskStatus::Running && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            entry = registry.get(&task_id).expect("entry still exists");
+        }
+        assert_eq!(entry.status, TaskStatus::Error, "{entry:?}");
+        assert!(
+            entry
+                .summary
+                .as_deref()
+                .unwrap_or_default()
+                .contains("panicked"),
+            "{entry:?}"
+        );
+
+        // Property 2: the pager mutex is not poisoned. `.lock()` returning
+        // `Err` here would mean the catch_unwind failed to stop the unwind
+        // before the guard's `Drop`.
+        let lock_result = pager.lock();
+        assert!(
+            lock_result.is_ok(),
+            "pager mutex was poisoned by a caught worker panic"
+        );
+        // And it is not just lockable but usable — an ordinary read-only
+        // call against the same pager still succeeds.
+        let p = lock_result.unwrap();
+        let _ = p.status();
     }
 }

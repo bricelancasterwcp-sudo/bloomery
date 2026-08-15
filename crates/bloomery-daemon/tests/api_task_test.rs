@@ -201,3 +201,204 @@ fn unknown_task_id_is_404() {
 
     handle.shutdown();
 }
+
+// ---------------------------------------------------------------------------
+// Regression: a panicking task worker must not wedge its own poll or take
+// the daemon down for everyone else (review fix — `TaskRegistry::spawn_task`
+// now wraps `run_task` in `catch_unwind` inside the pager-lock scope).
+// ---------------------------------------------------------------------------
+
+/// A `Substrate` whose `infer` always panics. Exists only to prove the
+/// registry's `catch_unwind` fix end to end, over real HTTP — mirrors
+/// `api_native_test.rs`'s `PanicSubstrate` (same shape, same reasoning: only
+/// `infer` panics, everything else is a trivial success). Built directly in
+/// this test file rather than added to `test_support.rs`, the same call
+/// `api_native_test.rs::serve_panicking` already made for the same reason:
+/// this is a narrow, one-off fixture, not a shape `serve_fake*` should
+/// carry.
+struct PanicSubstrate;
+
+impl bloomery_substrate::Substrate for PanicSubstrate {
+    fn load_model(
+        &mut self,
+        _path: &std::path::Path,
+        _n_gpu_layers: u32,
+    ) -> Result<bloomery_substrate::ModelHandle, bloomery_substrate::SubstrateError> {
+        Ok(1)
+    }
+
+    fn unload_model(
+        &mut self,
+        _m: bloomery_substrate::ModelHandle,
+    ) -> Result<(), bloomery_substrate::SubstrateError> {
+        Ok(())
+    }
+
+    fn create_context(
+        &mut self,
+        _m: bloomery_substrate::ModelHandle,
+        _n_ctx: u32,
+    ) -> Result<bloomery_substrate::CtxHandle, bloomery_substrate::SubstrateError> {
+        Ok(1)
+    }
+
+    fn destroy_context(
+        &mut self,
+        _c: bloomery_substrate::CtxHandle,
+    ) -> Result<(), bloomery_substrate::SubstrateError> {
+        Ok(())
+    }
+
+    fn infer(
+        &mut self,
+        _c: bloomery_substrate::CtxHandle,
+        _prompt: &str,
+        _max_tokens: u32,
+    ) -> Result<bloomery_substrate::Reply, bloomery_substrate::SubstrateError> {
+        panic!("scripted panic: proves the task registry's catch_unwind keeps the daemon healthy");
+    }
+
+    fn save_state(
+        &mut self,
+        _c: bloomery_substrate::CtxHandle,
+    ) -> Result<Vec<u8>, bloomery_substrate::SubstrateError> {
+        Ok(Vec::new())
+    }
+
+    fn load_state(
+        &mut self,
+        _c: bloomery_substrate::CtxHandle,
+        _bytes: &[u8],
+    ) -> Result<(), bloomery_substrate::SubstrateError> {
+        Ok(())
+    }
+}
+
+/// Builds and serves a `Pager<PanicSubstrate>` with `tasks_enabled` on, one
+/// registered model, one created agent, and a pre-created sandbox dir for a
+/// grant to scope to — ready to have a task's first step panic.
+fn serve_panicking_task() -> (
+    u16,
+    bloomery_daemon::http::ServerHandle,
+    String,
+    std::path::PathBuf,
+) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "bloomery-task-panic-test-{}-{seq}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    let journal = bloomery_core::journal::Journal::open(&dir.join("j.jsonl")).unwrap();
+    let images = bloomery_daemon::agents::ImageStore::new(&dir.join("img")).unwrap();
+    let mut pager = bloomery_daemon::pager::Pager::new(
+        PanicSubstrate,
+        journal,
+        images,
+        Box::new(|| Some(1024 * 1024 * 1024)),
+    );
+    pager.set_tasks_enabled(true);
+    pager.set_exec_bounds(bloomery_daemon::task::ExecBounds::default());
+    pager.set_task_journal_path(dir.join("tasks.jsonl"));
+
+    let gguf = dir.join("panic.gguf");
+    std::fs::write(&gguf, b"weights").unwrap();
+    let meta = bloomery_core::gguf::GgufMeta {
+        arch: "qwen2".into(),
+        layers: 1,
+        kv_heads: 1,
+        head_dim: 1,
+        training_ctx: 65536,
+        weights_bytes: 1,
+    };
+    pager
+        .register_model("panic-model", &gguf, meta, None)
+        .unwrap();
+    let info = pager
+        .create_agent("panic-model", 100, None, 1_000_000)
+        .unwrap();
+
+    let sandbox = dir.join("sandbox");
+    std::fs::create_dir_all(&sandbox).unwrap();
+
+    let (port, mut handle) = bloomery_daemon::http::serve(pager, 0);
+    handle.set_scratch_dir(dir);
+    (port, handle, info.id, sandbox)
+}
+
+/// The regression this fix closes, over real HTTP: a task whose first step
+/// panics still reaches a polled `Error` (never stuck `Running` forever),
+/// AND a completely unrelated, ordinary request against the *same* daemon
+/// afterward still succeeds — proving the caught panic did not poison the
+/// shared pager mutex and take the whole daemon down with it.
+#[test]
+fn a_panicking_task_step_becomes_error_and_the_daemon_stays_healthy() {
+    let (port, handle, agent_id, sandbox) = serve_panicking_task();
+    let sandbox = std::fs::canonicalize(&sandbox).unwrap();
+    let addr = format!("127.0.0.1:{port}");
+
+    let task_req = serde_json::json!({
+        "goal": "trigger a panic",
+        "grants": {
+            "read_roots": [sandbox.to_string_lossy()],
+            "write_roots": [sandbox.to_string_lossy()],
+            "commands": [],
+        },
+    })
+    .to_string();
+
+    let (st, body) = http(
+        &addr,
+        "POST",
+        &format!("/agents/{agent_id}/task"),
+        &task_req,
+    );
+    assert_eq!(st, 202, "{body}");
+    let task_id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let mut status = String::new();
+    let mut last_body = String::new();
+    for _ in 0..200 {
+        let (st, body) = http(
+            &addr,
+            "GET",
+            &format!("/agents/{agent_id}/task/{task_id}"),
+            "",
+        );
+        assert_eq!(st, 200, "{body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        status = v["status"].as_str().unwrap().to_string();
+        last_body = body;
+        if status != "Running" {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(status, "Error", "task never reached Error: {last_body}");
+    let v: serde_json::Value = serde_json::from_str(&last_body).unwrap();
+    assert!(
+        v["summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("panicked"),
+        "{last_body}"
+    );
+
+    // The whole point: a caught worker panic must not poison the shared
+    // pager mutex. An ordinary, unrelated request against the same daemon
+    // must still succeed — not the sticky `500` `lock_pager` would return
+    // if the mutex really had been poisoned.
+    let (st, body) = http(&addr, "GET", "/status", "");
+    assert_eq!(
+        st, 200,
+        "daemon degraded after a caught worker panic: {body}"
+    );
+
+    handle.shutdown();
+}
