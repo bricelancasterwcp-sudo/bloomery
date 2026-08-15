@@ -246,6 +246,19 @@ fn temp_sibling_name() -> String {
 /// If the rename fails, the temp file is cleaned up best-effort rather than
 /// left behind — the caller reports the failure; a stray `.bloomery-patch-*`
 /// file next to the target would be confusing debris from a failed attempt.
+///
+/// **Durability, not just atomicity:** the temp file is `sync_all`'d (a
+/// full `fsync`, data and metadata) *before* the rename, not just written.
+/// `rename` alone makes the swap atomic — a reader never observes a
+/// half-written file — but on a real power loss (as opposed to a process
+/// crash the OS survives) some filesystems can persist the rename ahead of
+/// the temp file's data actually reaching disk, which would leave `canon`
+/// pointing at an empty or stale-cached file after a crash. A coding
+/// agent's patched source is exactly the kind of output that must not
+/// vanish on a crash, so this write pays the `fsync` cost rather than
+/// leaving that gap open. A `sync_all` failure is treated exactly like a
+/// `write_all` failure: the temp file is cleaned up and the original
+/// `canon` is never touched.
 fn atomic_write(canon: &Path, contents: &str) -> std::io::Result<()> {
     let dir = canon.parent().ok_or_else(|| {
         std::io::Error::other(format!("{} has no parent directory", canon.display()))
@@ -257,7 +270,10 @@ fn atomic_write(canon: &Path, contents: &str) -> std::io::Result<()> {
         .create_new(true)
         .custom_flags(libc::O_NOFOLLOW)
         .open(&tmp)
-        .and_then(|mut file| file.write_all(contents.as_bytes()));
+        .and_then(|mut file| {
+            file.write_all(contents.as_bytes())?;
+            file.sync_all()
+        });
 
     if let Err(e) = write_result {
         let _ = std::fs::remove_file(&tmp);

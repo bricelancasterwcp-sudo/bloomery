@@ -79,6 +79,15 @@ fn unique_scratch_path() -> PathBuf {
 /// than following or truncating it, and `O_NOFOLLOW` is the same
 /// final-component belt-and-suspenders `exec.rs` documents (a named v1
 /// limit, not a complete defense, for the identical reason stated there).
+///
+/// Cleanup is symmetric with `exec.rs`'s `atomic_write`: if `create_new`
+/// itself fails there is nothing on disk to remove, but if the file was
+/// created and `write_all` then fails partway (e.g. `ENOSPC`), the
+/// half-written scratch file is removed best-effort before returning the
+/// error — otherwise a write failure here would leak a stray
+/// `bloomery-pylens-*.py` in the OS temp dir on every such failure, unlike
+/// every other failure path in this module (which run to completion or
+/// never create the file at all).
 fn write_scratch_file(tmp: &Path, contents: &str) -> Result<(), String> {
     let mut file = std::fs::OpenOptions::new()
         .write(true)
@@ -86,8 +95,11 @@ fn write_scratch_file(tmp: &Path, contents: &str) -> Result<(), String> {
         .custom_flags(libc::O_NOFOLLOW)
         .open(tmp)
         .map_err(|e| format!("python lens: failed to create scratch file: {e}"))?;
-    file.write_all(contents.as_bytes())
-        .map_err(|e| format!("python lens: failed to write scratch file: {e}"))
+    if let Err(e) = file.write_all(contents.as_bytes()) {
+        let _ = std::fs::remove_file(tmp);
+        return Err(format!("python lens: failed to write scratch file: {e}"));
+    }
+    Ok(())
 }
 
 /// Runs `python3 -m py_compile <tmp>` and turns the result into the
