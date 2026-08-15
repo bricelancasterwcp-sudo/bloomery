@@ -1,0 +1,298 @@
+use bloomery_core::grant::{Grant, GrantViolation, PathKind};
+use std::path::PathBuf;
+
+// Build /tmp/bloomery-grant-<unique>/sandbox with a file inside, and an
+// escape symlink sandbox/escape -> /etc. Returns the sandbox path (canonical).
+//
+// NOTE: the brief's helper keys the tempdir on std::process::id() alone,
+// which collides across the parallel test threads cargo test runs within
+// one process (observed: symlink-already-exists races). We add a
+// per-call atomic counter to keep each test's sandbox isolated; the test
+// bodies and assertions below are otherwise verbatim from the brief.
+fn sandbox() -> PathBuf {
+    static UNIQUE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let unique = UNIQUE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let base = std::env::temp_dir().join(format!("bloomery-grant-{}-{unique}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let sb = base.join("sandbox");
+    std::fs::create_dir_all(sb.join("out")).unwrap();
+    std::fs::write(sb.join("file.txt"), "hi").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("/etc", sb.join("escape")).unwrap();
+    std::fs::canonicalize(&sb).unwrap()
+}
+
+fn grant_for(sb: &std::path::Path) -> Grant {
+    let json = format!(
+        r#"{{"read_roots":["{s}"],"write_roots":["{s}/out"],"commands":[]}}"#,
+        s = sb.display()
+    );
+    Grant::from_json(&json).unwrap()
+}
+
+#[test]
+fn read_within_the_root_is_allowed_and_returns_canonical() {
+    let sb = sandbox();
+    let g = grant_for(&sb);
+    let got = g.check_read(&sb.join("file.txt")).unwrap();
+    assert_eq!(got, std::fs::canonicalize(sb.join("file.txt")).unwrap());
+}
+
+#[test]
+fn a_dotdot_traversal_out_of_the_root_is_refused() {
+    let sb = sandbox();
+    let g = grant_for(&sb);
+    // sandbox() nests two directories under the OS tempdir
+    // (`bloomery-grant-<pid>-<n>/sandbox`), so three `..` are needed to
+    // reach the real filesystem root and land on a path — /etc/passwd —
+    // that actually exists and is unambiguously outside the sandbox.
+    let escape = sb
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("etc")
+        .join("passwd");
+    match g.check_read(&escape) {
+        Err(GrantViolation::PathOutsideRoots {
+            kind: PathKind::Read,
+            ..
+        }) => {}
+        other => panic!("expected refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_symlink_pointing_out_of_the_root_is_refused() {
+    let sb = sandbox();
+    let g = grant_for(&sb);
+    // sb/escape -> /etc ; reading sb/escape/hosts resolves to /etc/hosts, outside
+    match g.check_read(&sb.join("escape").join("hosts")) {
+        Err(GrantViolation::PathOutsideRoots { .. }) => {}
+        other => panic!("expected refusal via symlink, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_sibling_root_with_a_shared_string_prefix_does_not_match() {
+    // Root /tmp/.../sandbox must NOT admit /tmp/.../sandbox-evil (string prefix,
+    // not a path component boundary). Build both, grant only sandbox.
+    let sb = sandbox();
+    let evil = sb.parent().unwrap().join("sandbox-evil");
+    std::fs::create_dir_all(&evil).unwrap();
+    std::fs::write(evil.join("x"), "x").unwrap();
+    let g = grant_for(&sb);
+    assert!(matches!(
+        g.check_read(&evil.join("x")),
+        Err(GrantViolation::PathOutsideRoots { .. })
+    ));
+}
+
+#[test]
+fn write_to_a_new_file_in_a_granted_dir_is_allowed() {
+    let sb = sandbox();
+    let g = grant_for(&sb);
+    let newfile = sb.join("out").join("created.txt"); // does not exist yet
+    let got = g.check_write(&newfile).unwrap();
+    assert_eq!(
+        got,
+        std::fs::canonicalize(sb.join("out"))
+            .unwrap()
+            .join("created.txt")
+    );
+}
+
+#[test]
+fn write_outside_the_write_root_is_refused_even_if_in_a_read_root() {
+    let sb = sandbox();
+    let g = grant_for(&sb);
+    // sb/file.txt is under the READ root but not the WRITE root (sb/out)
+    match g.check_write(&sb.join("file.txt")) {
+        Err(GrantViolation::PathOutsideRoots {
+            kind: PathKind::Write,
+            ..
+        }) => {}
+        other => panic!("expected write refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_relative_target_is_refused() {
+    let sb = sandbox();
+    let g = grant_for(&sb);
+    assert!(matches!(
+        g.check_read(std::path::Path::new("relative/x")),
+        Err(GrantViolation::PathOutsideRoots { .. })
+    ));
+}
+
+#[test]
+fn write_whose_parent_dir_is_missing_is_named() {
+    let sb = sandbox();
+    let g = grant_for(&sb);
+    // sb/out/nope/deep.txt — parent sb/out/nope doesn't exist
+    match g.check_write(&sb.join("out").join("nope").join("deep.txt")) {
+        Err(GrantViolation::PathParentMissing { .. }) => {}
+        other => panic!("expected PathParentMissing, got {other:?}"),
+    }
+}
+
+// Unique sibling-of-tempdir path for a target that lives entirely outside
+// any granted root, derived from sandbox()'s own per-call unique base dir
+// name so parallel test threads never collide on it.
+fn outside_path(sb: &std::path::Path) -> PathBuf {
+    let unique_name = sb.parent().unwrap().file_name().unwrap().to_string_lossy();
+    std::env::temp_dir().join(format!("{unique_name}-outside.txt"))
+}
+
+#[test]
+fn a_dangling_symlink_in_the_write_root_is_refused() {
+    let sb = sandbox();
+    let g = grant_for(&sb);
+    // sandbox/out/created.txt -> <outside, does not exist>. canonicalize(target)
+    // fails (the link doesn't fully resolve), but an entry (the dangling
+    // symlink itself) DOES exist at `target` — this must be refused, not
+    // treated as "new file in a granted dir", or a naive write would follow
+    // the link straight out of the sandbox.
+    let outside = outside_path(&sb);
+    let _ = std::fs::remove_file(&outside);
+    let link = sb.join("out").join("created.txt");
+    let _ = std::fs::remove_file(&link);
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    match g.check_write(&link) {
+        Err(GrantViolation::PathOutsideRoots {
+            kind: PathKind::Write,
+            ..
+        }) => {}
+        other => panic!("expected refusal of dangling symlink, got {other:?}"),
+    }
+    // The check must refuse before any executor ever runs — confirm no
+    // write happened and the outside path still doesn't exist.
+    assert!(!outside.exists());
+}
+
+#[test]
+fn a_genuinely_absent_new_file_is_still_allowed() {
+    let sb = sandbox();
+    let g = grant_for(&sb);
+    // Nothing at all exists at this path (not even a dangling symlink) —
+    // the legitimate new-file-in-a-granted-dir case must still work.
+    let newfile = sb.join("out").join("brand_new.txt");
+    let got = g.check_write(&newfile).unwrap();
+    assert_eq!(
+        got,
+        std::fs::canonicalize(sb.join("out"))
+            .unwrap()
+            .join("brand_new.txt")
+    );
+}
+
+#[test]
+fn a_live_symlink_to_an_in_root_file_resolves_via_the_normal_branch() {
+    let sb = sandbox();
+    let g = grant_for(&sb);
+    // sandbox/out/alias -> sandbox/out/real.txt (both inside the write root).
+    // canonicalize(target) succeeds here (the link fully resolves), so this
+    // takes the ordinary Ok(canon) branch, not the dangling-symlink refusal.
+    let real = sb.join("out").join("real.txt");
+    std::fs::write(&real, "hi").unwrap();
+    let alias = sb.join("out").join("alias");
+    let _ = std::fs::remove_file(&alias);
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    let got = g.check_write(&alias).unwrap();
+    assert_eq!(got, std::fs::canonicalize(&real).unwrap());
+}
+
+// Durability regression guards (opus-reviewer Minor #2): both dangling and
+// live symlinks used as a MIDDLE path component (not the final one) are the
+// nastiest resolve_missing_target inputs, since the escape isn't visible at
+// `target` itself but one component up. Pinning them here means a future
+// refactor of resolve_missing_target that reopens either path fails the
+// suite instead of shipping silently.
+
+#[test]
+fn a_middle_dangling_symlink_component_is_refused() {
+    let sb = sandbox();
+    let g = grant_for(&sb);
+    let unique = sb
+        .parent()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    // sandbox/out/deadlink -> /nonexistent-<unique>: a DANGLING symlink used
+    // as a MIDDLE path component of the target (deadlink/file.txt), not the
+    // final one.
+    let deadlink = sb.join("out").join("deadlink");
+    let _ = std::fs::remove_file(&deadlink);
+    std::os::unix::fs::symlink(format!("/nonexistent-{unique}"), &deadlink).unwrap();
+    let target = deadlink.join("file.txt");
+    // canonicalize(target) fails (deadlink itself doesn't resolve, so the
+    // path can't be traversed at all). symlink_metadata(target) also fails —
+    // there's no way to reach `file.txt` through a broken middle component,
+    // so no entry can be found there either — so this is NOT caught by the
+    // dangling-target refusal added for the direct case. It falls through to
+    // resolve_missing_target's parent check: the parent (out/deadlink) IS
+    // the broken symlink and itself doesn't canonicalize, so this is named
+    // PathParentMissing, not PathOutsideRoots. Either variant is a refusal;
+    // this test pins the specific one so intent is documented, not just
+    // "some Err".
+    match g.check_write(&target) {
+        Err(GrantViolation::PathParentMissing { .. }) => {}
+        other => panic!(
+            "expected PathParentMissing for a middle dangling symlink component, got {other:?}"
+        ),
+    }
+}
+
+#[test]
+fn a_middle_live_symlink_pointing_outside_is_refused() {
+    let sb = sandbox();
+    let g = grant_for(&sb);
+    let unique = sb
+        .parent()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let attacker = std::env::temp_dir().join(format!("{unique}-attacker"));
+    let _ = std::fs::remove_dir_all(&attacker);
+    std::fs::create_dir_all(&attacker).unwrap();
+
+    // sandbox/out/evil -> <attacker dir>: a LIVE symlink (the directory it
+    // points to genuinely exists) used as a MIDDLE path component, pointing
+    // entirely outside every granted root.
+    let evil = sb.join("out").join("evil");
+    let _ = std::fs::remove_file(&evil);
+    std::os::unix::fs::symlink(&attacker, &evil).unwrap();
+
+    // (a) final target absent: evil/new.txt doesn't exist under attacker/.
+    // canonicalize(target) fails on the missing final component, and
+    // symlink_metadata(target) fails too (nothing at that exact path), so
+    // this reaches resolve_missing_target. There, the parent (out/evil) DOES
+    // fully canonicalize — a live symlink resolves — landing on the real
+    // attacker dir, which is outside every granted root: PathOutsideRoots.
+    match g.check_write(&sb.join("out").join("evil").join("new.txt")) {
+        Err(GrantViolation::PathOutsideRoots { .. }) => {}
+        other => panic!(
+            "expected PathOutsideRoots for a middle live symlink out (absent final target), got {other:?}"
+        ),
+    }
+
+    // (b) final target present: attacker/exists.txt is a real file, so
+    // canonicalize(target) now succeeds outright through the ordinary
+    // Ok(canon) branch (not resolve_missing_target at all), resolving fully
+    // to the attacker dir — still outside every granted root, so this is
+    // PathOutsideRoots via a different branch than (a). Both must refuse;
+    // this is the exact "middle live symlink out" shape the review flagged.
+    std::fs::write(attacker.join("exists.txt"), "x").unwrap();
+    match g.check_write(&sb.join("out").join("evil").join("exists.txt")) {
+        Err(GrantViolation::PathOutsideRoots { .. }) => {}
+        other => panic!(
+            "expected PathOutsideRoots for a middle live symlink out (present final target), got {other:?}"
+        ),
+    }
+
+    let _ = std::fs::remove_dir_all(&attacker);
+}
