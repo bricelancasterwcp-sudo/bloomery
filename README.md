@@ -134,6 +134,21 @@ Limits after Phase 2a, all known and none hidden:
 * **`vulkan` was the offload path used for the G2 run**; the CUDA path is not
   exercised by any committed evidence.
 
+### Action codec (Phase 2b P1)
+
+* **Five verbs, one per turn.** `read`, `find`, `patch`, `run`, `done` decode
+  from a single `<action verb="...">...</action>` block — envelope-constrained,
+  never grammar-forced; zero or multiple blocks come back as typed
+  `ActionError`s instead of being silently coerced.
+* **Two patch codecs, one landing lens.** `SearchReplace` (conflict-marker,
+  unique-match-required) or `WholeFile`, selected per call; the landing lens
+  checks whether a patch both applies and parses — `PlainText` ships now,
+  language-specific lenses are P3's job.
+* **Codec only — nothing live yet.** No daemon wiring, no executors, no
+  capability grants. P3 wires executors and capability grants into the task
+  loop; P4 gates per-model codec landing against G4 (≥80% applies-and-parses,
+  else demotion).
+
 ## Quick start
 
 Needs a Rust toolchain, a llama.cpp-capable GPU stack, and a `.gguf` on disk.
