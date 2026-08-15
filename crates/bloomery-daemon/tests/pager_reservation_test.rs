@@ -89,41 +89,71 @@ fn write_gguf(dir: &Path, name: &str) -> PathBuf {
 /// 2026-08-14, so the test asserts both halves: the refusal *and* the fact
 /// that the un-reserved arithmetic would have said yes.
 ///
-/// **This refusal is also the state a VRAM-bound automatic window walks into
-/// unaided.** The scenario reaches it by hand — an explicit `window_cap` and
-/// a budget chosen to sit between the two sums — but `usable_window`'s VRAM
-/// term subtracts `weights` and `overhead_bytes` and *not* `ctx_overhead`, so
-/// an agent whose window is `BoundBy::Vram` is sized to consume the entire
-/// remaining budget and then reserves `ctx_overhead_bytes` more than that. It
-/// refuses here every time, with no smaller window to fall back to. Safe, and
-/// deliberately still open: carried-debt item 7. Nothing in the workspace
-/// hits it today because every bench agent is `user_cap`-bound (all 16 in the
-/// committed natural-pressure journal), which is exactly why it needs a test
-/// that names it rather than a comment nobody reads.
+/// **Amended for item 7 (task 1, closed 2026-08-15).** This test originally
+/// pinned that gap "by hand" on a single, otherwise-alone agent — an
+/// explicit `window_cap` and a budget chosen to sit between "KV alone
+/// fits" and "KV + ctx_overhead doesn't." Item 7's fix makes that exact
+/// shape provably unreachable for a first agent windowed against an empty
+/// pager: `usable_window`'s VRAM term now derives from the same four terms
+/// placement charges, so `demand <= avail` holds by construction whichever
+/// term binds the window (proved directly by
+/// `a_vram_bound_window_is_placeable_item_7_regression` above — see its
+/// doc comment for the general argument). Charging KV only would still say
+/// yes here; the difference is that the *window law itself* now shrinks a
+/// first agent's window to whatever the reservation can actually afford,
+/// so it never gets the chance to ask for more.
+///
+/// What survives is exactly item 7's still-open "third half" (see
+/// `CARRIED-DEBT.md`): the window law sizes a *new* agent against the
+/// whole static budget, blind to what a resident **sibling** already
+/// holds. Two agents, same model, same explicit `window_cap`: the first
+/// becomes resident and reserves `KV_BYTES + ctx_overhead`; the second's
+/// own window law computes room fine (it has no notion of the first
+/// agent's residency), but its *placement* correctly subtracts the first
+/// agent's whole reservation — not just its KV — from what's left, and
+/// that whole-reservation subtraction is what tips the second agent into
+/// a refusal a KV-only charge would not have produced.
 #[test]
-fn a_context_whose_kv_fits_but_whose_reservation_does_not_is_refused() {
+fn a_second_agents_reservation_not_just_its_kv_is_what_refuses_it() {
     let dir = fresh_dir("bloomery-pager-reservation-refuse");
-    let budget = 260 * MIB;
+    let budget = 320 * MIB;
     let weights = 200 * MIB;
     let ctx_overhead = 32 * MIB;
 
-    // The boundary this test lives on, stated as arithmetic so a later edit
-    // to any constant cannot quietly move the scenario off it.
-    assert!(
-        weights + KV_BYTES <= budget,
-        "precondition: KV alone must fit, or this tests nothing"
-    );
-    assert!(
-        weights + KV_BYTES + ctx_overhead > budget,
-        "precondition: the reservation must be what tips it over"
-    );
-
-    let (mut p, jpath) = pager_in(&dir, 1, Some(budget));
+    let (mut p, jpath) = pager_in(&dir, 2, Some(budget));
     p.set_ctx_overhead_bytes(ctx_overhead);
     let gguf = write_gguf(&dir, "qwen.gguf");
     p.register_model("qwen", &gguf, meta(weights), None)
         .unwrap();
+
+    // a1 outranks a2 so it can never be evicted to make room for it — any
+    // refusal below is a hard refusal, not a missed eviction opportunity.
     let a1 = p
+        .create_agent("qwen", 100, Some(WINDOW_CAP), 10_000)
+        .unwrap();
+    p.infer(&a1.id, "hello from a1", 16).unwrap();
+    let a1_reserved = KV_BYTES + ctx_overhead;
+    assert_eq!(
+        p.status().resident_kv_bytes,
+        a1_reserved,
+        "a1 must be resident, holding its whole reservation, before a2 is even created"
+    );
+
+    // The boundary this test lives on, stated as arithmetic so a later edit
+    // to any constant cannot quietly move the scenario off it: KV alone
+    // (both agents, weights loaded once) fits the budget; a2's whole
+    // reservation, charged against what a1's whole reservation already
+    // used up, does not.
+    assert!(
+        weights + 2 * KV_BYTES <= budget,
+        "precondition: KV alone must fit both agents, or this tests nothing"
+    );
+    assert!(
+        weights + KV_BYTES + a1_reserved > budget,
+        "precondition: a1's whole reservation is what tips a2 over"
+    );
+
+    let a2 = p
         .create_agent("qwen", 50, Some(WINDOW_CAP), 10_000)
         .unwrap();
     let loads_before = p
@@ -132,20 +162,30 @@ fn a_context_whose_kv_fits_but_whose_reservation_does_not_is_refused() {
         .iter()
         .filter(|c| c.as_str() == "load_model")
         .count();
+    let creates_before = p
+        .substrate()
+        .calls()
+        .iter()
+        .filter(|c| c.as_str() == "create_context")
+        .count();
 
-    match p.infer(&a1.id, "hello", 16) {
+    let a2_reserved = KV_BYTES + ctx_overhead;
+    let avail = budget - weights - a1_reserved;
+    match p.infer(&a2.id, "hello from a2", 16) {
         Err(PagerError::Refused {
             needed,
             free,
             reclaimable,
         }) => {
             assert_eq!(
-                needed,
-                weights + KV_BYTES + ctx_overhead,
-                "demand carries the weights and the whole reservation"
+                needed, a2_reserved,
+                "a2's demand is its whole reservation; qwen's weights are already loaded"
             );
-            assert_eq!(free, budget, "nothing is loaded or resident yet");
-            assert_eq!(reclaimable, 0, "no resident to reclaim from");
+            assert_eq!(
+                free, avail,
+                "avail is the budget minus loaded weights minus a1's whole reservation"
+            );
+            assert_eq!(reclaimable, 0, "a1 outranks a2, so nothing is reclaimable");
         }
         other => panic!("expected Refused, got {other:?}"),
     }
@@ -161,29 +201,30 @@ fn a_context_whose_kv_fits_but_whose_reservation_does_not_is_refused() {
         .count();
     assert_eq!(
         loads_after, loads_before,
-        "weights must not reach the substrate"
+        "a2's weights must not reach the substrate"
     );
-    assert!(
-        !p.substrate()
-            .calls()
-            .iter()
-            .any(|c| c.as_str() == "create_context"),
-        "no context may be created on a refused path"
+    let creates_after = p
+        .substrate()
+        .calls()
+        .iter()
+        .filter(|c| c.as_str() == "create_context")
+        .count();
+    assert_eq!(
+        creates_after, creates_before,
+        "no new context may be created on a refused path (a1's own context still counts)"
     );
 
     // The rendered arithmetic, byte for byte: a reader must be able to see
     // the reservation split rather than re-derive it.
     let expected_detail = format!(
-        "residency: weights {weights} B + reserved {reserved} B (kv {KV_BYTES} B + ctx overhead \
-         {ctx_overhead} B) vs budget {budget} B − overhead 0 B − loaded 0 B − resident 0 B \
-         (needed {needed} B, free {budget} B, reclaimable 0 B)",
-        reserved = KV_BYTES + ctx_overhead,
-        needed = weights + KV_BYTES + ctx_overhead,
+        "residency: weights 0 B + reserved {a2_reserved} B (kv {KV_BYTES} B + ctx overhead \
+         {ctx_overhead} B) vs budget {budget} B − overhead 0 B − loaded {weights} B − \
+         resident {a1_reserved} B (needed {a2_reserved} B, free {avail} B, reclaimable 0 B)"
     );
     let events = replay(&jpath).unwrap();
     assert!(
         events.iter().any(|e| matches!(e,
-            Event::Refusal { id, detail, .. } if id == &a1.id && detail == &expected_detail)),
+            Event::Refusal { id, detail, .. } if id == &a2.id && detail == &expected_detail)),
         "expected detail {expected_detail:?} not found in {events:?}"
     );
 }
@@ -319,4 +360,61 @@ fn eviction_credits_the_whole_reservation_back() {
         0,
         "the reservation is released in full when the context goes"
     );
+}
+
+/// **Item 7 regression pin (task 1).** Before the geometry fix,
+/// `usable_window`'s VRAM term charged `weights` and `overhead` but not
+/// `ctx_overhead`, so an automatically VRAM-bound window (no `window_cap`)
+/// was sized to consume the *entire* remaining budget and then reserved
+/// exactly `ctx_overhead_bytes` more than that — permanently unplaceable,
+/// refused every time with `needed − free == ctx_overhead_bytes`. This is
+/// the live 2026-08-15 14B attempt's failure shape, scaled down and made
+/// exact.
+///
+/// The numbers, chosen so both the pre-fix and post-fix windows land on
+/// whole token counts: `weights = 200 MiB`, `kv_per_token = 57_344 B`
+/// (this file's qwen shape), `ctx_overhead = 4 × kv_per_token =
+/// 229_376 B`. `budget` is set to exactly `weights + 104 × kv_per_token`,
+/// so:
+///
+/// * **Pre-fix**, the VRAM term ignores `ctx_overhead`: window =
+///   `(budget − weights) / kv_per_token` = 104 tokens. Its reservation is
+///   `104 × kv_per_token + ctx_overhead` = 4 tokens' worth over budget —
+///   refused, with `needed − free` exactly `ctx_overhead_bytes`.
+/// * **Post-fix**, the VRAM term also subtracts `ctx_overhead`: window =
+///   `(budget − weights − ctx_overhead) / kv_per_token` = 100 tokens. Its
+///   reservation (`100 × kv_per_token + ctx_overhead`) equals `budget`
+///   exactly — placeable by construction (`plan_residency`'s `<=`), so the
+///   agent both creates *and* places: `infer` succeeds.
+#[test]
+fn a_vram_bound_window_is_placeable_item_7_regression() {
+    let dir = fresh_dir("bloomery-pager-reservation-item7");
+    let weights = 200 * MIB;
+    let kv_per_token = 57_344u64;
+    let ctx_overhead = 4 * kv_per_token; // 229_376 B
+    let post_fix_tokens = 100u64;
+    let pre_fix_tokens = post_fix_tokens + ctx_overhead / kv_per_token; // 104
+    let budget = weights + pre_fix_tokens * kv_per_token;
+
+    let (mut p, _) = pager_in(&dir, 1, Some(budget));
+    p.set_ctx_overhead_bytes(ctx_overhead);
+    let gguf = write_gguf(&dir, "qwen.gguf");
+    p.register_model("qwen", &gguf, meta(weights), None)
+        .unwrap();
+
+    // No window_cap: the window law itself must land on `Vram`, not an
+    // operator-supplied number, for this to pin the automatic-window bug.
+    let a1 = p.create_agent("qwen", 50, None, 10_000).unwrap();
+    assert_eq!(
+        a1.window_tokens, post_fix_tokens as u32,
+        "the fixed VRAM term must charge ctx_overhead, landing on 100 tokens \
+         (104 would mean the old, unfixed arithmetic)"
+    );
+    assert_eq!(
+        a1.bound_by, "vram",
+        "this scenario must be VRAM-bound to pin item 7"
+    );
+
+    p.infer(&a1.id, "hello", 16)
+        .expect("a VRAM-bound window must be placeable by construction (item 7 closed)");
 }

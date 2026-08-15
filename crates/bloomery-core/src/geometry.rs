@@ -55,6 +55,14 @@ pub struct GeometryInput {
     /// `None` = unmeasured (law 5), never 0.
     pub free_vram_bytes: Option<u64>,
     pub overhead_bytes: u64,
+    /// Per-context runtime reservation (llama.cpp's per-context compute
+    /// buffers) beyond the KV cache — placement already charges this via
+    /// `Agent::reserved_bytes`, so the VRAM term must charge it too, or a
+    /// `Vram`-bound window is sized to consume memory it can never actually
+    /// get. Closes carried-debt item 7 (docs/CARRIED-DEBT.md) — see
+    /// `docs/superpowers/specs/2026-08-15-partial-offload-capability-window-design.md`
+    /// §3b for the derivation and the live 14B attempt that found it.
+    pub ctx_overhead_bytes: u64,
     pub user_cap: Option<u32>,
     /// assay ceiling.max_verified
     pub measured_ceiling: Option<u32>,
@@ -79,7 +87,8 @@ pub fn usable_window(i: &GeometryInput) -> Window {
     if let Some(free_vram_bytes) = i.free_vram_bytes.filter(|_| i.kv_per_token != 0) {
         let remaining = free_vram_bytes
             .saturating_sub(i.weights_bytes)
-            .saturating_sub(i.overhead_bytes);
+            .saturating_sub(i.overhead_bytes)
+            .saturating_sub(i.ctx_overhead_bytes);
         // Saturate rather than truncate: an upstream units bug (e.g. bits
         // instead of bytes) could otherwise produce a quotient larger than
         // u32::MAX, which a raw `as u32` cast would silently wrap.

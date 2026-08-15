@@ -61,12 +61,13 @@ fn default_time_share_quantum_secs() -> u64 {
 /// observed 334 with room for a device whose buffers are larger, and an
 /// operator who has measured their own may lower it.
 ///
-/// **Asymmetry to know about**: `usable_window`'s VRAM term subtracts
-/// `weights` and `overhead_mib` but *not* this value, so a window that comes
-/// out VRAM-bound reserves exactly `ctx_overhead_bytes` more than the budget
-/// it was sized against and can never be placed. That refuses safely (law 1,
-/// pre-checked) but it does not recover on its own; the fix is a core
-/// geometry change and is deferred (carried-debt item 7).
+/// **Item 7 closed 2026-08-15**: `usable_window`'s VRAM term now subtracts
+/// this value too (`GeometryInput::ctx_overhead_bytes`), alongside `weights`
+/// and `overhead_mib` — see
+/// `docs/superpowers/specs/2026-08-15-partial-offload-capability-window-design.md`
+/// §3b and `docs/CARRIED-DEBT.md` item 7's delivery note. A window that
+/// comes out VRAM-bound is placeable by construction now, for a single
+/// agent; the multi-model divergence item 7 also named remains open.
 fn default_ctx_overhead_mib() -> u64 {
     384
 }

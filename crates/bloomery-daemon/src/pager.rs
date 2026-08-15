@@ -519,6 +519,7 @@ impl<S: Substrate> Pager<S> {
             weights_bytes,
             free_vram_bytes,
             overhead_bytes: self.overhead_bytes,
+            ctx_overhead_bytes: self.ctx_overhead_bytes,
             user_cap: window_cap,
             measured_ceiling,
         });
