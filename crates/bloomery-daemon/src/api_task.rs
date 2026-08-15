@@ -21,7 +21,6 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
-use bloomery_core::action::PatchCodec;
 use bloomery_core::grant::Grant;
 use bloomery_substrate::Substrate;
 
@@ -150,15 +149,32 @@ fn create_task<S: Substrate + Send + 'static>(
         }
     };
 
-    let existing_budget = {
+    // One lock, two reads: the budget check below needs `agent_budget_granted`
+    // and Gate G4 (`docs/superpowers/evidence/2026-08-15-g4-protocol.md`
+    // §4/§6) needs `agent_task_policy` — both resolve through the same
+    // `agent_id` lookup, so both are fetched here rather than a third pager
+    // lock acquisition just for the policy.
+    let (existing_budget, task_policy) = {
         let p = match lock_pager(pager) {
             Ok(p) => p,
             Err(poisoned) => return poisoned,
         };
-        p.agent_budget_granted(agent_id)
+        (
+            p.agent_budget_granted(agent_id),
+            p.agent_task_policy(agent_id),
+        )
     };
     let granted = match existing_budget {
         Some(granted) => granted,
+        None => return unknown_agent(agent_id),
+    };
+    // `agent_task_policy` is `None` under exactly the same condition as
+    // `agent_budget_granted` (both key off `self.table.get(agent_id)`), so
+    // this arm is unreachable given the check above already passed — matched
+    // explicitly rather than unwrapped so that invariant stays a compile-time
+    // fact, not an assumption.
+    let (patch_codec, mutating_verbs) = match task_policy {
+        Some(policy) => policy,
         None => return unknown_agent(agent_id),
     };
     // A request that names a `budget_tokens` above the agent's own granted
@@ -181,19 +197,16 @@ fn create_task<S: Substrate + Send + 'static>(
         budget_tokens,
         max_steps: req.max_steps.unwrap_or(DEFAULT_MAX_STEPS),
         cwd,
-        // Task 5 brief: "the agent's model profile codec (or default
-        // SearchReplace if unprofiled — check what's available; default is
-        // fine)". `bloomery_core::profile::Profile` carries no patch-codec
-        // field for either a profiled or unprofiled model today, so this
-        // always resolves to the default — stated here rather than
-        // implying a lookup that doesn't exist.
-        patch_codec: PatchCodec::SearchReplace,
+        // Gate G4 protocol (docs/superpowers/evidence/2026-08-15-g4-protocol.md
+        // §4/§6): both fields resolved above, in the same lock section as
+        // the budget check, through `Pager::agent_task_policy` — the agent's
+        // model's attached profile picks the codec (§4), and the model's
+        // stored codec-gate verdict picks whether mutating verbs are even
+        // available (§6's fail-closed rule: no stored gate reads as
+        // demoted, never as permission).
+        patch_codec,
         bounds,
-        // Gate G4 (P4 Task 7 brief): this task only makes demotion
-        // structural in `run_task`; wiring the real per-model verdict here
-        // is Task 8's job, so every task spawned through this HTTP surface
-        // is unconditionally allowed to mutate for now.
-        mutating_verbs: true,
+        mutating_verbs,
     };
 
     let task_id = registry.spawn_task(Arc::clone(pager), agent_id.to_string(), spec, journal_path);

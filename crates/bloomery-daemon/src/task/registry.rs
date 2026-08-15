@@ -315,15 +315,22 @@ mod tests {
         );
         let pager = Arc::new(Mutex::new(pager));
         let registry = TaskRegistry::new();
+        // Demoted + WholeFile, deliberately not this module's other tests'
+        // `true`/`SearchReplace` defaults: the registry's own contract
+        // (background thread, pollable completion) does not depend on which
+        // codec-gate policy a `TaskSpec` carries, and this test's single
+        // `done` action never touches `patch_codec` or `mutating_verbs`
+        // either way — so it doubles as coverage that the registry passes a
+        // demoted, non-default-codec spec through to `run_task` untouched.
         let spec = TaskSpec {
             goal: "say done".to_string(),
             grant: ok_grant(&dir),
             budget_tokens: 1_000_000,
             max_steps: 3,
             cwd: std::fs::canonicalize(&dir).unwrap(),
-            patch_codec: PatchCodec::SearchReplace,
+            patch_codec: PatchCodec::WholeFile,
             bounds: ExecBounds::default(),
-            mutating_verbs: true,
+            mutating_verbs: false,
         };
 
         let task_id =
