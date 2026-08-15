@@ -26,6 +26,7 @@ mod error;
 mod journal;
 mod paging;
 mod status;
+mod task_config;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -40,6 +41,7 @@ use bloomery_substrate::contract::{enforce_contract, ContractViolation, Verified
 use bloomery_substrate::{ModelHandle, Substrate};
 
 use crate::agents::{model_digest, Agent, AgentState, AgentTable, ImageStore};
+use crate::task::ExecBounds;
 use error::sub;
 use journal as jrnl;
 use status::bound_by_str;
@@ -180,6 +182,16 @@ pub struct Pager<S: Substrate> {
     /// default and being picked as the instant victim; point (2) then keeps
     /// it accurate for an agent that goes on to actually do work.
     last_use: HashMap<String, u64>,
+    /// The Phase 2b/2c P3 task surface's dark-by-default gate
+    /// (`config.tasks_enabled`) — see [`Pager::set_tasks_enabled`].
+    tasks_enabled: bool,
+    /// The task loop's executor bounds (`config.read_cap_bytes` and
+    /// friends) — see [`Pager::set_exec_bounds`].
+    exec_bounds: ExecBounds,
+    /// Where Task 5's task registry opens a fresh `Journal` handle per task
+    /// run — see [`Pager::set_task_journal_path`]. Only read when
+    /// `tasks_enabled` is true; an empty default is harmless otherwise.
+    task_journal_path: PathBuf,
 }
 
 impl<S: Substrate> Pager<S> {
@@ -235,6 +247,12 @@ impl<S: Substrate> Pager<S> {
             time_share_quantum_ms: DEFAULT_TIME_SHARE_QUANTUM_MS,
             waiting_since: HashMap::new(),
             last_use: HashMap::new(),
+            // Dark by default (the P3 plan's binding constraint): a pager
+            // nobody has told to enable tasks serves no task surface at
+            // all. `main.rs` wires `config.tasks_enabled` in explicitly.
+            tasks_enabled: false,
+            exec_bounds: ExecBounds::default(),
+            task_journal_path: PathBuf::new(),
         }
     }
 

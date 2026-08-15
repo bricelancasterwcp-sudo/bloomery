@@ -162,6 +162,55 @@ pub fn fake_pager_for_v1() -> (std::path::PathBuf, std::sync::Mutex<Pager<FakeSu
     (dir, std::sync::Mutex::new(pager))
 }
 
+/// A `serve_fake()` variant for Task 5's task HTTP surface: scripts
+/// `<action>`-shaped `replies` (FIFO) instead of the generic `"ok"` text
+/// every other `serve_fake*` variant scripts (a plain "ok" reply doesn't
+/// parse as an `<action>` envelope, so `run_task` would just re-ask twice
+/// and fail every step), wires `tasks_enabled` and a baseline
+/// `ExecBounds::default()`, and points `Pager::set_task_journal_path` at a
+/// `tasks.jsonl` inside the fixture's own scratch dir.
+///
+/// Returns a `sandbox` directory (already created, inside the scratch dir
+/// `ServerHandle::shutdown` cleans up) for a caller to write fixture files
+/// into and scope a `Grant` to — mirroring `task_loop_test.rs::sandbox`,
+/// just reachable over HTTP instead of driving `run_task` directly.
+pub fn serve_fake_with_tasks(
+    tasks_enabled: bool,
+    replies: Vec<Reply>,
+) -> (u16, ServerHandle, std::path::PathBuf) {
+    let dir = fresh_dir();
+    let journal = Journal::open(&dir.join("j.jsonl")).expect("journal opens");
+    let images = ImageStore::new(&dir.join("img")).expect("image store opens");
+
+    let mut fake = FakeSubstrate::new();
+    for r in replies {
+        fake.script_reply(r);
+    }
+
+    let mut pager = Pager::new(
+        fake,
+        journal,
+        images,
+        Box::new(|| Some(FIXTURE_FREE_VRAM_BYTES)),
+    );
+    pager.set_overhead_bytes(FIXTURE_OVERHEAD_BYTES);
+    pager.set_tasks_enabled(tasks_enabled);
+    pager.set_exec_bounds(crate::task::ExecBounds::default());
+    pager.set_task_journal_path(dir.join("tasks.jsonl"));
+
+    let gguf = dir.join("qwen.gguf");
+    std::fs::write(&gguf, b"fake weights").expect("write fixture gguf");
+    pager
+        .register_model("qwen", &gguf, qwen_like_meta(), None)
+        .expect("register fixture model");
+
+    let sandbox = dir.join("sandbox");
+    std::fs::create_dir_all(&sandbox).expect("sandbox dir");
+
+    let (port, handle) = serve_with_cleanup(dir, pager);
+    (port, handle, sandbox)
+}
+
 /// Drives one `/v1` request through the exact `api_v1::dispatch` the real
 /// server calls, without opening a socket — the in-process counterpart to
 /// driving `serve_fake()` over `tests/common::http`. `path` is the full

@@ -20,8 +20,10 @@ use tiny_http::{Header, Request, Response, StatusCode};
 use bloomery_substrate::Substrate;
 
 use crate::api_native;
+use crate::api_task;
 use crate::api_v1::{self, V1Body, V1Result};
 use crate::pager::Pager;
+use crate::task::TaskRegistry;
 
 /// One GPU, one pager, serialized inference: Phase 1's coarse lock (see the
 /// Task 14 brief). Four workers are enough to keep the accept queue and a
@@ -124,12 +126,17 @@ pub fn serve_shared<S: Substrate + Send + 'static>(
         .port();
 
     let server = Arc::new(server);
+    // One registry shared by every worker, exactly like `pager` — Task 5's
+    // task surface needs a place to look up an in-flight task's status
+    // regardless of which of the `WORKER_COUNT` workers services the poll.
+    let registry = Arc::new(TaskRegistry::new());
 
     let workers = (0..WORKER_COUNT)
         .map(|_| {
             let server = Arc::clone(&server);
             let pager = Arc::clone(&pager);
-            std::thread::spawn(move || worker_loop(&server, &pager))
+            let registry = Arc::clone(&registry);
+            std::thread::spawn(move || worker_loop(&server, &pager, &registry))
         })
         .collect();
 
@@ -145,7 +152,19 @@ pub fn serve_shared<S: Substrate + Send + 'static>(
 
 /// One worker's whole life: pull requests off the shared server until it is
 /// told to stop, dispatch each one against the shared pager, and respond.
-fn worker_loop<S: Substrate>(server: &tiny_http::Server, pager: &Mutex<Pager<S>>) {
+///
+/// Takes `pager` as the actual `&Arc<Mutex<Pager<S>>>` (not a bare
+/// `&Mutex<Pager<S>>>`) so `api_task::dispatch` can `Arc::clone` it into a
+/// background task-worker thread that outlives this request — the existing
+/// `api_native`/`api_v1` calls below still take it as `&Mutex<Pager<S>>>`
+/// unchanged, via the ordinary `&Arc<T> -> &T` deref coercion. `S: Send +
+/// 'static` is a new bound on this function specifically because that
+/// spawn requires it (`api_native`/`api_v1` never needed it).
+fn worker_loop<S: Substrate + Send + 'static>(
+    server: &tiny_http::Server,
+    pager: &Arc<Mutex<Pager<S>>>,
+    registry: &Arc<TaskRegistry>,
+) {
     loop {
         let mut request = match server.recv() {
             Ok(r) => r,
@@ -172,6 +191,13 @@ fn worker_loop<S: Substrate>(server: &tiny_http::Server, pager: &Mutex<Pager<S>>
                     let result =
                         api_v1::dispatch(pager, &method, &segments, &body, agent_header.as_deref());
                     respond_v1(request, result);
+                } else if let Some((status, value)) =
+                    api_task::dispatch(pager, registry, &method, &segments, &body)
+                {
+                    match value {
+                        Some(value) => respond_json(request, status, &value),
+                        None => respond_empty(request, status),
+                    }
                 } else {
                     match api_native::dispatch(pager, &method, &segments, &body) {
                         (status, Some(value)) => respond_json(request, status, &value),

@@ -78,6 +78,25 @@ pub(crate) fn default_python() -> String {
     "python3".to_string()
 }
 
+/// Matches `bloomery_daemon::task::ExecBounds::default`'s
+/// `read_cap_bytes` (256 KiB) — see that impl's doc comment for why the
+/// number lives in one place and these serde defaults just mirror it.
+fn default_read_cap_bytes() -> usize {
+    256 * 1024
+}
+
+fn default_find_result_cap() -> usize {
+    100
+}
+
+fn default_run_output_cap_bytes() -> usize {
+    64 * 1024
+}
+
+fn default_run_timeout_secs() -> u64 {
+    120
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
     #[serde(default = "default_port")]
@@ -100,6 +119,23 @@ pub struct Config {
     #[serde(default = "default_time_share_quantum_secs")]
     pub time_share_quantum_secs: u64,
     pub assay: AssayConfig,
+    /// Dark by default (Phase 2b/2c P3's binding constraint): the task HTTP
+    /// surface (`POST`/`GET /agents/{id}/task`) answers `501
+    /// tasks_disabled` on every request until an operator sets this `true`.
+    #[serde(default)]
+    pub tasks_enabled: bool,
+    /// Max bytes a single `read` action returns.
+    #[serde(default = "default_read_cap_bytes")]
+    pub read_cap_bytes: usize,
+    /// Max matches a single `find` action returns.
+    #[serde(default = "default_find_result_cap")]
+    pub find_result_cap: usize,
+    /// Max bytes a single `run` action's captured output returns.
+    #[serde(default = "default_run_output_cap_bytes")]
+    pub run_output_cap_bytes: usize,
+    /// Max wall-clock seconds a `run` action's subprocess gets.
+    #[serde(default = "default_run_timeout_secs")]
+    pub run_timeout_secs: u64,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

@@ -14,11 +14,13 @@
 pub mod exec;
 pub mod exec_run;
 pub mod lens_py;
+pub mod registry;
 mod run_capture;
 pub mod task_loop;
 
 pub use exec::{exec_find, exec_patch, exec_read};
 pub use exec_run::exec_run;
+pub use registry::TaskRegistry;
 pub use task_loop::{run_task, TaskResult, TaskSpec, TaskStatus, TaskStepRecord};
 
 /// The result of executing one action: what to feed back to the model, and
@@ -57,4 +59,22 @@ pub struct ExecBounds {
     /// Max wall-clock seconds a `run` action's subprocess gets. Default
     /// 120. Unused by Task 1's executors; see `run_output_cap_bytes`.
     pub run_timeout_secs: u64,
+}
+
+/// The shipped defaults named in each field's own doc comment above —
+/// `config.rs`'s `default_read_cap_bytes`/`default_find_result_cap`/
+/// `default_run_output_cap_bytes`/`default_run_timeout_secs` serde defaults
+/// mirror these exact numbers, so a config that omits every one of Task 5's
+/// four exec-bound keys ends up here either way. Kept as one `Default` impl
+/// (rather than four repeated literals in `config.rs`, `test_support.rs`,
+/// and `Pager::new`) so the numbers live in exactly one place.
+impl Default for ExecBounds {
+    fn default() -> Self {
+        ExecBounds {
+            read_cap_bytes: 256 * 1024,
+            find_result_cap: 100,
+            run_output_cap_bytes: 64 * 1024,
+            run_timeout_secs: 120,
+        }
+    }
 }
