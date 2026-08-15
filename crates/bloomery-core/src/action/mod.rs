@@ -67,8 +67,8 @@ pub enum PatchCodec {
 /// Everything that can go wrong turning a model turn into a validated
 /// [`Action`]. Declared in full now (Task 1) even though most variants are
 /// only produced starting Task 2 (`BadRange`..`BadArgv`) and Task 3
-/// (`PatchNoSearchMarker`..`BadCodec`), so later tasks reference this enum
-/// rather than redeclare it.
+/// (`PatchNoSearchMarker`..`PatchNoReplaceMarker`), so later tasks reference
+/// this enum rather than redeclare it.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum ActionError {
     /// No `<action>` block found in the turn.
@@ -105,8 +105,6 @@ pub enum ActionError {
     PatchNoDivider { expected: &'static str },
     /// Task 3: a patch body is missing its replace marker.
     PatchNoReplaceMarker { expected: &'static str },
-    /// Task 3: a patch body's codec fence is malformed.
-    BadCodec { detail: String },
 }
 
 /// The complete set of recognized `verb="..."` values.

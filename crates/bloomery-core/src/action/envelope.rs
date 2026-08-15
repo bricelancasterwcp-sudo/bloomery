@@ -12,6 +12,15 @@
 use super::ActionError;
 use regex::Regex;
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
+
+/// Matches whitespace-separated `key="value"` attr pairs — compiled once
+/// and reused across every [`parse_attrs`] call rather than recompiled per
+/// call.
+static ATTR_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?P<key>[A-Za-z0-9_]+)="(?P<value>[^"]*)""#)
+        .expect("attr regex is a fixed valid pattern")
+});
 
 const OPEN_TAG: &str = "<action";
 const CLOSE_TAG: &str = "</action>";
@@ -39,16 +48,32 @@ struct BlockSpan {
 ///
 /// Envelope grammar: the block opens with `<action` followed by
 /// whitespace-separated `key="value"` attrs (double-quoted; a value may
-/// contain anything but `"` — including `>`) and a `>`, then arbitrary body
-/// bytes, then `</action>`. Attributes parse into `attrs`; `verb` is the
-/// mandatory `verb="…"` attr lifted out of that map into its own field.
-/// Prose outside the block is ignored. Zero well-formed top-level blocks is
-/// [`ActionError::NoAction`]; two or more is [`ActionError::MultipleActions`].
+/// contain anything but `"` — including `>`) and a `>`, then body bytes,
+/// then `</action>`. Attributes parse into `attrs`; `verb` is the mandatory
+/// `verb="…"` attr lifted out of that map into its own field. Well-formed
+/// top-level blocks parse correctly regardless of surrounding prose, and a
+/// body parses correctly as long as it doesn't itself contain a stray
+/// `<action` literal (see the known limitation below). Zero well-formed
+/// top-level blocks is [`ActionError::NoAction`]; two or more is
+/// [`ActionError::MultipleActions`].
 ///
 /// "Top-level" excludes a `<action` that merely appears as literal text
 /// inside another block's body (e.g. a patch touching a file that mentions
 /// the tag, or a done-summary quoting it) — only tags outside every
-/// already-open block's body count toward the multiple-blocks check.
+/// already-open block's body count toward the multiple-blocks check. This
+/// only works, though, when that embedded `<action` is itself part of a
+/// well-formed nested block (paired with its own `</action>`); see below.
+///
+/// **Known limitation:** an *unpaired* or otherwise malformed `<action`
+/// literal — one that never resolves to a well-formed block, whether it
+/// sits in prose outside every block or inside a block's own body — stops
+/// [`scan_top_level_blocks`] at that point (see its doc comment), which can
+/// surface as [`ActionError::NoAction`] even though a well-formed block was
+/// present earlier in the turn. Turns and bodies that don't contain a stray
+/// `<action` literal are unaffected. This is an accepted gap in today's
+/// scanner, not a claim that stray literals are handled; hardening the scan
+/// to recover from them is tracked as a P3-era follow-up ("envelope
+/// stray-literal hardening").
 pub fn scan_envelope(turn: &str) -> Result<RawAction, ActionError> {
     let blocks = scan_top_level_blocks(turn);
 
@@ -165,11 +190,13 @@ fn find_matching_close(text: &str) -> Option<usize> {
 }
 
 /// Parses whitespace-separated `key="value"` pairs (value may contain
-/// anything but a double quote) into a deterministically-ordered map.
+/// anything but a double quote) into a deterministically-ordered map. If a
+/// key appears more than once, the last occurrence wins (later entries
+/// overwrite earlier ones as the map is built) — this is by design, not an
+/// oversight, since the grammar does not forbid repeated attrs.
 fn parse_attrs(attrs_str: &str) -> BTreeMap<String, String> {
-    let re = Regex::new(r#"(?P<key>[A-Za-z0-9_]+)="(?P<value>[^"]*)""#)
-        .expect("attr regex is a fixed valid pattern");
-    re.captures_iter(attrs_str)
+    ATTR_RE
+        .captures_iter(attrs_str)
         .map(|caps| (caps["key"].to_string(), caps["value"].to_string()))
         .collect()
 }

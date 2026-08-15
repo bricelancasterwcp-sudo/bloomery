@@ -81,6 +81,55 @@ fn parse_patch_body_direct_missing_search_marker() {
     }
 }
 
+/// An empty SEARCH (nothing between the `SEARCH` marker and the divider)
+/// can never uniquely match existing file content, so it's rejected at
+/// parse time rather than allowed through to `apply_patch` where it would
+/// only produce a misleading `SearchNotUnique`/`SearchNotFound` diagnostic.
+#[test]
+fn empty_search_is_rejected() {
+    let body = "<<<<<<< SEARCH\n=======\nnew\n>>>>>>> REPLACE";
+    match parse_patch_body(body, PatchCodec::SearchReplace).unwrap_err() {
+        ActionError::EmptyBody { verb, expected } => {
+            assert_eq!(verb, "patch");
+            assert_eq!(
+                expected,
+                "non-empty SEARCH text (use the whole-file codec to create or fully replace a file)"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Regression: a normal non-empty SEARCH must still parse fine — the empty-
+/// SEARCH rejection above must not have broken the ordinary case.
+#[test]
+fn nonempty_search_still_parses() {
+    let body = "<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE";
+    let parsed = parse_patch_body(body, PatchCodec::SearchReplace).unwrap();
+    assert_eq!(
+        parsed,
+        PatchBody::SearchReplace {
+            search: "old".into(),
+            replace: "new".into(),
+        }
+    );
+}
+
+/// Empty REPLACE stays legal: deleting the matched text is a valid edit,
+/// so only an empty SEARCH is rejected, not an empty REPLACE.
+#[test]
+fn empty_replace_still_parses() {
+    let body = "<<<<<<< SEARCH\nold\n=======\n>>>>>>> REPLACE";
+    let parsed = parse_patch_body(body, PatchCodec::SearchReplace).unwrap();
+    assert_eq!(
+        parsed,
+        PatchBody::SearchReplace {
+            search: "old".into(),
+            replace: "".into(),
+        }
+    );
+}
+
 /// Regression: a `replace` payload that itself contains a line equal to
 /// `>>>>>>> REPLACE` must not be silently truncated at that inner line — the
 /// rightmost (outer) marker is the true terminator, so everything up to and

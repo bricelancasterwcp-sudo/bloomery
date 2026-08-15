@@ -23,7 +23,12 @@ const REPLACE_MARKER: &str = ">>>>>>> REPLACE";
 /// `SearchReplace` expects the three markers each on their own line, in
 /// order: `<<<<<<< SEARCH`, then the search text, then `=======`, then the
 /// replace text, then `>>>>>>> REPLACE`. The first missing marker (checked
-/// in that order) is reported.
+/// in that order) is reported. An empty `search` (nothing between the
+/// `SEARCH` marker and the divider) is rejected as [`ActionError::EmptyBody`]
+/// — it can never uniquely match existing content, so it would only ever
+/// yield a misleading `SearchNotFound`/`SearchNotUnique` diagnostic from
+/// [`apply_patch`] instead of a clear parse-time error. An empty `replace`
+/// stays legal: deleting the matched text is a valid edit.
 ///
 /// `WholeFile` always succeeds: the entire body becomes `contents`,
 /// including an empty body (a valid whole-file replacement with no
@@ -86,6 +91,14 @@ fn parse_search_replace(body: &str) -> Result<PatchBody, ActionError> {
         })?;
     let replace = &body[replace_start..replace_marker_start];
     let replace = replace.strip_suffix('\n').unwrap_or(replace);
+
+    if search.is_empty() {
+        return Err(ActionError::EmptyBody {
+            verb: "patch",
+            expected: "non-empty SEARCH text (use the whole-file codec to create or fully \
+                       replace a file)",
+        });
+    }
 
     Ok(PatchBody::SearchReplace {
         search: search.to_string(),
