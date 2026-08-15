@@ -62,6 +62,30 @@ Every existing config keeps parsing.
   OOM direction. Recorded as an honest limit (README + carried debt), not
   changed in this slice.
 
+## 3b. Carried-debt item 7 closes here (amendment 2026-08-15, Brice-approved)
+
+*Added after the first 14B attempt, before any code: the run refused at
+placement with the exact asymmetry item 7 recorded — window VRAM-bound at
+27,913 tokens, placement needing precisely `ctx_overhead` (384 MiB) more
+than the budget the window was sized against (journal
+`~/.cache/bloomery-g4-14b/journal/`, the `Refusal` event; assay saw 503s,
+POST failed, the probe aborted fail-closed — every guard held, no number
+was read, cleanly rerunnable). The 7B never tripped this because its
+window was ceiling-bound, not VRAM-bound; any model whose window comes out
+VRAM-bound is structurally unplaceable until this closes.*
+
+- `GeometryInput` gains `ctx_overhead_bytes: u64`; `usable_window`'s VRAM
+  term becomes `free_vram − weights − overhead − ctx_overhead` (same
+  saturating arithmetic). `Pager::create_agent` passes its
+  `ctx_overhead_bytes`.
+- With this, the window law and placement charge the same four terms and a
+  VRAM-bound window is placeable by construction (one context; multi-model
+  residency contention remains placement's job).
+- `config.rs`'s `default_ctx_overhead_mib` doc comment loses its
+  "asymmetry to know about" paragraph (replaced by a note that item 7
+  closed); CARRIED-DEBT item 7 is struck (never deleted) with the
+  delivery note and the attempt-1 evidence pointer.
+
 ## 4. Substrate plumbing
 
 `Substrate::load_model` already takes `n_gpu_layers` per call. The pager
@@ -127,11 +151,13 @@ GPU-free (`cargo test --workspace`), the P4 habits:
 - No per-layer weight computation (layers aren't uniform; an undercount
   is an OOM — the 2a lesson).
 
-## 9. Deliverable order
+## 9. Deliverable order (amended 2026-08-15: the item-7 fix now gates rung 1)
 
-1. Run **qwen3:14b** through the existing gate (no code) — first
-   capability-window data point, its own evidence doc.
-2. Plan + execute the enablement (config + accounting + plumbing + tests).
+1. Plan + execute the code slice: item-7 geometry fix (§3b) + config
+   (§2) + accounting (§3) + plumbing (§4) + tests (§7).
+2. Run **qwen3:14b** through the gate — first capability-window data
+   point, its own evidence doc (attempt 1's item-7 refusal recorded
+   there as the motivating finding).
 3. Derive the 27B's declared numbers (one measured load, committed).
 4. Run **qwen3.8:27b** through the gate — second data point, its own
    evidence doc.
