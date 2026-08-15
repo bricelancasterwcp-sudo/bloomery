@@ -112,7 +112,9 @@ fn a_task_runs_and_is_pollable_to_done() {
     let steps = v["steps"].as_array().unwrap();
     assert_eq!(steps.len(), 2, "{last_body}");
     assert_eq!(steps[0]["verb"], "read");
+    assert_eq!(steps[0]["failed"], false);
     assert_eq!(steps[1]["verb"], "done");
+    assert_eq!(steps[1]["failed"], false);
     assert_eq!(v["summary"], "read the file");
 
     handle.shutdown();

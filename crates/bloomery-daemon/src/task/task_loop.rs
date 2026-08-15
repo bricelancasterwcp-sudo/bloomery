@@ -84,6 +84,7 @@ pub struct TaskStepRecord {
     pub verb: String,
     pub outcome: String,
     pub content: String,
+    pub failed: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -121,6 +122,7 @@ struct StepReport<'a> {
     outcome: &'a str,
     content: &'a str,
     duration_ms: u64,
+    failed: bool,
 }
 
 /// Appends `report` to both the journal (as an `Event::TaskStep`) and
@@ -152,6 +154,7 @@ fn record_step(
         verb: report.verb.to_string(),
         outcome: report.outcome.to_string(),
         content: report.content.to_string(),
+        failed: report.failed,
     });
     state.transcript.push_str(&format!(
         "\n[step {step} {}] {}\n{}\n",
@@ -238,6 +241,7 @@ fn propose_action<S: Substrate>(
                     outcome: &outcome,
                     content: &outcome,
                     duration_ms,
+                    failed: true,
                 };
                 if let Err(msg) = record_step(journal, agent_id, state, step, report) {
                     return ProposeOutcome::Terminate(TaskStatus::Error, Some(msg));
@@ -318,6 +322,7 @@ pub fn run_task<S: Substrate>(
                 outcome: summary,
                 content: summary,
                 duration_ms: propose_duration_ms,
+                failed: false,
             };
             if let Err(msg) = record_step(journal, agent_id, &mut state, step, report) {
                 return TaskResult {
@@ -341,6 +346,7 @@ pub fn run_task<S: Substrate>(
             outcome: &obs.outcome,
             content: &obs.content,
             duration_ms,
+            failed: obs.failed,
         };
         if let Err(msg) = record_step(journal, agent_id, &mut state, step, report) {
             return TaskResult {

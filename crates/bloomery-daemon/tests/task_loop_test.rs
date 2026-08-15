@@ -149,7 +149,12 @@ fn a_read_then_done_task_completes() {
     );
     assert_eq!(result.steps[0].verb, "read");
     assert!(result.steps[0].content.contains("hello"));
+    assert!(
+        !result.steps[0].failed,
+        "a clean read step must not be marked failed"
+    );
     assert_eq!(result.steps[1].verb, "done");
+    assert!(!result.steps[1].failed, "the done step is never failed");
 
     let events = replay(&task_journal_path).unwrap();
     let task_steps = events
@@ -237,7 +242,12 @@ fn a_grant_violation_is_a_failed_step_not_a_task_abort() {
         "expected a grant-violation outcome, got {:?}",
         result.steps[0].outcome
     );
+    assert!(
+        result.steps[0].failed,
+        "a grant-violating step must be marked failed"
+    );
     assert_eq!(result.steps[1].verb, "done");
+    assert!(!result.steps[1].failed, "the done step is never failed");
 }
 
 #[test]
