@@ -105,6 +105,24 @@ impl<S: Substrate> crate::pager::Pager<S> {
         )
     }
 
+    /// Whether [`Pager::model_patch_codec`]'s answer for `model` came from
+    /// its attached profile's measured `codecs` grid (protocol §4's first
+    /// three rules) rather than the `SearchReplace` fallback (§4's fourth).
+    ///
+    /// The codec value alone cannot answer this — `SearchReplace` is both a
+    /// legitimate measured selection *and* the default — and §4 requires the
+    /// G4 verdict's `detail` to record which of the two it was ("codec from
+    /// profile" vs "default (codecs unmeasured)"), so the probe reads this
+    /// beside the codec itself. `false` for an unknown or unprofiled model,
+    /// matching `resolve_patch_codec`'s own `unwrap_or` collapse.
+    pub fn model_codec_from_profile(&self, model: &str) -> bool {
+        self.models
+            .get(model)
+            .and_then(|entry| entry.profile.as_ref())
+            .and_then(Profile::preferred_patch_codec)
+            .is_some()
+    }
+
     /// The `(patch_codec, mutating_verbs)` pair a running task dispatches
     /// under, resolved through `agent_id`'s model. `None` when `agent_id`
     /// names no agent — the same `404`-shaped signal

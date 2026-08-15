@@ -190,6 +190,42 @@ fn model_patch_codec_defaults_search_replace_when_unprofiled_or_unknown() {
     assert_eq!(p.model_patch_codec("nope"), PatchCodec::SearchReplace);
 }
 
+/// Protocol §4's provenance question, which the codec *value* alone cannot
+/// answer: `SearchReplace` is both a legitimate measured selection and the
+/// untested fallback, and the G4 verdict's `detail` has to say which. The
+/// asymmetry that matters here is that a profile whose `codecs` grid is
+/// empty reads exactly like no profile at all.
+#[test]
+fn model_codec_from_profile_separates_a_measured_selection_from_the_default() {
+    let dir = fresh_dir("bloomery-codec-gate-provenance");
+    let (mut p, _) = pager_with_model(&dir);
+    assert!(
+        !p.model_codec_from_profile("qwen"),
+        "unprofiled: the codec is the default"
+    );
+    assert!(!p.model_codec_from_profile("nope"), "unknown model");
+
+    const NO_CODECS_PROFILE: &str = r#"{
+      "assay_profile_version": 3,
+      "model": {"name": "qwen"}
+    }"#;
+    p.attach_profile(
+        "qwen",
+        Profile::from_json(NO_CODECS_PROFILE).unwrap(),
+        false,
+    )
+    .unwrap();
+    assert_eq!(p.model_patch_codec("qwen"), PatchCodec::SearchReplace);
+    assert!(
+        !p.model_codec_from_profile("qwen"),
+        "a profile with no codecs grid is still the default, not a selection"
+    );
+
+    p.attach_profile("qwen", Profile::from_json(WF_WINS_PROFILE).unwrap(), false)
+        .unwrap();
+    assert!(p.model_codec_from_profile("qwen"));
+}
+
 // ---------------------------------------------------------------------------
 // agent_task_policy
 // ---------------------------------------------------------------------------
