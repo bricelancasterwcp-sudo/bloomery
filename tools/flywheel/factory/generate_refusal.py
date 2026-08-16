@@ -3,15 +3,18 @@
 cap (same reasoning as turn 1's `templates_python.py`/`templates_text.py`
 split): candidate generation, dedup, and the refuse-mode wire request, all
 mirroring `generate.py`'s own patch-task functions one-for-one so the two
-files read as parallel halves of one pipeline.
+files read as parallel halves of one pipeline. Task 6a's gate-aware
+rejection sampling is likewise mirrored one-for-one via the SAME
+`gate_sampling.draw_all` helper `generate.py` uses -- one rejection-
+sampling loop, shared, not two nearly-identical copies.
 """
 
 from __future__ import annotations
 
 import random
 
-from tools.flywheel.factory import templates, templates_refusal
-from tools.flywheel.factory.contamination import normalize
+from tools.flywheel.factory import gate_sampling, templates, templates_refusal
+from tools.flywheel.factory.contamination import GateFixture, normalize
 from tools.flywheel.factory.task import RefusalTask
 
 ENVELOPE = "v3"
@@ -36,21 +39,23 @@ def refusal_family_functions(count: int) -> list:
     return fns
 
 
-def generate_candidate_refusal_tasks(rng: random.Random, count: int, fail) -> list[RefusalTask]:
+def generate_candidate_refusal_tasks(
+    rng: random.Random, count: int, gates: list[GateFixture], fail
+) -> tuple[list[RefusalTask], dict[str, int], int]:
     """The refusal analog of `generate.generate_candidate_tasks` (G5
-    design doc §5): continues the SAME `rng` stream (never a fresh one —
-    rule 3's determinism contract), validating every result immediately
-    via `templates.validate_refusal_task`. `fail` is `generate.fail`,
-    threaded in rather than imported, so both files share exactly one
-    "print to stderr and raise SystemExit(1)" implementation."""
-    tasks = []
-    for fn in refusal_family_functions(count):
-        task = fn(rng)
-        violations = templates.validate_refusal_task(task)
-        if violations:
-            fail(f"refusal template {task.name!r} produced a structurally invalid task: {violations}\ngoal: {task.goal}")
-        tasks.append(task)
-    return tasks
+    design doc §5; task 6a for the `gates` parameter): continues the SAME
+    `rng` stream (never a fresh one — rule 3's determinism contract),
+    validating every result immediately via
+    `templates.validate_refusal_task` and, when `gates` is non-empty,
+    screening it via `gate_sampling.draw_all` — the SAME rejection-
+    sampling loop `generate.py`'s patch path uses. `fail` is
+    `generate.fail`, threaded in rather than imported, so both files
+    share exactly one "print to stderr and raise SystemExit(1)"
+    implementation. Returns (accepted tasks, gate_rejections by rule,
+    total candidate draws)."""
+    return gate_sampling.draw_all(
+        rng, refusal_family_functions(count), templates.validate_refusal_task, gates, fail
+    )
 
 
 def dedup_refusal_tasks(tasks: list[RefusalTask]) -> tuple[list[RefusalTask], int]:

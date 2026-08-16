@@ -13,30 +13,16 @@ rule set.
 
 Two responsibilities live here:
 
-1. ``GATE_VOCABULARY`` — the forbidden-word enumeration rule 1 needs.
-   ``templates.py`` imports it and a test in ``test_templates.py`` asserts
-   every template word list is disjoint from it. It is built from the
-   REAL gate TOML (target filenames, filename stems, and every ``def``
-   name it defines — parsed mechanically, not hand-transcribed, so it
-   cannot silently drift out of sync) unioned with a hand-curated set of
-   the gate set's other distinctive nouns, compound identifiers, domains,
-   and version/date strings (things a filename/function-name scan alone
-   would not surface, e.g. "bloomery", "ada", "listen_port",
-   "example.com"). ``test_contamination.py`` mechanically checks the
-   auto-derived half for completeness against the live TOML.
-
-   Deliberately kept scoped to `codec-tasks-v1` ONLY, not unioned with
-   `codec-tasks-v2-mixed`: `codec-tasks-v2-mixed` is itself factory-
-   authored, drawing its target filenames and identifiers from the SAME
-   `wordlists.py` pools every repair/refusal template already uses (Task 4
-   authors it "VIA the factory"). Folding its vocabulary into
-   `GATE_VOCABULARY` would ban the factory's own shared word pools from
-   ever being used again — the `templates.py`-level
-   ``assert not (ALL_TEMPLATE_WORDS & GATE_VOCABULARY)`` would fail at
-   import time the moment `codec-tasks-v2-mixed` existed. `codec-tasks-v1`
-   is different: it was hand-authored independently of the factory's word
-   pools, so banning its specific vocabulary is meaningful hygiene with no
-   such paradox.
+1. ``GATE_VOCABULARY`` / ``load_gate_fixtures`` / ``GateFixture`` —
+   gate-TOML parsing and the forbidden-word enumeration rule 1 needs.
+   Split out into `gate_vocabulary.py` to keep this file under the
+   400-line house cap (task 6a's `_violations_for_task`/
+   `task_violates_gates` addition pushed it over budget); re-exported
+   here so every existing `contamination.<name>` call site (this module's
+   own CLI, `templates.py`, `gate_sampling.py`, and every test) keeps
+   working unchanged. See `gate_vocabulary.py`'s own module docstring for
+   the full rationale, including why it is deliberately scoped to
+   `codec-tasks-v1` ONLY, never unioned with `codec-tasks-v2-mixed`.
 
 2. ``check_corpus`` — the CLI's actual comparator, run over a generated
    corpus.jsonl against the union of every gate's parsed fixtures. This is
@@ -46,6 +32,16 @@ Two responsibilities live here:
    `codec-tasks-v1` and `codec-tasks-v2-mixed` fixtures here has none of
    responsibility 1's paradox — it just means a generated corpus task can
    never coincide with either frozen set's actual authored content.
+
+Both responsibility 2's rule set and its post-hoc `check_corpus` entry
+point are unchanged by task 6a (gate-aware rejection sampling in the
+generator, `gate_sampling.py`): the rule set itself now lives in a single
+shared helper, ``_violations_for_task``, with ``check_corpus`` as one
+caller (post-hoc, over every task in a finished corpus.jsonl) and the new
+``task_violates_gates`` as the other (at generation time, over ONE
+candidate before it is ever written to a corpus). This is factoring, not
+new policy — the guard CLI's behavior, and every rule it enforces, is
+untouched.
 
 CLI: ``python3 -m tools.flywheel.factory.contamination --corpus
 corpus.jsonl --gate crates/bloomery-daemon/fixtures/codec-tasks-v1.toml
@@ -61,140 +57,33 @@ import argparse
 import json
 import re
 import sys
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional, Union
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_GATE_PATH = _REPO_ROOT / "crates" / "bloomery-daemon" / "fixtures" / "codec-tasks-v1.toml"
+from tools.flywheel.factory.gate_vocabulary import (
+    DEFAULT_GATE_PATH,
+    GATE_VOCABULARY,
+    GateFixture,
+    load_gate_fixtures,
+)
+from tools.flywheel.factory.task import RefusalTask, Task
 
-_DEF_NAME_RE = re.compile(r"\bdef\s+([A-Za-z_]\w*)")
+__all__ = [
+    "DEFAULT_GATE_PATH",
+    "GATE_VOCABULARY",
+    "GateFixture",
+    "load_gate_fixtures",
+    "normalize",
+    "token_set",
+    "jaccard",
+    "Report",
+    "task_violates_gates",
+    "check_corpus",
+    "main",
+]
+
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
-
-
-@dataclass(frozen=True)
-class GateFixture:
-    """One `[[fixture]]` entry from the gate TOML. `search`/`replace` are
-    `None` for an `expect = "refuse"` fixture (G5 design doc §2: a refuse
-    fixture carries no `[fixture.reference]` at all) — `None`, never a
-    fabricated empty string, so `check_corpus`'s `search_match` rule can
-    tell "nothing to compare" apart from "an empty search string" and skip
-    the comparison rather than risk a false positive."""
-
-    name: str
-    lens: str
-    target: str
-    files: dict[str, str]
-    goal: str
-    expect: str
-    search: str | None
-    replace: str | None
-    refusal_reason: str | None
-
-
-def load_gate_fixtures(path: Path) -> list[GateFixture]:
-    """Parses the gate TOML (stdlib `tomllib`, per the brief) into
-    structured fixtures, in file order (deterministic — TOML arrays
-    preserve order; never a `set`). Handles both fixture classes (G5
-    design doc §2): `expect` defaults to `"patch"` when absent (every
-    `codec-tasks-v1` fixture), matching the Rust parser's own default."""
-    with open(path, "rb") as f:
-        data = tomllib.load(f)
-    fixtures = []
-    for fx in data["fixture"]:
-        files = {file_entry["path"]: file_entry["contents"] for file_entry in fx["file"]}
-        expect = fx.get("expect", "patch")
-        reference = fx.get("reference")
-        fixtures.append(
-            GateFixture(
-                name=fx["name"],
-                lens=fx["lens"],
-                target=fx["target"],
-                files=files,
-                goal=fx["goal"],
-                expect=expect,
-                search=reference["search"] if reference is not None else None,
-                replace=reference["replace"] if reference is not None else None,
-                refusal_reason=fx.get("refusal_reason"),
-            )
-        )
-    return fixtures
-
-
-def _extract_filenames_and_stems(fixtures: Iterable[GateFixture]) -> frozenset[str]:
-    words: set[str] = set()
-    for fx in fixtures:
-        words.add(fx.target.lower())
-        words.add(fx.target.split(".")[0].lower())
-    return frozenset(words)
-
-
-def _extract_function_names(fixtures: Iterable[GateFixture]) -> frozenset[str]:
-    names: set[str] = set()
-    for fx in fixtures:
-        for contents in fx.files.values():
-            names.update(m.group(1).lower() for m in _DEF_NAME_RE.finditer(contents))
-    return frozenset(names)
-
-
-# ---------------------------------------------------------------------------
-# Hand-curated additions: the gate set's other distinctive vocabulary that
-# a filename/function-name scan does not surface on its own — thematic
-# nouns tied to a single fixture's premise, config/identifier keys that
-# are not `def` names, domains/emails, and the specific version/date
-# strings used in the changelog/release-notes fixtures. Each is banned as
-# a whole token (an exact identifier or word), not a substring — e.g.
-# "listen_port" is forbidden, but the generic word "port" that rule 1's
-# own "port/host mismatch" family needs is not.
-# ---------------------------------------------------------------------------
-
-_EXTRA_DOMAIN_NOUNS = frozenset(
-    {
-        "cart", "billing", "shipping", "inventory", "restock", "reorder",
-        "discontinued", "discount", "discounted", "pricing", "subtotal",
-        "membership", "member", "password", "validator", "signup",
-        "register", "username", "secret", "welcome", "acme", "corp",
-        "support", "upstream", "proxy", "backend", "worker", "retries",
-        "concurrency", "queue", "readme", "npm", "changelog", "settings",
-        "health", "threshold", "tax", "stock", "valid", "free", "db",
-        "release", "bloomery", "ada", "best",
-    }
-)
-
-_EXTRA_COMPOUND_IDENTIFIERS = frozenset(
-    {
-        "listen_addr", "listen_port", "health_path", "db_host", "db_port",
-        "db_name", "db_user", "health_check_url", "http_timeout_ms",
-        "max_retries", "log_level", "upstream_url", "proxy_pass",
-        "max_discount_pct",
-    }
-)
-
-_EXTRA_DOMAINS_AND_EMAILS = frozenset(
-    {
-        "example.com", "example.org", "billing@example.org",
-        "billing@example.com", "api.internal.example.com",
-        "support.bloomery.example.com",
-    }
-)
-
-_EXTRA_VERSION_AND_DATE_STRINGS = frozenset(
-    {"2.4.0", "2.4.1", "3.1.0", "v3.1.0", "2026-02-30", "2026-02-28", "2026-07-18", "2026-08-02"}
-)
-
-_gate_fixtures_for_vocabulary = load_gate_fixtures(DEFAULT_GATE_PATH)
-
-GATE_VOCABULARY: frozenset[str] = frozenset().union(
-    _extract_filenames_and_stems(_gate_fixtures_for_vocabulary),
-    _extract_function_names(_gate_fixtures_for_vocabulary),
-    _EXTRA_DOMAIN_NOUNS,
-    _EXTRA_COMPOUND_IDENTIFIERS,
-    _EXTRA_DOMAINS_AND_EMAILS,
-    _EXTRA_VERSION_AND_DATE_STRINGS,
-)
-"""Every target filename (and stem), function name, and distinctive
-domain noun the gate set uses, lowercased. Rule 1's forbidden list."""
 
 
 def normalize(text: str) -> str:
@@ -248,6 +137,110 @@ def _corpus_tasks_from_rows(rows: Iterable[dict]) -> dict[str, dict]:
     return tasks
 
 
+def _violations_for_task(
+    goal: str,
+    target: str,
+    target_contents: str,
+    search: str,
+    fixtures: Iterable[GateFixture],
+    jaccard_threshold: float = 0.8,
+) -> list[dict]:
+    """The rule set itself (rule 7), extracted so it has exactly ONE
+    implementation shared by two callers: `check_corpus` (post-hoc, over
+    every task in a finished corpus.jsonl) and `task_violates_gates`
+    (task 6a, at generation time, over ONE candidate before it is ever
+    written to a corpus). Fails on any of: exact or normalized match of
+    goals, file contents, target filenames, search strings; OR >=
+    `jaccard_threshold` Jaccard token-set similarity between the goal and
+    any gate goal. `task_id`/corpus-vs-candidate bookkeeping stays with
+    each caller — this function only knows about the four scalar fields
+    every rule compares, so a violation dict here never carries
+    `task_id`."""
+    violations: list[dict] = []
+    goal_norm = normalize(goal)
+    target_norm = normalize(target)
+    search_norm = normalize(search)
+    contents_norm = normalize(target_contents)
+    goal_tokens = token_set(goal)
+
+    for fixture in fixtures:
+        if goal_norm == normalize(fixture.goal):
+            violations.append(
+                {
+                    "rule": "goal_match",
+                    "gate_fixture": fixture.name,
+                    "detail": "corpus goal matches a gate goal (exact or normalized)",
+                }
+            )
+        if target_norm == normalize(fixture.target):
+            violations.append(
+                {
+                    "rule": "target_filename_match",
+                    "gate_fixture": fixture.name,
+                    "detail": f"corpus target {target!r} matches gate target {fixture.target!r}",
+                }
+            )
+        if fixture.search is not None and search_norm == normalize(fixture.search):
+            violations.append(
+                {
+                    "rule": "search_match",
+                    "gate_fixture": fixture.name,
+                    "detail": "corpus search string matches a gate reference search string",
+                }
+            )
+        for gate_path, gate_contents in sorted(fixture.files.items()):
+            if contents_norm == normalize(gate_contents):
+                violations.append(
+                    {
+                        "rule": "file_contents_match",
+                        "gate_fixture": fixture.name,
+                        "gate_file": gate_path,
+                        "detail": "corpus target file contents match a gate fixture file",
+                    }
+                )
+
+        similarity = jaccard(goal_tokens, token_set(fixture.goal))
+        if similarity >= jaccard_threshold:
+            violations.append(
+                {
+                    "rule": "goal_near_duplicate",
+                    "gate_fixture": fixture.name,
+                    "jaccard": similarity,
+                    "detail": f"corpus goal is a {similarity:.0%} token-set match to a gate goal",
+                }
+            )
+
+    return violations
+
+
+def task_violates_gates(
+    task: Union[Task, RefusalTask], gates: list[GateFixture], jaccard_threshold: float = 0.8
+) -> Optional[str]:
+    """Screens ONE candidate task (`Task` or `RefusalTask`, task.py)
+    against `gates` using the exact same rule set `check_corpus` applies
+    to a finished corpus (`_violations_for_task`, above) — the generator's
+    rejection sampler (task 6a, `gate_sampling.py`) calls this at DRAW
+    time, before a candidate ever becomes a corpus row, so a colliding
+    candidate can be dropped and redrawn rather than caught only after a
+    full corpus is written. Returns the FIRST violated rule's name
+    (`_violations_for_task` always checks fixtures/rules in the same
+    order, so this is stable across identical inputs), or `None` if the
+    candidate is clean against every gate. `gates=[]` always returns
+    `None` — nothing to screen against, and no extra work done."""
+    if not gates:
+        return None
+
+    if isinstance(task, RefusalTask):
+        target_contents = "" if task.target_missing else task.files[task.target]
+        search = ""
+    else:
+        target_contents = task.files[task.target]
+        search = task.search
+
+    violations = _violations_for_task(task.goal, task.target, target_contents, search, gates, jaccard_threshold)
+    return violations[0]["rule"] if violations else None
+
+
 def check_corpus(rows: Iterable[dict], fixtures: list[GateFixture], jaccard_threshold: float = 0.8) -> Report:
     """The comparator itself. Fails on any of: exact or normalized match
     of goals, file contents, target filenames, search strings; OR >=
@@ -258,63 +251,10 @@ def check_corpus(rows: Iterable[dict], fixtures: list[GateFixture], jaccard_thre
 
     for task_id in sorted(corpus_tasks):
         task = corpus_tasks[task_id]
-        goal_norm = normalize(task["goal"])
-        target_norm = normalize(task["target"])
-        search_norm = normalize(task["search"])
-        contents_norm = normalize(task["target_contents"])
-        goal_tokens = token_set(task["goal"])
-
-        for fixture in fixtures:
-            if goal_norm == normalize(fixture.goal):
-                violations.append(
-                    {
-                        "rule": "goal_match",
-                        "task_id": task_id,
-                        "gate_fixture": fixture.name,
-                        "detail": "corpus goal matches a gate goal (exact or normalized)",
-                    }
-                )
-            if target_norm == normalize(fixture.target):
-                violations.append(
-                    {
-                        "rule": "target_filename_match",
-                        "task_id": task_id,
-                        "gate_fixture": fixture.name,
-                        "detail": f"corpus target {task['target']!r} matches gate target {fixture.target!r}",
-                    }
-                )
-            if fixture.search is not None and search_norm == normalize(fixture.search):
-                violations.append(
-                    {
-                        "rule": "search_match",
-                        "task_id": task_id,
-                        "gate_fixture": fixture.name,
-                        "detail": "corpus search string matches a gate reference search string",
-                    }
-                )
-            for gate_path, gate_contents in sorted(fixture.files.items()):
-                if contents_norm == normalize(gate_contents):
-                    violations.append(
-                        {
-                            "rule": "file_contents_match",
-                            "task_id": task_id,
-                            "gate_fixture": fixture.name,
-                            "gate_file": gate_path,
-                            "detail": "corpus target file contents match a gate fixture file",
-                        }
-                    )
-
-            similarity = jaccard(goal_tokens, token_set(fixture.goal))
-            if similarity >= jaccard_threshold:
-                violations.append(
-                    {
-                        "rule": "goal_near_duplicate",
-                        "task_id": task_id,
-                        "gate_fixture": fixture.name,
-                        "jaccard": similarity,
-                        "detail": f"corpus goal is a {similarity:.0%} token-set match to a gate goal",
-                    }
-                )
+        for violation in _violations_for_task(
+            task["goal"], task["target"], task["target_contents"], task["search"], fixtures, jaccard_threshold
+        ):
+            violations.append({"task_id": task_id, **violation})
 
     return Report(
         violations=violations,

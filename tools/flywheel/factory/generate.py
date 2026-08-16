@@ -1,9 +1,10 @@
 """The corpus generator (design spec §3, brief rules 3-6; G5 design doc §5
-extends this additively with refusal tasks).
+extends this additively with refusal tasks; task 6a extends it additively
+with gate-aware rejection sampling).
 
 CLI: ``python3 -m tools.flywheel.factory.generate --seed N --count 1000
-[--refusal-count 300] --tool <path to flywheel-tool> --out corpus.jsonl
---report fingerprint.json``
+[--refusal-count 300] [--gate gate.toml ...] --tool <path to
+flywheel-tool> --out corpus.jsonl --report fingerprint.json``
 
 Pipeline, all driven by ONE `random.Random(seed)` instance (rule 3 —
 determinism depends on a single deterministic sequence of draws):
@@ -43,6 +44,26 @@ determinism depends on a single deterministic sequence of draws):
 5. corpus.jsonl (3 pair-rows per surviving patch task in read/patch/done
    order; 2 pair-rows per surviving refuse task in read/done order) and
    the fingerprint JSON are written together at the end.
+
+Task 6a's addition lives INSIDE step 1/1b, not as a separate pass: when
+one or more `--gate` paths are given, every candidate (patch and refuse
+alike) is screened at draw time via `gate_sampling.draw_all` /
+`contamination.task_violates_gates` -- the SAME rule set the two-gate
+contamination guard (`contamination.py`) applies post-hoc. A colliding
+candidate is dropped and the SAME rng stream draws again for the SAME
+slot until an accepted candidate is found, so `count`/`refusal_count`
+candidates are still what step 2's dedup receives. Omitting `--gate`
+reproduces every prior turn's behavior byte-for-byte: zero screening,
+zero extra rng draws (rule 3's determinism guarantee is unaffected;
+`--gate` just adds one more input the deterministic sequence depends on).
+Per-rule rejection counts, the gate paths, and each gate file's sha256
+are recorded in the fingerprint (`gate_rejections`, `gate_paths`,
+`gates_sha256`) so it records exactly what a run was screened against. A
+gate set so dense that rejection sampling cannot productively continue
+aborts via `gate_sampling.GateOverlapTooDenseError` (never spins forever,
+never silently under-fills) -- caught in `main()` and routed through
+`fail()` for the same consistent stderr-and-nonzero-exit contract every
+other factory-bug abort in this file already uses.
 """
 
 from __future__ import annotations
@@ -55,8 +76,8 @@ import sys
 from pathlib import Path
 from typing import Union
 
-from tools.flywheel.factory import generate_refusal, templates
-from tools.flywheel.factory.contamination import normalize
+from tools.flywheel.factory import gate_sampling, generate_refusal, templates
+from tools.flywheel.factory.contamination import GateFixture, load_gate_fixtures, normalize
 from tools.flywheel.factory.task import RefusalTask, Task
 from tools.flywheel.factory.toolclient import ToolClient
 
@@ -100,18 +121,18 @@ def fail(message: str) -> None:
     raise SystemExit(1)
 
 
-def generate_candidate_tasks(rng: random.Random, count: int) -> list[Task]:
+def generate_candidate_tasks(
+    rng: random.Random, count: int, gates: list[GateFixture]
+) -> tuple[list[Task], dict[str, int], int]:
     """Calls each slot's template family in order, validating every
-    result immediately (rule 2). A structurally invalid task is always a
-    factory bug, never dropped silently."""
-    tasks = []
-    for fn in _family_functions(count):
-        task = fn(rng)
-        violations = templates.validate_task(task)
-        if violations:
-            fail(f"template {task.name!r} produced a structurally invalid task: {violations}\ngoal: {task.goal}")
-        tasks.append(task)
-    return tasks
+    result immediately (rule 2 -- a structurally invalid task is always a
+    factory bug, never dropped silently) and, when `gates` is non-empty,
+    screening it against them (task 6a) via `gate_sampling.draw_all`: a
+    colliding candidate is dropped and the SAME slot redraws from the
+    SAME rng stream. Returns (accepted tasks, gate_rejections by rule,
+    total candidate draws). `gates=[]` is byte-identical to the
+    pre-task-6a code path -- one draw per slot, no extra rng consumption."""
+    return gate_sampling.draw_all(rng, _family_functions(count), templates.validate_task, gates, fail)
 
 
 def dedup_tasks(tasks: list[Task]) -> tuple[list[Task], int]:
@@ -253,32 +274,82 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
             "flag reproduces turn-1 behavior byte-for-byte."
         ),
     )
+    parser.add_argument(
+        "--gate",
+        action="append",
+        dest="gates",
+        type=Path,
+        metavar="PATH",
+        help=(
+            "Path to a gate TOML (e.g. codec-tasks-v2-mixed.toml). Repeatable (task 6a): every "
+            "candidate task -- patch and refuse alike -- is screened at draw time against the "
+            "UNION of every --gate given, using the same rules the two-gate contamination guard "
+            "(contamination.py) applies post-hoc. A colliding candidate is dropped and redrawn "
+            "from the same seeded stream, never silently kept and never silently under-filling "
+            "the requested count. Omitting this flag reproduces prior-turn behavior byte-for-"
+            "byte: zero screening, zero extra rng draws."
+        ),
+    )
     parser.add_argument("--tool", type=Path, required=True, help="Path to the flywheel-tool binary (or a stub).")
     parser.add_argument("--out", type=Path, required=True, help="Output corpus.jsonl path.")
     parser.add_argument("--report", type=Path, required=True, help="Output fingerprint JSON path.")
     return parser.parse_args(argv)
 
 
+def _load_gates(gate_paths: list[Path]) -> list[GateFixture]:
+    """Loads and unions every `--gate` TOML's fixtures (task 6a) -- the
+    same parser the contamination guard itself uses, so a candidate is
+    screened against exactly the fixtures a post-hoc guard run would
+    see."""
+    gates: list[GateFixture] = []
+    for gate_path in gate_paths:
+        gates.extend(load_gate_fixtures(gate_path))
+    return gates
+
+
+def _gates_sha256(gate_paths: list[Path]) -> dict[str, str]:
+    """The fingerprint's `gates_sha256` field: each gate FILE's sha256
+    (raw bytes, not its parsed fixtures), so the fingerprint records
+    exactly what was screened against -- a later edit to the gate TOML
+    changes this hash even if `check_corpus`'s comparator would not
+    notice (e.g. reordering fixtures)."""
+    return {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in gate_paths}
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    gate_paths: list[Path] = args.gates or []
+    gates = _load_gates(gate_paths)
 
     rng = random.Random(args.seed)
-    candidate_tasks = generate_candidate_tasks(rng, args.count)
+    try:
+        candidate_tasks, patch_gate_rejections, _patch_draws = generate_candidate_tasks(rng, args.count, gates)
+    except gate_sampling.GateOverlapTooDenseError as exc:
+        fail(str(exc))
     unique_tasks, dropped = dedup_tasks(candidate_tasks)
     assigned: list[tuple[str, AnyTask]] = [
         (f"s{args.seed}-{i:06d}", task) for i, task in enumerate(unique_tasks)
     ]
 
     refusal_dropped = 0
+    refusal_gate_rejections: dict[str, int] = {}
     if args.refusal_count > 0:
-        candidate_refusal_tasks = generate_refusal.generate_candidate_refusal_tasks(
-            rng, args.refusal_count, fail
-        )
+        try:
+            candidate_refusal_tasks, refusal_gate_rejections, _refusal_draws = (
+                generate_refusal.generate_candidate_refusal_tasks(rng, args.refusal_count, gates, fail)
+            )
+        except gate_sampling.GateOverlapTooDenseError as exc:
+            fail(str(exc))
         unique_refusal_tasks, refusal_dropped = generate_refusal.dedup_refusal_tasks(candidate_refusal_tasks)
         assigned.extend(
             (f"s{args.seed}-refuse-{i:06d}", task) for i, task in enumerate(unique_refusal_tasks)
         )
     total_dropped = dropped + refusal_dropped
+
+    gate_rejections: dict[str, int] = {}
+    for rejections in (patch_gate_rejections, refusal_gate_rejections):
+        for rule, n in rejections.items():
+            gate_rejections[rule] = gate_rejections.get(rule, 0) + n
 
     rows, total_pairs = _verify_and_build_rows(assigned, args.tool)
 
@@ -304,6 +375,9 @@ def main(argv: list[str] | None = None) -> int:
         "dedup_dropped": total_dropped,
         "corpus_sha256": corpus_sha256,
         "val_split_ids": val_split_ids,
+        "gate_paths": [str(path) for path in gate_paths],
+        "gates_sha256": _gates_sha256(gate_paths),
+        "gate_rejections": dict(sorted(gate_rejections.items())),
     }
     args.report.write_text(json.dumps(fingerprint, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
