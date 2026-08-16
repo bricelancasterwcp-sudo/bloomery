@@ -218,8 +218,9 @@ fn run(config: Config, journal: Journal) -> ! {
         let post_pager = Arc::clone(&pager);
         let tasks_enabled = config.tasks_enabled;
         let codec_scratch_dir = config.data_dir.join("codec-probe");
+        let probe_timeout = std::time::Duration::from_secs(config.assay.probe_timeout_secs);
         std::thread::spawn(move || {
-            let runner = PostRunner::new(python);
+            let runner = PostRunner::new(python, probe_timeout);
             match run_post(
                 &post_pager,
                 &runner,

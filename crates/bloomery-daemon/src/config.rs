@@ -164,6 +164,13 @@ fn default_run_timeout_secs() -> u64 {
     120
 }
 
+/// 600s — matches the wall-clock cap `post.rs` shipped as `PROBE_TIMEOUT`
+/// before this field existed, so every config that omits
+/// `assay.probe_timeout_secs` keeps that behavior byte-for-byte.
+fn default_probe_timeout_secs() -> u64 {
+    600
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
     #[serde(default = "default_port")]
@@ -218,6 +225,29 @@ pub struct AssayConfig {
     pub enabled: bool,
     #[serde(default = "default_python")]
     pub python: String,
+    /// Wall-clock cap, in seconds, on one model's boot-POST assay probe
+    /// (`post::PostRunner`'s `probe_timeout`) — the same bound `post.rs`'s
+    /// module docs describe: a wedged assay must not hold the
+    /// provisional-admission window open for the life of the daemon, so the
+    /// child is killed and the probe recorded as a named failure once this
+    /// many seconds pass.
+    ///
+    /// Defaults to 600 (`default_probe_timeout_secs`), which is ~5× the
+    /// ~110 s a `--quick` probe measured on the enthusiast-16GB tier
+    /// (2026-08-14, qwen2.5-coder:7b-q8_0 on an RTX 5080) — see `post.rs`
+    /// for that measurement's full context. Every config that omits this
+    /// key keeps that 600 s behavior byte-for-byte.
+    ///
+    /// **Raise this for slow, partially-offloaded models**, which are
+    /// first-class under partial offload and can blow far past the
+    /// quick-probe baseline above: a measured qwen3.8-27b Q3 at ~15.5
+    /// tok/s (~3.4× slower than the baseline model) projects a `--quick`
+    /// probe at ~25-30 min. Left at the 600 s default, POST would kill
+    /// that probe before it finishes — the model stays unprofiled, and
+    /// (with the codec probe gated strictly after POST succeeds) the G4
+    /// codec probe aborts too.
+    #[serde(default = "default_probe_timeout_secs")]
+    pub probe_timeout_secs: u64,
 }
 
 /// Parses `path` as TOML into a [`Config`], applying defaults.
