@@ -97,11 +97,13 @@ def main() -> None:
 
     train_rows, val_rows = load_pairs(args.corpus, args.fingerprint)
     print(f"pairs: train={len(train_rows)} val={len(val_rows)}")
+    # Tokenize eagerly in plain Python rather than Dataset.map: datasets'
+    # map fingerprinting pickles the closure + table, which crashes on
+    # Python 3.14 (Pickler._batch_setitems signature change). from_list on
+    # pre-tokenized dicts avoids the pickling path entirely.
     fn = tokenize_fn(tokenizer)
-    train_ds = Dataset.from_list(train_rows).map(
-        fn, remove_columns=["prompt", "completion"])
-    val_ds = Dataset.from_list(val_rows).map(
-        fn, remove_columns=["prompt", "completion"])
+    train_ds = Dataset.from_list([fn(r) for r in train_rows])
+    val_ds = Dataset.from_list([fn(r) for r in val_rows])
     assert_batch_shape(tokenizer, train_ds)
 
     targs = TrainingArguments(
