@@ -28,9 +28,7 @@ from pathlib import Path
 
 import torch
 from unsloth import FastLanguageModel
-from datasets import Dataset
-from transformers import TrainingArguments
-from trl import SFTTrainer
+from transformers import Trainer, TrainingArguments
 
 MAX_SEQ = 4096
 LORA_R = 16
@@ -49,6 +47,26 @@ def load_pairs(corpus_path: Path, fingerprint_path: Path):
             bucket.append({"prompt": row["prompt"],
                            "completion": row["completion"]})
     return train, val
+
+
+class PairDataset(torch.utils.data.Dataset):
+    """Plain torch dataset over pre-tokenized rows (no hf-datasets)."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    def __len__(self):
+        return len(self.rows)
+
+    def __getitem__(self, i):
+        return self.rows[i]
+
+
+def collate_single(batch):
+    """bs=1 collator: tensorize the one sample, no padding needed."""
+    assert len(batch) == 1, "per_device_train_batch_size must stay 1"
+    row = batch[0]
+    return {k: torch.tensor([v]) for k, v in row.items()}
 
 
 def tokenize_fn(tokenizer):
@@ -97,13 +115,14 @@ def main() -> None:
 
     train_rows, val_rows = load_pairs(args.corpus, args.fingerprint)
     print(f"pairs: train={len(train_rows)} val={len(val_rows)}")
-    # Tokenize eagerly in plain Python rather than Dataset.map: datasets'
-    # map fingerprinting pickles the closure + table, which crashes on
-    # Python 3.14 (Pickler._batch_setitems signature change). from_list on
-    # pre-tokenized dicts avoids the pickling path entirely.
+    # No hf-datasets at all: every Dataset construction fingerprints via
+    # dill, which is broken on Python 3.14 (Pickler._batch_setitems
+    # signature change). We tokenize eagerly and feed a plain torch
+    # Dataset to transformers.Trainer; at bs=1 the collator just
+    # tensorizes the single sample.
     fn = tokenize_fn(tokenizer)
-    train_ds = Dataset.from_list([fn(r) for r in train_rows])
-    val_ds = Dataset.from_list([fn(r) for r in val_rows])
+    train_ds = PairDataset([fn(r) for r in train_rows])
+    val_ds = PairDataset([fn(r) for r in val_rows])
     assert_batch_shape(tokenizer, train_ds)
 
     targs = TrainingArguments(
@@ -113,9 +132,8 @@ def main() -> None:
         learning_rate=2e-4, lr_scheduler_type="cosine", warmup_steps=20,
         logging_steps=10, eval_strategy="steps", eval_steps=100,
         save_strategy="no", bf16=True, report_to=[], seed=20260816)
-    trainer = SFTTrainer(model=model, tokenizer=tokenizer,
-                         train_dataset=train_ds, eval_dataset=val_ds,
-                         args=targs)
+    trainer = Trainer(model=model, args=targs, data_collator=collate_single,
+                      train_dataset=train_ds, eval_dataset=val_ds)
     trainer.train()
     model.save_pretrained(str(args.out))
     tokenizer.save_pretrained(str(args.out))
