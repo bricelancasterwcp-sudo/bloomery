@@ -43,7 +43,7 @@ use bloomery_substrate::contract::{enforce_contract, ContractViolation, Verified
 use bloomery_substrate::{ModelHandle, Substrate};
 
 use crate::agents::{model_digest, Agent, AgentState, AgentTable, ImageStore};
-use crate::task::ExecBounds;
+use crate::{config::EnvelopeLens, task::ExecBounds};
 use error::sub;
 use journal as jrnl;
 use status::bound_by_str;
@@ -138,12 +138,12 @@ struct ModelEntry {
     /// under the new file, and carrying the old verdict forward would be
     /// exactly the silent reuse law 5 forbids.
     codec_gate: Option<codec_gate::CodecGateResult>,
-    /// Per-model `n_gpu_layers` override (`pager::tuning`); `None` -> default.
+    /// Per-model `n_gpu_layers` override + weights-VRAM ceiling (`pager::tuning`); both `None` -> default.
     n_gpu_layers_override: Option<u32>,
-    /// Declared weights-VRAM ceiling in bytes (`pager::tuning`); `None` -> full charge.
     weights_vram_bytes: Option<u64>,
-    /// Envelope-v2 (think-preseeded) lens flag (`pager::tuning`, protocol §10); `false` -> v1.
-    think_preseed: bool,
+    /// Task-loop envelope + declared KV-per-token override (`pager::tuning`, protocol §10/§11).
+    envelope: EnvelopeLens,
+    kv_per_token_bytes: Option<u64>,
 }
 
 pub struct Pager<S: Substrate> {
@@ -470,7 +470,8 @@ impl<S: Substrate> Pager<S> {
                 codec_gate: None,
                 n_gpu_layers_override: None,
                 weights_vram_bytes: None,
-                think_preseed: false,
+                envelope: EnvelopeLens::V1,
+                kv_per_token_bytes: None,
             },
         );
         Ok(())
@@ -505,7 +506,7 @@ impl<S: Substrate> Pager<S> {
                 .get(model)
                 .ok_or_else(|| PagerError::UnknownModel(model.to_string()))?;
             (
-                entry.kv_per_token,
+                entry.effective_kv_per_token(), // Part B, spec §10 addendum: see `pager::tuning`
                 entry.meta.training_ctx,
                 entry.effective_weights_bytes(), // Task 3: see `pager::tuning`
                 // The anti-ratchet rule, in one expression: a self-probe
@@ -548,10 +549,8 @@ impl<S: Substrate> Pager<S> {
             window_tokens: window.tokens,
             bound_by: bound_by.to_string(),
         };
-        // The KV cache alone. What residency plans against is
-        // `reserved_bytes` just below — see `Agent::reserved_bytes` for the
-        // measurement that separated the two.
-        let kv_bytes = u64::from(window.tokens).saturating_mul(kv_per_token);
+        // The KV cache alone (`reserved_bytes` below is what residency plans against).
+        let kv_bytes = self.kv_reservation_bytes(model, window.tokens);
         self.table.insert(Agent {
             id,
             model: model.to_string(),
@@ -637,12 +636,13 @@ impl<S: Substrate> Pager<S> {
     /// then residency — and nothing reaches the substrate until all three
     /// pass. A reply that arrives without token stats is an infrastructure
     /// failure (law 4), so it is journaled as a contract violation and
-    /// charged to nobody's budget.
+    /// charged to nobody's budget. `stop` (protocol §11) reaches `Substrate::infer` as-is.
     pub fn infer(
         &mut self,
         id: &str,
         prompt: &str,
         max_tokens: u32,
+        stop: Option<&str>,
     ) -> Result<VerifiedReply, PagerError> {
         let requested = u64::from(max_tokens);
         let (window_tokens, budget_check) = {
@@ -684,7 +684,7 @@ impl<S: Substrate> Pager<S> {
 
         let ctx = self.ensure_resident(id)?;
         jrnl::infer_started(&mut self.journal, id, prompt)?;
-        let reply = match self.substrate.infer(ctx, prompt, max_tokens) {
+        let reply = match self.substrate.infer(ctx, prompt, max_tokens, stop) {
             Ok(reply) => reply,
             Err(e) => {
                 return Err(self.classify_infer_error(id, e, needed_tokens, window_tokens)?)

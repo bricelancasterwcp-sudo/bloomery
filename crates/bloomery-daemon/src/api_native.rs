@@ -134,7 +134,9 @@ fn infer<S: Substrate>(pager: &Mutex<Pager<S>>, id: &str, body: &str) -> ApiResu
         Ok(p) => p,
         Err(poisoned) => return poisoned,
     };
-    match p.infer(id, &req.prompt, req.max_tokens) {
+    // Protocol §11: the native `/agents/{id}/infer` surface is POST-related
+    // and untouched by envelope-v3 — always `stop: None`.
+    match p.infer(id, &req.prompt, req.max_tokens, None) {
         Ok(reply) => (
             200,
             Some(json!({

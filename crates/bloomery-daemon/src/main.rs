@@ -180,12 +180,26 @@ fn run(config: Config, journal: Journal) -> ! {
         pager
             .set_model_tuning(name, spec.n_gpu_layers(), weights_vram_bytes)
             .unwrap_or_else(|e| fail(format!("model {name}: {e}")));
-        // Amendment 2 (docs/superpowers/evidence/2026-08-15-g4-protocol.md
-        // §10): an explicit per-model operator choice, wired the same way as
-        // every other tuning field above — `main.rs` is the one place a
-        // config value takes effect.
+        // Amendments 2/3 (docs/superpowers/evidence/2026-08-15-g4-protocol.md
+        // §10/§11): an explicit per-model operator choice, wired the same
+        // way as every other tuning field above — `main.rs` is the one
+        // place a config value takes effect. `load_config` already
+        // validated every model's envelope (config.rs), so this `Result` is
+        // never actually `Err` here — handled the same uniform way as this
+        // loop's other accessors rather than an `.expect` that would read as
+        // a special case.
+        let envelope = spec
+            .envelope_lens()
+            .unwrap_or_else(|e| fail(format!("model {name}: {e}")));
         pager
-            .set_think_preseed(name, spec.think_preseed())
+            .set_model_envelope(name, envelope)
+            .unwrap_or_else(|e| fail(format!("model {name}: {e}")));
+        // Spec §10 addendum (declared KV-per-token override): same wiring
+        // shape as `weights_vram_mib` just above, but no MiB->bytes
+        // conversion — `kv_per_token_bytes` is already declared in bytes
+        // (spec §10: "Per-model config `kv_per_token_bytes = N` (bytes)").
+        pager
+            .set_kv_per_token_bytes(name, spec.kv_per_token_bytes())
             .unwrap_or_else(|e| fail(format!("model {name}: {e}")));
     }
 

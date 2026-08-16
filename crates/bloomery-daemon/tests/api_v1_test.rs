@@ -504,3 +504,31 @@ fn an_ephemeral_agent_is_minted_at_the_pagers_configured_budget() {
     assert_eq!(st, 200, "{body}");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Protocol §11: "the `/v1` chat surface is untouched" by envelope-v3 — the
+/// `stop` this route's `Pager::infer` call carries is always `None`, never
+/// the task loop's `</action>` sequence, observed the way `X-Bloomery-Agent`
+/// binding is (`FakeSubstrate`, via `fake_pager_for_v1`/`dispatch_v1_fake`,
+/// no socket).
+#[test]
+fn v1_chat_completions_always_infers_with_no_stop_sequence() {
+    let (dir, pager) = bloomery_daemon::test_support::fake_pager_for_v1();
+
+    let (st, body) = bloomery_daemon::test_support::dispatch_v1_fake(
+        &pager,
+        "POST",
+        "/v1/chat/completions",
+        r#"{"model":"qwen","messages":[{"role":"user","content":"hi"}],"max_tokens":16}"#,
+        None,
+    );
+    assert_eq!(st, 200, "{body}");
+
+    let p = pager.lock().unwrap();
+    assert_eq!(
+        p.substrate().infer_stops(),
+        &[None],
+        "the /v1 surface must never pass a task-loop stop sequence"
+    );
+    drop(p);
+    let _ = std::fs::remove_dir_all(dir);
+}

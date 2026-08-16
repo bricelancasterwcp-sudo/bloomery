@@ -41,13 +41,15 @@
 //! - **The point estimate decides (§5).** `gate_decision`'s integer form has
 //!   no float edge; the Wilson interval is recorded with every verdict and
 //!   `is_provisional` marks a straddling one, but never changes it.
-//! - **The envelope lens travels with the verdict (§10, Amendment 2).** A
-//!   model configured `think_preseed = true` probes under
+//! - **The envelope lens travels with the verdict (§10/§11, Amendments 2
+//!   and 3).** A model configured `envelope = "v2"` probes under
 //!   `bloomery-task-envelope-v2` — every rendered fixture prompt ends with
-//!   the literal pre-seed `TaskSpec::think_preseed` drives in `run_task` —
-//!   and the verdict's `detail` names whichever lens actually produced it
-//!   (see the private `envelope_lens` helper below). v1 and v2 verdicts for
-//!   the same model are never comparable or averaged; each is its own rung.
+//!   the literal pre-seed `TaskSpec::envelope`-driven `THINK_PRESEED` in
+//!   `run_task`; `envelope = "v3"` probes under `bloomery-task-envelope-v3`,
+//!   `V2` plus the `</action>` stop sequence — and the verdict's `detail`
+//!   names whichever lens actually produced it (`EnvelopeLens::lens_name`).
+//!   v1, v2, and v3 verdicts for the same model are never comparable or
+//!   averaged; each is its own rung.
 //! - **`CodecFixture` rows are a rate ONLY under a matching `CodecVerdict`.**
 //!   Each row is journaled as its fixture finishes, so an abort partway
 //!   through a set leaves the rows for the fixtures that already ran —
@@ -79,6 +81,7 @@ use bloomery_core::journal::Journal;
 use bloomery_core::stats::wilson95;
 use bloomery_substrate::Substrate;
 
+use crate::config::EnvelopeLens;
 use crate::pager::{CodecGateResult, Pager};
 use crate::task::registry::panic_message;
 use crate::task::{run_task, TaskSpec, TaskStatus};
@@ -110,29 +113,26 @@ pub const FIXTURE_MAX_STEPS: u32 = 6;
 /// The envelope the gate measures landing *under* — named in every verdict's
 /// `detail` because "this model's codec lands 85%" is meaningless without
 /// the envelope it landed through (protocol §2). Envelope-v1: no think-seed.
-pub const ENVELOPE_LENS: &str = "bloomery-task-envelope-v1";
+/// Derived from [`EnvelopeLens::lens_name`] (the one source, protocol §11)
+/// rather than retyped, so this pinned string can never drift from it.
+pub const ENVELOPE_LENS: &str = EnvelopeLens::V1.lens_name();
 
 /// The second envelope lens (protocol §10, Amendment 2, 2026-08-16): equal to
 /// [`ENVELOPE_LENS`] in every respect except that the rendered task prompt
 /// ends with the literal pre-seed `<think>\n\n</think>\n\n`
 /// (`task::task_loop::THINK_PRESEED`). Selected per model by an explicit
-/// operator config (`think_preseed = true`); never inferred, never mixed
-/// into the same rung as a v1 verdict for the same model.
-pub const ENVELOPE_LENS_V2: &str = "bloomery-task-envelope-v2";
+/// operator config (`envelope = "v2"`, or its `think_preseed = true` alias);
+/// never inferred, never mixed into the same rung as a v1 verdict for the
+/// same model.
+pub const ENVELOPE_LENS_V2: &str = EnvelopeLens::V2.lens_name();
 
-/// Selects which envelope lens produced (or will produce) a probe's verdict
-/// (protocol §10). `think_preseed` is the model's own configured flag, read
-/// once per probe alongside the codec (see [`ProbeContext`]) — the same
-/// value [`TaskSpec::think_preseed`] carries into every fixture's rendered
-/// prompt, so the name recorded in the verdict's `detail` always matches what
-/// the model actually saw.
-fn envelope_lens(think_preseed: bool) -> &'static str {
-    if think_preseed {
-        ENVELOPE_LENS_V2
-    } else {
-        ENVELOPE_LENS
-    }
-}
+/// The third envelope lens (protocol §11, Amendment 3, 2026-08-16): equal to
+/// [`ENVELOPE_LENS_V2`] plus a stop sequence at the first `</action>`
+/// occurrence in each task turn's completion
+/// (`task::task_loop::ACTION_STOP`). Selected per model by `envelope =
+/// "v3"`; never mixed into the same rung as a v1 or v2 verdict for the same
+/// model.
+pub const ENVELOPE_LENS_V3: &str = EnvelopeLens::V3.lens_name();
 
 /// Journaled on every ephemeral probe agent's removal.
 const AGENT_REMOVED_REASON: &str = "codec probe fixture complete";
@@ -169,11 +169,11 @@ struct ProbeContext<'a> {
     model: &'a str,
     set_name: &'a str,
     codec: PatchCodec,
-    /// The model's configured envelope lens (protocol §10, Amendment 2):
-    /// `true` runs every fixture under `bloomery-task-envelope-v2`, appending
-    /// the think pre-seed to each rendered prompt via `TaskSpec::think_preseed`.
-    /// Read once, same invariant-1 reasoning as `codec`.
-    think_preseed: bool,
+    /// The model's configured envelope lens (protocol §10/§11, Amendments 2
+    /// and 3), read once via [`crate::pager::Pager::model_envelope`], same
+    /// invariant-1 reasoning as `codec` — every fixture runs under exactly
+    /// this lens via `TaskSpec::envelope`.
+    envelope: EnvelopeLens,
 }
 
 /// Runs `model` against `set` and returns its G4 verdict, storing the gate on
@@ -218,19 +218,19 @@ pub fn run_codec_probe<S: Substrate + Send + 'static>(
     // fixture, so every TaskSpec, every CodecFixture event, and the verdict
     // all describe the same measurement even if a profile were attached
     // mid-probe.
-    let (codec, codec_from_profile, think_preseed) = {
+    let (codec, codec_from_profile, envelope) = {
         let guard = lock_pager(pager)?;
         (
             guard.model_patch_codec(model),
             guard.model_codec_from_profile(model),
-            guard.model_think_preseed(model),
+            guard.model_envelope(model),
         )
     };
     let ctx = ProbeContext {
         model,
         set_name: &set.set,
         codec,
-        think_preseed,
+        envelope,
     };
 
     let model_dir = scratch_dir.join(model_dir_name(model));
@@ -257,7 +257,7 @@ pub fn run_codec_probe<S: Substrate + Send + 'static>(
     };
     let detail = format!(
         "applies_and_parses under {}; {}",
-        envelope_lens(ctx.think_preseed),
+        ctx.envelope.lens_name(),
         if codec_from_profile {
             CODEC_FROM_PROFILE
         } else {
@@ -336,10 +336,11 @@ fn run_one_fixture<S: Substrate + Send + 'static>(
         // gate's own previous verdict instead of the model.
         mutating_verbs: true,
         bounds,
-        // Protocol §10 (Amendment 2): the model's configured lens, read once
-        // at invariant 1 alongside the codec — the same value `envelope_lens`
-        // names in the verdict's `detail` below.
-        think_preseed: ctx.think_preseed,
+        // Protocol §10/§11 (Amendments 2 and 3): the model's configured
+        // lens, read once at invariant 1 alongside the codec — the same
+        // value `ctx.envelope.lens_name()` names in the verdict's `detail`
+        // below.
+        envelope: ctx.envelope,
     };
     // Caught inside the locked scope for exactly the reason
     // `task::registry`'s module docs give: a panic unwinding past a live

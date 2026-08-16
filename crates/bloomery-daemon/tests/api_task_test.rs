@@ -6,6 +6,7 @@
 
 mod common;
 
+use bloomery_daemon::config::EnvelopeLens;
 use common::http;
 
 /// `501 tasks_disabled` when the daemon's config never turned the task
@@ -305,6 +306,7 @@ impl bloomery_substrate::Substrate for PanicSubstrate {
         _c: bloomery_substrate::CtxHandle,
         _prompt: &str,
         _max_tokens: u32,
+        _stop: Option<&str>,
     ) -> Result<bloomery_substrate::Reply, bloomery_substrate::SubstrateError> {
         panic!("scripted panic: proves the task registry's catch_unwind keeps the daemon healthy");
     }
@@ -841,7 +843,7 @@ fn a_think_preseed_model_renders_its_task_prompt_with_the_preseed_literal() {
 
     let agent_id = {
         let mut p = pager.lock().unwrap();
-        p.set_think_preseed("qwen", true).unwrap();
+        p.set_model_envelope("qwen", EnvelopeLens::V2).unwrap();
         p.create_agent("qwen", 100, None, 1_000_000).unwrap().id
     };
 

@@ -34,6 +34,12 @@ pub struct FakeSubstrate {
     /// default), and `calls()` alone only records that a load happened, not
     /// with what argument.
     load_n_gpu_layers: Vec<u32>,
+    /// Every `stop` value passed to [`Substrate::infer`], in call order —
+    /// same reasoning as `load_n_gpu_layers`: a GPU-free test needs to see
+    /// which stop sequence (if any) an `infer` call actually carried, e.g.
+    /// to pin that the `/v1` surface always records `None` (protocol §11:
+    /// "the `/v1` chat surface is untouched").
+    infer_stops: Vec<Option<String>>,
 }
 
 impl FakeSubstrate {
@@ -47,6 +53,7 @@ impl FakeSubstrate {
             next_model_handle: 0,
             next_ctx_handle: 0,
             load_n_gpu_layers: Vec::new(),
+            infer_stops: Vec::new(),
         }
     }
 
@@ -66,6 +73,12 @@ impl FakeSubstrate {
     /// [`Self::calls`].
     pub fn load_n_gpu_layers(&self) -> &[u32] {
         &self.load_n_gpu_layers
+    }
+
+    /// Every `stop` value passed to [`Substrate::infer`], in call order —
+    /// index-aligned with the `"infer:cN"` entries in [`Self::calls`].
+    pub fn infer_stops(&self) -> &[Option<String>] {
+        &self.infer_stops
     }
 
     /// The accumulated prompt history for context `c`, if it is currently
@@ -137,17 +150,29 @@ impl Substrate for FakeSubstrate {
         c: CtxHandle,
         prompt: &str,
         _max_tokens: u32,
+        stop: Option<&str>,
     ) -> Result<Reply, SubstrateError> {
         self.log(format!("infer:c{c}"));
+        self.infer_stops.push(stop.map(str::to_string));
         if !self.contexts.contains_key(&c) {
             return Err(SubstrateError::Context(format!(
                 "unknown context handle {c}"
             )));
         }
-        let reply = self
+        let mut reply = self
             .scripted_replies
             .pop_front()
             .ok_or_else(|| SubstrateError::Infer("script exhausted".to_string()))?;
+        // Envelope-v3 (protocol §11): apply the same truncate-at-first-
+        // occurrence-inclusive semantics `LlamaSubstrate` applies to a real
+        // generation loop, so a GPU-free test can exercise real truncation
+        // behavior against a scripted reply rather than trusting the script
+        // writer to have pre-truncated it by hand.
+        if let Some(stop) = stop {
+            if let Some(idx) = reply.text.find(stop) {
+                reply.text.truncate(idx + stop.len());
+            }
+        }
         let entry = self.history.entry(c).or_default();
         if entry.is_empty() {
             entry.push_str(prompt);

@@ -98,8 +98,8 @@ fn eviction_under_pressure_saves_image_and_journals() {
     p.register_model("qwen", &gguf, meta(), None).unwrap();
     let a = p.create_agent("qwen", 50, None, 10_000).unwrap();
     let b = p.create_agent("qwen", 100, None, 10_000).unwrap();
-    p.infer(&a.id, "hello from a", 16).unwrap(); // a becomes resident
-    p.infer(&b.id, "hello from b", 16).unwrap(); // must evict a (lower priority)
+    p.infer(&a.id, "hello from a", 16, None).unwrap(); // a becomes resident
+    p.infer(&b.id, "hello from b", 16, None).unwrap(); // must evict a (lower priority)
     let events = replay(&jpath).unwrap();
     assert!(events.iter().any(|e| matches!(e,
         Event::PagerOp { id, op: PagerOpKind::EvictSave, .. } if id == &a.id)));
@@ -109,7 +109,7 @@ fn eviction_under_pressure_saves_image_and_journals() {
             if id == &a.id && image_tier == "ram")));
 
     p.suspend(&b.id).unwrap(); // see the deviation note above
-    p.infer(&a.id, "back again", 16).unwrap(); // resumes a from RAM image
+    p.infer(&a.id, "back again", 16, None).unwrap(); // resumes a from RAM image
     let events = replay(&jpath).unwrap();
     assert!(events.iter().any(|e| matches!(e,
         Event::PagerOp { id, op: PagerOpKind::ResumeLoad, image_tier, .. }
@@ -130,9 +130,9 @@ fn the_eviction_story_is_journaled_in_order_with_a_faithful_prompt() {
     p.register_model("qwen", &gguf, meta(), None).unwrap();
     let a = p.create_agent("qwen", 50, None, 10_000).unwrap();
     let b = p.create_agent("qwen", 100, None, 10_000).unwrap();
-    p.infer(&a.id, "hello from a", 16).unwrap();
+    p.infer(&a.id, "hello from a", 16, None).unwrap();
     let prompt = "hello from b";
-    p.infer(&b.id, prompt, 16).unwrap();
+    p.infer(&b.id, prompt, 16, None).unwrap();
 
     let events = replay(&jpath).unwrap();
     // Weights load once and stay loaded — the cold-switch bench reads this.
@@ -216,7 +216,7 @@ fn oversized_prompt_is_refused_with_arithmetic_never_truncated() {
     p.register_model("qwen", &gguf, meta(), None).unwrap();
     let a = p.create_agent("qwen", 50, Some(64), 10_000).unwrap(); // 64-token window
     let big = "x".repeat(10_000);
-    match p.infer(&a.id, &big, 16) {
+    match p.infer(&a.id, &big, 16, None) {
         Err(PagerError::PromptTooLarge {
             needed_tokens,
             window_tokens,
@@ -237,7 +237,7 @@ fn budget_exhaustion_refuses_before_the_call() {
     let gguf = write_gguf(&dir, b"w");
     p.register_model("qwen", &gguf, meta(), None).unwrap();
     let a = p.create_agent("qwen", 50, None, 10).unwrap(); // 10-token budget
-    match p.infer(&a.id, "hi", 100) {
+    match p.infer(&a.id, "hi", 100, None) {
         Err(PagerError::Budget {
             remaining: 10,
             requested: 100,
@@ -270,10 +270,10 @@ fn residency_refusal_is_pre_checked_and_never_touches_the_substrate() {
     p.register_model("qwen", &gguf, meta(), None).unwrap();
     let high = p.create_agent("qwen", 200, None, 10_000).unwrap();
     let low = p.create_agent("qwen", 10, None, 10_000).unwrap();
-    p.infer(&high.id, "first", 16).unwrap();
+    p.infer(&high.id, "first", 16, None).unwrap();
     let calls_before = p.substrate().calls().len();
 
-    match p.infer(&low.id, "second", 16) {
+    match p.infer(&low.id, "second", 16, None) {
         Err(PagerError::Refused {
             needed,
             free,
@@ -310,14 +310,14 @@ fn stale_image_digest_cold_starts_and_journals_degraded() {
     let gguf = write_gguf(&dir, b"weights-v1");
     p.register_model("qwen", &gguf, meta(), None).unwrap();
     let a = p.create_agent("qwen", 50, None, 10_000).unwrap();
-    p.infer(&a.id, "one", 16).unwrap();
+    p.infer(&a.id, "one", 16, None).unwrap();
     p.suspend(&a.id).unwrap();
 
     // The weights file changed on disk: same name, new digest.
     write_gguf(&dir, b"weights-v2-with-a-different-length");
     p.register_model("qwen", &gguf, meta(), None).unwrap();
 
-    p.infer(&a.id, "two", 16).unwrap(); // still serves, from a cold context
+    p.infer(&a.id, "two", 16, None).unwrap(); // still serves, from a cold context
     let events = replay(&jpath).unwrap();
     assert!(
         events
@@ -346,7 +346,7 @@ fn corrupt_spilled_image_cold_starts_and_journals_degraded() {
     let gguf = write_gguf(&dir, b"weights");
     p.register_model("qwen", &gguf, meta(), None).unwrap();
     let a = p.create_agent("qwen", 50, None, 10_000).unwrap();
-    p.infer(&a.id, "one", 16).unwrap();
+    p.infer(&a.id, "one", 16, None).unwrap();
     p.suspend(&a.id).unwrap();
 
     // Corrupt the spilled image on disk (length no longer matches).
@@ -359,7 +359,7 @@ fn corrupt_spilled_image_cold_starts_and_journals_degraded() {
     bytes.extend_from_slice(b"garbage");
     std::fs::write(&spilled, &bytes).unwrap();
 
-    p.infer(&a.id, "two", 16).unwrap();
+    p.infer(&a.id, "two", 16, None).unwrap();
     let events = replay(&jpath).unwrap();
     assert!(
         events
@@ -378,10 +378,10 @@ fn suspend_resume_round_trips_the_kv_image_through_nvme() {
     let gguf = write_gguf(&dir, b"weights");
     p.register_model("qwen", &gguf, meta(), None).unwrap();
     let a = p.create_agent("qwen", 50, None, 10_000).unwrap();
-    p.infer(&a.id, "one", 16).unwrap();
+    p.infer(&a.id, "one", 16, None).unwrap();
     p.suspend(&a.id).unwrap();
     p.resume(&a.id).unwrap(); // ensure resident, no infer
-    p.infer(&a.id, "two", 16).unwrap();
+    p.infer(&a.id, "two", 16, None).unwrap();
 
     // FakeSubstrate mints context handles 1, 2, ...; the resumed context is
     // the second one it created.
@@ -418,8 +418,8 @@ fn unmeasured_vram_journals_degraded_once_and_caps_residency_at_one() {
     assert_eq!(a.window_tokens, 4096);
     assert_eq!(a.bound_by, "training_ctx");
 
-    p.infer(&a.id, "hello", 16).unwrap();
-    p.infer(&b.id, "hello", 16).unwrap(); // cap of 1 -> a is evicted
+    p.infer(&a.id, "hello", 16, None).unwrap();
+    p.infer(&b.id, "hello", 16, None).unwrap(); // cap of 1 -> a is evicted
 
     let events = replay(&jpath).unwrap();
     let degraded = events
@@ -441,7 +441,7 @@ fn missing_stats_is_a_contract_violation_not_a_reply() {
     p.register_model("qwen", &gguf, meta(), None).unwrap();
     let a = p.create_agent("qwen", 50, None, 10_000).unwrap();
 
-    match p.infer(&a.id, "hi", 16) {
+    match p.infer(&a.id, "hi", 16, None) {
         // the fake's script is empty -> substrate error, not a silent reply
         Err(PagerError::Substrate(msg)) => assert!(msg.contains("script exhausted")),
         other => panic!("expected Substrate, got {other:?}"),
@@ -462,7 +462,7 @@ fn missing_stats_is_a_contract_violation_not_a_reply() {
     let gguf2 = write_gguf(&dir2, b"weights");
     p2.register_model("qwen", &gguf2, meta(), None).unwrap();
     let a2 = p2.create_agent("qwen", 50, None, 10_000).unwrap();
-    match p2.infer(&a2.id, "hi", 16) {
+    match p2.infer(&a2.id, "hi", 16, None) {
         Err(PagerError::Contract(_)) => {}
         other => panic!("expected Contract, got {other:?}"),
     }
@@ -498,7 +498,7 @@ fn unload_model_pages_out_holders_and_journals() {
     let gguf = write_gguf(&dir, b"weights");
     p.register_model("qwen", &gguf, meta(), None).unwrap();
     let a = p.create_agent("qwen", 50, None, 10_000).unwrap();
-    p.infer(&a.id, "one", 16).unwrap();
+    p.infer(&a.id, "one", 16, None).unwrap();
     p.unload_model("qwen").unwrap();
 
     let events = replay(&jpath).unwrap();
@@ -509,7 +509,7 @@ fn unload_model_pages_out_holders_and_journals() {
         Event::PagerOp { id, op: PagerOpKind::SuspendSave, .. } if id == &a.id)));
     assert!(!p.status().models[0].loaded);
     // and it comes back: the model reloads on demand, image restores
-    p.infer(&a.id, "two", 16).unwrap();
+    p.infer(&a.id, "two", 16, None).unwrap();
     assert_eq!(p.substrate().ctx_history(2), Some("one\ntwo"));
 }
 
@@ -559,7 +559,13 @@ impl bloomery_substrate::Substrate for ScriptedSubstrate {
         self.history.remove(&c);
         Ok(())
     }
-    fn infer(&mut self, c: CtxHandle, prompt: &str, _max: u32) -> Result<Reply, SubstrateError> {
+    fn infer(
+        &mut self,
+        c: CtxHandle,
+        prompt: &str,
+        _max: u32,
+        _stop: Option<&str>,
+    ) -> Result<Reply, SubstrateError> {
         self.calls.push(format!("infer:c{c}"));
         if let Some(msg) = &self.infer_failure {
             return Err(SubstrateError::Infer(msg.clone()));
@@ -624,11 +630,11 @@ fn image_rejected_for_size_mismatch_cold_starts_on_a_fresh_context() {
     };
     let (mut p, jpath) = scripted_pager(&dir, substrate, 10u64.pow(9));
     let a = p.create_agent("qwen", 50, None, 10_000).unwrap();
-    p.infer(&a.id, "one", 16).unwrap();
+    p.infer(&a.id, "one", 16, None).unwrap();
     p.suspend(&a.id).unwrap();
 
     // Still serves — a rejected image is invalidation, never a failed request.
-    p.infer(&a.id, "two", 16).unwrap();
+    p.infer(&a.id, "two", 16, None).unwrap();
 
     let events = replay(&jpath).unwrap();
     assert!(
@@ -669,10 +675,10 @@ fn a_transient_restore_failure_keeps_the_image_for_the_retry() {
     };
     let (mut p, jpath) = scripted_pager(&dir, substrate, 10u64.pow(9));
     let a = p.create_agent("qwen", 50, None, 10_000).unwrap();
-    p.infer(&a.id, "one", 16).unwrap();
+    p.infer(&a.id, "one", 16, None).unwrap();
     p.suspend(&a.id).unwrap();
 
-    match p.infer(&a.id, "two", 16) {
+    match p.infer(&a.id, "two", 16, None) {
         Err(PagerError::Substrate(msg)) => assert!(msg.contains("transient device error")),
         other => panic!("expected Substrate, got {other:?}"),
     }
@@ -685,7 +691,7 @@ fn a_transient_restore_failure_keeps_the_image_for_the_retry() {
     )));
 
     // Retry: the substrate is healthy again and the image is still there.
-    p.infer(&a.id, "two", 16).unwrap();
+    p.infer(&a.id, "two", 16, None).unwrap();
     let events = replay(&jpath).unwrap();
     assert!(
         events.iter().any(|e| matches!(e,
@@ -713,9 +719,9 @@ fn an_aborted_eviction_is_journaled_not_left_orphaned() {
     let (mut p, jpath) = scripted_pager(&dir, substrate, 300 * 1024 * 1024);
     let a = p.create_agent("qwen", 50, None, 10_000).unwrap();
     let b = p.create_agent("qwen", 100, None, 10_000).unwrap();
-    p.infer(&a.id, "hello from a", 16).unwrap();
+    p.infer(&a.id, "hello from a", 16, None).unwrap();
 
-    match p.infer(&b.id, "hello from b", 16) {
+    match p.infer(&b.id, "hello from b", 16, None) {
         Err(PagerError::Substrate(msg)) => assert!(msg.contains("disk on fire")),
         other => panic!("expected Substrate, got {other:?}"),
     }
@@ -760,7 +766,7 @@ fn the_substrate_window_backstop_stays_a_refusal_across_the_boundary() {
     let a = p.create_agent("qwen", 50, None, 10_000).unwrap();
 
     // The pager's own estimate lets this through: 12/3 + 16 = 20 <= 4096.
-    match p.infer(&a.id, "hello from a", 16) {
+    match p.infer(&a.id, "hello from a", 16, None) {
         Err(PagerError::PromptTooLarge {
             needed_tokens,
             window_tokens,
@@ -805,7 +811,7 @@ fn unknown_model_and_unknown_agent_are_named() {
         Err(PagerError::UnknownModel(m)) => assert_eq!(m, "nope"),
         other => panic!("expected UnknownModel, got {other:?}"),
     }
-    match p.infer("a99", "hi", 1) {
+    match p.infer("a99", "hi", 1, None) {
         Err(PagerError::UnknownAgent(id)) => assert_eq!(id, "a99"),
         other => panic!("expected UnknownAgent, got {other:?}"),
     }
@@ -824,7 +830,7 @@ fn agent_ids_are_unique_and_status_is_a_snapshot() {
         .collect();
     assert_eq!(ids, vec!["a1", "a2", "a3"]);
 
-    p.infer("a1", "hi", 16).unwrap();
+    p.infer("a1", "hi", 16, None).unwrap();
     let status = p.status();
     assert_eq!(status.agents.len(), 3);
     assert_eq!(status.agents[0].state, "resident");

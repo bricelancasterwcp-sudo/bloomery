@@ -252,6 +252,7 @@ mod tests {
     use bloomery_substrate::Reply;
 
     use crate::agents::ImageStore;
+    use crate::config::EnvelopeLens;
     use crate::task::ExecBounds;
     use bloomery_core::action::PatchCodec;
 
@@ -336,7 +337,7 @@ mod tests {
             patch_codec: PatchCodec::WholeFile,
             bounds: ExecBounds::default(),
             mutating_verbs: false,
-            think_preseed: false,
+            envelope: EnvelopeLens::V1,
         };
 
         let task_id =
@@ -394,7 +395,7 @@ mod tests {
             patch_codec: PatchCodec::SearchReplace,
             bounds: ExecBounds::default(),
             mutating_verbs: true,
-            think_preseed: false,
+            envelope: EnvelopeLens::V1,
         };
 
         let id1 = registry.spawn_task(
@@ -454,6 +455,7 @@ mod tests {
             _c: bloomery_substrate::CtxHandle,
             _prompt: &str,
             _max_tokens: u32,
+            _stop: Option<&str>,
         ) -> Result<bloomery_substrate::Reply, bloomery_substrate::SubstrateError> {
             panic!("scripted panic: proves catch_unwind keeps the registry and pager healthy");
         }
@@ -514,7 +516,7 @@ mod tests {
             patch_codec: PatchCodec::SearchReplace,
             bounds: ExecBounds::default(),
             mutating_verbs: true,
-            think_preseed: false,
+            envelope: EnvelopeLens::V1,
         };
 
         let task_id =

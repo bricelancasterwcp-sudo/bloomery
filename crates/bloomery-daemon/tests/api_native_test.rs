@@ -406,6 +406,7 @@ impl bloomery_substrate::Substrate for PanicSubstrate {
         _c: bloomery_substrate::CtxHandle,
         _prompt: &str,
         _max_tokens: u32,
+        _stop: Option<&str>,
     ) -> Result<bloomery_substrate::Reply, bloomery_substrate::SubstrateError> {
         panic!("scripted panic: poisons the pager mutex for a test");
     }
