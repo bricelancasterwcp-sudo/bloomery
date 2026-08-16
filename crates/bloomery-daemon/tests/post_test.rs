@@ -674,6 +674,70 @@ fn a_stale_json_document_is_not_attached_as_a_fresh_profile() {
     );
 }
 
+/// The constructor plumbing is the load-bearing line: `PostRunner::new`'s
+/// `probe_timeout` argument must actually reach the spawn layer, not just
+/// exist. Drives a real slow child (a shell script that ignores every
+/// argument assay's invocation would pass it) through the *public* `new` +
+/// `probe` surface — the same real-subprocess seam as
+/// `a_wedged_probe_is_killed_and_named_a_timeout` above, but proving the
+/// argument actually reaches `run_bounded` rather than being ignored in
+/// favor of the old hardcoded 600s default. If `new` dropped the argument,
+/// the 1s child would run to completion (well inside this test's own
+/// patience), the process would exit 0, and the probe would fail on a
+/// missing `--json` document instead — a different error, not this one —
+/// which is exactly the failure mode this test exists to catch.
+#[test]
+fn post_runner_new_honors_its_configured_probe_timeout() {
+    let dir = std::env::temp_dir().join("bloomery-post-ctor-timeout-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let marker = dir.join(format!("marker-{}-{}", std::process::id(), line!()));
+    let script = dir.join(format!("slow-python-{}-{}.sh", std::process::id(), line!()));
+    let _ = std::fs::remove_file(&marker);
+    std::fs::write(
+        &script,
+        format!("#!/bin/sh\nsleep 1\necho x > {}\n", marker.display()),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perm = std::fs::metadata(&script).unwrap().permissions();
+        perm.set_mode(0o755);
+        std::fs::set_permissions(&script, perm).unwrap();
+    }
+
+    let runner = PostRunner::new(
+        script.display().to_string(),
+        std::time::Duration::from_millis(300),
+    );
+    let tier = Tier {
+        name: "t".into(),
+        emulated: true,
+    };
+    let started = std::time::Instant::now();
+    let out = dir.join(format!("never-written-{}.json", line!()));
+    match runner.probe(8181, "m", &tier, &out) {
+        Err(PostError::Spawn(msg)) => assert!(
+            msg.contains("timed out"),
+            "expected the configured 300ms timeout to fire, got {msg:?}"
+        ),
+        other => panic!(
+            "expected a timeout-driven Spawn error from the configured 300ms cap, got {other:?}"
+        ),
+    }
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "the configured 300ms cap must bound the wait, not the 1s child"
+    );
+    // The child would write the marker at t+1s. A runner that ignored the
+    // configured timeout would let it run to completion and write it.
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    assert!(
+        !marker.exists(),
+        "a runner that honors its configured timeout must kill the child \
+         before it writes the marker"
+    );
+}
+
 /// The degradation is said once per model, not once per agent: a busy
 /// `allow_unprofiled` daemon (or POST's ~75 calls) would otherwise bury the
 /// journal in one repeated sentence. Kills the delete-the-dedup mutant.

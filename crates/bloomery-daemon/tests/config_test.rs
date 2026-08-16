@@ -50,6 +50,29 @@ llama = "/models/llama.gguf"
     assert_eq!(config.find_result_cap, 100);
     assert_eq!(config.run_output_cap_bytes, 65_536);
     assert_eq!(config.run_timeout_secs, 120);
+
+    // A config that omits `assay.probe_timeout_secs` keeps today's 600s
+    // behavior byte-for-byte.
+    assert_eq!(config.assay.probe_timeout_secs, 600);
+}
+
+/// An operator raising the timeout for a slow, partially-offloaded model
+/// (the measured motivation: a qwen3.8-27b Q3 at ~15.5 tok/s projects a
+/// `--quick` probe at ~25-30 min) must have that value parse and stick.
+#[test]
+fn explicit_probe_timeout_secs_parses() {
+    let toml = r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = { name = "enthusiast-16gb", emulated = false }
+assay = { enabled = true, python = "python3", probe_timeout_secs = 1800 }
+
+[models]
+llama = "/models/llama.gguf"
+"#;
+    let path = write_temp_toml("probe-timeout.toml", toml);
+    let config = load_config(&path).unwrap();
+    assert_eq!(config.assay.probe_timeout_secs, 1800);
 }
 
 #[test]

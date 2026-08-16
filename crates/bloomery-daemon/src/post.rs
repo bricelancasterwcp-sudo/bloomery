@@ -25,7 +25,12 @@
 //!
 //! **The subprocess is bounded.** A wedged assay would otherwise hold the
 //! provisional-admission window open for the life of the process — the one
-//! failure this module exists to prevent. See [`PROBE_TIMEOUT`].
+//! failure this module exists to prevent. The cap is operator-configurable
+//! (`config::AssayConfig::probe_timeout_secs`, plumbed through
+//! [`PostRunner::new`]'s `probe_timeout` parameter) precisely because slow,
+//! partially-offloaded models can need much longer than the 600 s default
+//! sized for a quick probe — see that parameter's doc for the measured
+//! baseline and the measured motivation for raising it.
 //!
 //! **A failed probe is an infrastructure failure with a name** — `Spawn`
 //! (assay could not be started), `NonZeroExit` (it ran and failed, with its
@@ -45,17 +50,6 @@ use bloomery_substrate::Substrate;
 
 use crate::config::Tier;
 use crate::pager::{Pager, PagerError};
-
-/// Wall-clock cap on one model's probe.
-///
-/// A `--quick` probe measured ~110 s per model on the enthusiast-16GB tier
-/// (2026-08-14, qwen2.5-coder:7b-q8_0 on an RTX 5080), so this is ~5×
-/// headroom: slow enough never to kill a working probe, short enough that a
-/// wedged one cannot hold the provisional-admission window open for the
-/// life of the daemon. On expiry the child is **killed**, and the timeout
-/// takes the same named-failure path as any other probe failure — the model
-/// stays unprofiled and `posting` still clears.
-const PROBE_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// How often the spawn layer checks whether the child has exited. Cheap
 /// (`waitpid(WNOHANG)`), and 500 ms is far below any interval that matters
@@ -109,12 +103,33 @@ pub struct PostRunner {
 
 impl PostRunner {
     /// A runner that really spawns `{python} -m assay ...`, bounded by
-    /// [`PROBE_TIMEOUT`].
-    pub fn new(python: String) -> PostRunner {
+    /// `probe_timeout`.
+    ///
+    /// **Why this needs a cap, and where the shipped default comes from:**
+    /// a `--quick` probe measured ~110 s per model on the enthusiast-16GB
+    /// tier (2026-08-14, qwen2.5-coder:7b-q8_0 on an RTX 5080). The
+    /// operator-configured default (`config::AssayConfig::probe_timeout_secs`,
+    /// 600 s when unset) is ~5× that: slow enough never to kill a working
+    /// probe, short enough that a wedged one cannot hold the
+    /// provisional-admission window open for the life of the daemon. On
+    /// expiry the child is **killed**, and the timeout takes the same
+    /// named-failure path as any other probe failure — the model stays
+    /// unprofiled and `posting` still clears.
+    ///
+    /// **Configurable because slow, partially-offloaded models blow past
+    /// the quick-probe baseline the default was sized for:** a measured
+    /// qwen3.8-27b Q3 at ~15.5 tok/s (~3.4× slower than the baseline model
+    /// above) projects a `--quick` probe at ~25-30 min, which the 600 s
+    /// default would kill outright — the model stays unprofiled and the G4
+    /// codec probe, gated strictly after POST succeeds, never runs either.
+    /// An operator serving such a model raises `assay.probe_timeout_secs`
+    /// in config; every existing config keeps the 600 s default
+    /// byte-for-byte.
+    pub fn new(python: String, probe_timeout: Duration) -> PostRunner {
         PostRunner {
             python,
-            run: Box::new(|program: &str, args: &[String]| {
-                run_bounded(program, args, PROBE_TIMEOUT)
+            run: Box::new(move |program: &str, args: &[String]| {
+                run_bounded(program, args, probe_timeout)
             }),
         }
     }
@@ -211,7 +226,9 @@ impl PostRunner {
 ///
 /// This is `Command::output()` with a deadline. `output()` itself blocks
 /// forever, which for POST means a hung assay pins the daemon in
-/// provisional admission until someone restarts it — see [`PROBE_TIMEOUT`].
+/// provisional admission until someone restarts it — see
+/// [`PostRunner::new`]'s `probe_timeout` parameter for the operator-configured
+/// cap that bounds it.
 ///
 /// Three deliberate choices in the plumbing:
 ///
@@ -265,7 +282,7 @@ fn run_bounded(program: &str, args: &[String], timeout: Duration) -> std::io::Re
 /// The injectable [`CommandRunner`] replaces the whole subprocess, so it
 /// cannot exercise the spawn layer's timeout; this is the seam that lets a
 /// test drive the real one against a real child without waiting out the
-/// shipped [`PROBE_TIMEOUT`].
+/// shipped default (600 s, `config::AssayConfig::probe_timeout_secs`).
 #[cfg(any(test, feature = "test-support"))]
 pub fn run_bounded_for_test(
     program: &str,
