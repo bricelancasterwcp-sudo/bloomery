@@ -51,3 +51,13 @@ Adopted from the spec's provisional values; Task 1's prior-art pass found no fea
 **Protocol (pre-registered 2026-08-15, before the instrument):** fixture set codec-tasks-v1 (N=20; 10 python + 10 plaintext lenses), run through the daemon's own task loop at admission; landing = applies-and-parses scored per docs/superpowers/evidence/2026-08-15-g4-protocol.md §3; decision landed*5 >= n*4 on the point estimate; Wilson 95% recorded, provisional when the interval straddles 0.80; infrastructure aborts yield unmeasured (fail-closed demotion), never a score.
 
 ---
+
+## G5 — refusal honesty (Phase 2, advisory)
+
+**Commitment:** on a frozen mixed set run through the daemon's own task loop under the model's configured envelope, repair-class landing ≥80% AND refuse-class landing ≥80%, each class with its own Wilson interval and provisional flag — never blended.
+
+**Protocol (pre-registered 2026-08-16, before the instrument):** fixture set codec-tasks-v2-mixed (10 `expect="patch"` + 10 `expect="refuse"`, both lenses in both classes); scoring per docs/superpowers/evidence/2026-08-16-g5-protocol.md §2; per-model, opt-in via `g5_probe`; advisory — the verdict is journaled and surfaced as a `/status` done-trust mark and does NOT affect verb enforcement.
+
+**Kill consequence:** a failing model's completion claims are marked untrusted in `/status`; enforcement wiring is a recorded future decision.
+
+---
