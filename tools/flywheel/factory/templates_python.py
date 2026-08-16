@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import random
 
+from tools.flywheel.factory import goal_phrasing
 from tools.flywheel.factory.task import DONE_INSTRUCTION, Task
 from tools.flywheel.factory.wordlists import (
     DICT_KEY_POOL,
@@ -67,11 +68,15 @@ def _family_wrong_comparison_operator(rng: random.Random) -> Task:
     )
     search = f"        if x {wrong_op} {holder}:"
     replace = f"        if x {correct_op} {holder}:"
-    goal = (
-        f"{target}'s {fn_name}() keeps the {wrong_word} {noun} instead of the {extreme_word} "
-        f"one -- {fn_name}({values}) returns {buggy_result} instead of {correct_result}. Fix "
-        f"the comparison in {fn_name}() in {target} so it keeps the {extreme_word} {noun}. "
-        f"{DONE_INSTRUCTION}"
+    goal = goal_phrasing.patch_skeletons(
+        rng,
+        target,
+        subject=f"{fn_name}()",
+        problem=f"keeps the {wrong_word} {noun} instead of the {extreme_word} one",
+        evidence=f"{fn_name}({values}) returns {buggy_result} instead of {correct_result}",
+        fix_target=f"the comparison in {fn_name}() in {target}",
+        fix_goal=f"it keeps the {extreme_word} {noun}",
+        instruction=DONE_INSTRUCTION,
     )
     summary = f"Fixed the comparison operator in {fn_name}() so it keeps the {extreme_word} {noun}."
     return Task("py_wrong_comparison_operator", "python", target, {target: contents}, goal, search, replace, summary)
@@ -107,11 +112,15 @@ def _family_off_by_one_index(rng: random.Random) -> Task:
     )
     search = f"    {last_name} = {param_name}[0]"
     replace = f"    {last_name} = {param_name}[-1]"
-    goal = (
-        f"{target}'s {fn_name}() returns the first {noun} reading twice instead of the first "
-        f"and last -- {fn_name}({values}) returns ({values[0]}, {values[0]}) instead of "
-        f"({values[0]}, {values[-1]}). Fix the last assignment in {fn_name}() in {target} so "
-        f"it takes the last {noun} reading. {DONE_INSTRUCTION}"
+    goal = goal_phrasing.patch_skeletons(
+        rng,
+        target,
+        subject=f"{fn_name}()",
+        problem=f"returns the first {noun} reading twice instead of the first and last",
+        evidence=f"{fn_name}({values}) returns ({values[0]}, {values[0]}) instead of ({values[0]}, {values[-1]})",
+        fix_target=f"the last assignment in {fn_name}() in {target}",
+        fix_goal=f"it takes the last {noun} reading",
+        instruction=DONE_INSTRUCTION,
     )
     summary = f"Fixed {last_name} in {fn_name}() to index from the end."
     return Task("py_off_by_one_index", "python", target, {target: contents}, goal, search, replace, summary)
@@ -141,11 +150,15 @@ def _family_off_by_one_range_bound(rng: random.Random) -> Task:
     )
     search = f"    for {loop_var} in range(1, {bound_name}):"
     replace = f"    for {loop_var} in range(1, {bound_name} + 1):"
-    goal = (
-        f"{fn_name}() in {target} is supposed to produce one {noun} marker per cycle from 1 "
-        f"through count inclusive, but the loop bound stops one short -- calling {fn_name}({n}) "
-        f"yields only {n - 1} markers and cycle {n} never appears. Widen the loop bound in "
-        f"{fn_name}() inside {target} so the final cycle is included. {DONE_INSTRUCTION}"
+    goal = goal_phrasing.patch_skeletons(
+        rng,
+        target,
+        subject=f"{fn_name}()",
+        problem="stops one short of producing a marker for every cycle from 1 through count",
+        evidence=f"{fn_name}({n}) yields only {n - 1} markers and cycle {n} never appears",
+        fix_target=f"the loop bound in {fn_name}() in {target}",
+        fix_goal="the final cycle is included",
+        instruction=DONE_INSTRUCTION,
     )
     summary = f"Widened the loop bound in {fn_name}() so the final cycle is included."
     return Task("py_off_by_one_range_bound", "python", target, {target: contents}, goal, search, replace, summary)
@@ -172,10 +185,15 @@ def _family_wrong_constant_multiplier(rng: random.Random) -> Task:
     )
     search = f"    return value * {wrong_factor}"
     replace = f"    return value * {correct_factor}"
-    goal = (
-        f"{target}'s {fn_name}() scales by the wrong calibration factor -- {fn_name}({base}) "
-        f"returns {buggy_result} instead of {correct_result}. Fix {fn_name}() in {target} so "
-        f"it multiplies by {correct_factor}. {DONE_INSTRUCTION}"
+    goal = goal_phrasing.patch_skeletons(
+        rng,
+        target,
+        subject=f"{fn_name}()",
+        problem="scales by the wrong calibration factor",
+        evidence=f"{fn_name}({base}) returns {buggy_result} instead of {correct_result}",
+        fix_target=f"{fn_name}() in {target}",
+        fix_goal=f"it multiplies by {correct_factor}",
+        instruction=DONE_INSTRUCTION,
     )
     summary = f"Fixed the calibration factor in {fn_name}() from {wrong_factor} to {correct_factor}."
     return Task("py_wrong_constant_multiplier", "python", target, {target: contents}, goal, search, replace, summary)
@@ -207,10 +225,15 @@ def _family_inverted_boolean(rng: random.Random) -> Task:
     )
     search = f"    if {noun_a} >= {threshold} {wrong_conn} {noun_b}_ready:"
     replace = f"    if {noun_a} >= {threshold} {correct_conn} {noun_b}_ready:"
-    goal = (
-        f"{target}'s {fn_name}() requires both conditions instead of either one (or vice "
-        f"versa) -- {fn_name}({a_val}, True) returns {buggy_result} instead of {correct_result}. "
-        f"Fix the condition in {fn_name}() in {target} so the connector is correct. {DONE_INSTRUCTION}"
+    goal = goal_phrasing.patch_skeletons(
+        rng,
+        target,
+        subject=f"{fn_name}()",
+        problem="requires both conditions instead of either one (or vice versa)",
+        evidence=f"{fn_name}({a_val}, True) returns {buggy_result} instead of {correct_result}",
+        fix_target=f"the condition in {fn_name}() in {target}",
+        fix_goal="the connector is correct",
+        instruction=DONE_INSTRUCTION,
     )
     summary = f"Fixed the boolean connector in {fn_name}() from '{wrong_conn}' to '{correct_conn}'."
     return Task("py_inverted_boolean", "python", target, {target: contents}, goal, search, replace, summary)
@@ -234,11 +257,15 @@ def _family_wrong_variable_reference(rng: random.Random) -> Task:
     )
     search = f"    return adjusted_{noun_a} + adjusted_{noun_a}"
     replace = f"    return adjusted_{noun_a} + adjusted_{noun_b}"
-    goal = (
-        f"{target}'s {fn_name}() adds the adjusted {noun_a} in twice instead of combining "
-        f"{noun_a} and {noun_b} -- {fn_name}({a_val}, {b_val}) returns {buggy_result} instead "
-        f"of {correct_result}. Fix the return in {fn_name}() in {target} so it adds "
-        f"adjusted_{noun_b} instead of repeating adjusted_{noun_a}. {DONE_INSTRUCTION}"
+    goal = goal_phrasing.patch_skeletons(
+        rng,
+        target,
+        subject=f"{fn_name}()",
+        problem=f"adds the adjusted {noun_a} in twice instead of combining {noun_a} and {noun_b}",
+        evidence=f"{fn_name}({a_val}, {b_val}) returns {buggy_result} instead of {correct_result}",
+        fix_target=f"the return in {fn_name}() in {target}",
+        fix_goal=f"it adds adjusted_{noun_b} instead of repeating adjusted_{noun_a}",
+        instruction=DONE_INSTRUCTION,
     )
     summary = f"Fixed {fn_name}() to add adjusted_{noun_b} instead of repeating adjusted_{noun_a}."
     return Task("py_wrong_variable_reference", "python", target, {target: contents}, goal, search, replace, summary)
@@ -267,11 +294,15 @@ def _family_wrong_fstring_field(rng: random.Random) -> Task:
     )
     search = buggy_line
     replace = fixed_line
-    goal = (
-        f"{target}'s {fn_name}() reports {noun_a} where {noun_b} should appear -- "
-        f"{fn_name}({val_a}, {val_b}) returns '{buggy_output}' instead of '{correct_output}'. "
-        f"Fix the f-string in {fn_name}() in {target} so it reports {noun_b}, not {noun_a}. "
-        f"{DONE_INSTRUCTION}"
+    goal = goal_phrasing.patch_skeletons(
+        rng,
+        target,
+        subject=f"{fn_name}()",
+        problem=f"reports {noun_a} where {noun_b} should appear",
+        evidence=f"{fn_name}({val_a}, {val_b}) returns '{buggy_output}' instead of '{correct_output}'",
+        fix_target=f"the f-string in {fn_name}() in {target}",
+        fix_goal=f"it reports {noun_b}, not {noun_a}",
+        instruction=DONE_INSTRUCTION,
     )
     summary = f"Fixed the f-string in {fn_name}() to report {noun_b} instead of repeating {noun_a}."
     return Task("py_wrong_fstring_field", "python", target, {target: contents}, goal, search, replace, summary)
@@ -300,10 +331,15 @@ def _family_wrong_dict_key(rng: random.Random) -> Task:
     )
     search = f'    return entry["{key_wrong}"]'
     replace = f'    return entry["{key_correct}"]'
-    goal = (
-        f'{target}\'s {fn_name}() reads the "{key_wrong}" entry instead of "{key_correct}" -- '
-        f"{fn_name}({entry_repr}) returns {val_wrong} instead of {val_correct}. Fix the dict "
-        f'lookup in {fn_name}() in {target} so it reads "{key_correct}". {DONE_INSTRUCTION}'
+    goal = goal_phrasing.patch_skeletons(
+        rng,
+        target,
+        subject=f"{fn_name}()",
+        problem=f'reads the "{key_wrong}" entry instead of "{key_correct}"',
+        evidence=f"{fn_name}({entry_repr}) returns {val_wrong} instead of {val_correct}",
+        fix_target=f"the dict lookup in {fn_name}() in {target}",
+        fix_goal=f'it reads "{key_correct}"',
+        instruction=DONE_INSTRUCTION,
     )
     summary = f'Fixed {fn_name}() to read the "{key_correct}" key instead of "{key_wrong}".'
     return Task("py_wrong_dict_key", "python", target, {target: contents}, goal, search, replace, summary)

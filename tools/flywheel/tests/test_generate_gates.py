@@ -19,6 +19,7 @@ import unittest
 from pathlib import Path
 
 from tools.flywheel.factory import contamination, templates
+from tools.flywheel.factory.wordlists import THEMES
 from tools.flywheel.tests.test_generate import REPO_ROOT, STUB_TOOL, run_generate
 
 
@@ -46,6 +47,42 @@ def _write_gate_toml(path: Path, name: str, goal: str, target: str = "unused.py"
         'contents = "x = 1\\n"\n'
     )
     path.write_text(toml_text, encoding="utf-8")
+    return path
+
+
+def _write_universal_python_target_collision_gate_toml(path: Path) -> Path:
+    """A gate engineered to collide with EVERY possible python-lens
+    candidate via `target_filename_match` alone -- a rule that compares
+    only the target filename, never the goal text, so it is completely
+    independent of goal-phrasing skeleton diversity (unlike planting a
+    single goal string, which -- now that every family offers >= 4
+    genuinely different skeletons -- no longer collides with every
+    redraw; that used to be exactly how this abort path was pinned,
+    before the skeleton-diversity fix made single-goal planting an
+    unreliable way to force a collision). Every python family draws its
+    target as `f"{stem}.py"` from `wordlists.THEMES`'s `file_stems`
+    (`_theme_and_target`, `templates_python.py`) -- a small, fully
+    enumerable set (40 filenames). One fixture per filename guarantees
+    every draw, regardless of family, identifiers, or skeleton, matches
+    some fixture's target exactly."""
+    all_python_targets = sorted({f"{stem}.py" for theme in THEMES for stem in theme.file_stems})
+    lines = [f'set = {_toml_string("universal-target-collision")}', ""]
+    for i, target in enumerate(all_python_targets):
+        lines.extend(
+            [
+                "[[fixture]]",
+                f"name = {_toml_string(f'planted-{i:03d}')}",
+                'lens = "python"',
+                f"target = {_toml_string(target)}",
+                f"goal = {_toml_string('irrelevant -- this fixture collides on target filename alone')}",
+                "",
+                "[[fixture.file]]",
+                f"path = {_toml_string(target)}",
+                'contents = "x = 1\\n"',
+                "",
+            ]
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
 
 
@@ -143,27 +180,25 @@ class CollidingCandidateIsDroppedAndReplacedTest(unittest.TestCase):
 
 class AbortsWhenGateOverlapIsTooDenseTest(unittest.TestCase):
     """Requirement 2's termination guard, exercised through the real
-    CLI: a gate goal that stays a near-duplicate of nearly everything a
-    slot's family can draw (seed 7 against `PYTHON_TEMPLATES[0]`'s own
-    first-draw goal -- confirmed structurally self-similar enough that
-    dozens of redraws never clear the 0.8 Jaccard threshold) must abort
-    nonzero with the named error's message, and must leave no corpus or
-    report file behind (same "never a partial result" contract every
-    other factory-bug abort in generate.py already has)."""
+    CLI: a gate engineered to collide with EVERY possible python-lens
+    candidate via `target_filename_match` (see
+    `_write_universal_python_target_collision_gate_toml` -- goal-
+    independent by construction, unlike planting a single colliding
+    goal, which the goal-phrasing skeleton-diversity fix makes an
+    unreliable way to force a permanent collision) must abort nonzero
+    with the named error's message, and must leave no corpus or report
+    file behind (same "never a partial result" contract every other
+    factory-bug abort in generate.py already has)."""
 
     def test_cli_aborts_nonzero_and_leaves_no_output_when_a_slot_cannot_clear_the_gate(self):
-        seed = 7
-        _, fn = templates.PYTHON_TEMPLATES[0]
-        first_draw = fn(random.Random(seed))
-
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
-            gate_path = _write_gate_toml(tmp / "gate.toml", "planted-collides-with-everything", first_draw.goal)
+            gate_path = _write_universal_python_target_collision_gate_toml(tmp / "gate.toml")
             out, report = tmp / "out.jsonl", tmp / "report.json"
 
             result = run_generate(
                 [
-                    "--seed", str(seed), "--count", "1", "--gate", str(gate_path),
+                    "--seed", "7", "--count", "1", "--gate", str(gate_path),
                     "--tool", str(STUB_TOOL), "--out", str(out), "--report", str(report),
                 ]
             )

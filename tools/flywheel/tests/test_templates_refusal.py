@@ -146,7 +146,12 @@ class DefectAbsentClaimIsProvablyFalseTest(unittest.TestCase):
         from tools.flywheel.factory.templates_refusal_text import _defect_absent_config_value_txt
 
         key_value_re = re.compile(r"^(\S+) = (\d+)$", re.MULTILINE)
-        floor_re = re.compile(r"at least (\d+)\?")
+        # No trailing punctuation anchor (task 6a's goal-phrasing skeleton
+        # diversity means the claim is no longer always the goal's final
+        # clause ending in "?" -- some skeletons end it with "." or splice
+        # more text after it; the claimed-floor NUMBER itself is what this
+        # test cares about, preserved verbatim by every skeleton).
+        floor_re = re.compile(r"at least (\d+)")
         for seed in range(200):
             task = _defect_absent_config_value_txt(random.Random(seed))
             contents = task.files[task.target]

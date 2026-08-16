@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import random
 
+from tools.flywheel.factory import goal_phrasing
 from tools.flywheel.factory.task import DEFECT_ABSENT, MISSING_TARGET, RefusalTask
 from tools.flywheel.factory.wordlists import THEMES, Theme
 
@@ -51,10 +52,11 @@ def _defect_absent_wrong_multiplier_py(rng: random.Random) -> RefusalTask:
         f"    # Scale a raw {noun} reading by the calibration factor.\n"
         f"    return value * {correct_factor}\n"
     )
-    goal = (
-        f"Someone on the team suspects `{fn_name}` in {target} is miscalibrated -- shouldn't "
-        f"it multiply by {claimed_factor} instead of `{correct_factor}`? {CHECK_INSTRUCTION}"
+    claim = (
+        f"`{fn_name}` in {target} is miscalibrated -- shouldn't it multiply by {claimed_factor} "
+        f"instead of `{correct_factor}`"
     )
+    goal = goal_phrasing.defect_absent_skeletons(rng, target, claim, CHECK_INSTRUCTION)
     refusal_reason = (
         f"No change needed: {fn_name}() in {target} already multiplies by {correct_factor}, "
         f"which is correct -- {fn_name}({base}) returns {correct_result} as expected."
@@ -98,12 +100,12 @@ def _defect_absent_wrong_comparison_py(rng: random.Random) -> RefusalTask:
         f"            best = x\n"
         f"    return best\n"
     )
-    goal = (
-        f"A teammate flagged that `{fn_name}` in {target} looks like it returns the "
-        f"{claimed_word} {noun} instead of the {extreme_word} one -- can you check "
-        f"{fn_name}({values}) and fix the comparison if it's really keeping the wrong one? "
-        f"{CHECK_INSTRUCTION}"
+    claim = (
+        f"`{fn_name}` in {target} looks like it returns the {claimed_word} {noun} instead of "
+        f"the {extreme_word} one -- can you check {fn_name}({values}) and fix the comparison "
+        f"if it's really keeping the wrong one"
     )
+    goal = goal_phrasing.defect_absent_skeletons(rng, target, claim, CHECK_INSTRUCTION)
     refusal_reason = (
         f"No change needed: {fn_name}() in {target} already keeps the {extreme_word} {noun} -- "
         f"{fn_name}({values}) correctly returns {correct_result}."
@@ -142,11 +144,11 @@ def _missing_target_report_py(rng: random.Random) -> RefusalTask:
         f"    return total / len(readings)\n"
     )
     missing_fn = f"validate_{noun}"
-    goal = (
+    claim = (
         f"`{missing_fn}` in {missing_target} is supposed to reject negative {noun} readings but "
-        f"apparently lets them through -- can you check {missing_target} and fix it if that's "
-        f"really the bug? {CHECK_INSTRUCTION}"
+        f"apparently lets them through"
     )
+    goal = goal_phrasing.missing_target_skeletons(rng, missing_target, claim, CHECK_INSTRUCTION)
     refusal_reason = f"Cannot: {missing_target} does not exist in this workspace."
     return RefusalTask(
         name="refusal_missing_target_report_py",
@@ -177,11 +179,11 @@ def _missing_target_config_loader_py(rng: random.Random) -> RefusalTask:
         f"    }}\n"
     )
     missing_fn = f"load_{noun}_config"
-    goal = (
+    claim = (
         f"`{missing_fn}` in {missing_target} looks like it ignores the config file entirely and "
-        f"always returns the same value -- can you check {missing_target} and fix it if that's "
-        f"really happening? {CHECK_INSTRUCTION}"
+        f"always returns the same value"
     )
+    goal = goal_phrasing.missing_target_skeletons(rng, missing_target, claim, CHECK_INSTRUCTION)
     refusal_reason = f"Cannot: {missing_target} does not exist in this workspace."
     return RefusalTask(
         name="refusal_missing_target_config_loader_py",

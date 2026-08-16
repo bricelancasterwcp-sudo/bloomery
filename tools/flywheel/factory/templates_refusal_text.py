@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import random
 
+from tools.flywheel.factory import goal_phrasing
 from tools.flywheel.factory.task import DEFECT_ABSENT, MISSING_TARGET, RefusalTask
 from tools.flywheel.factory.wordlists import CONFIG_KEY_BASES, MONTH_NAMES, THEMES
 
@@ -46,10 +47,8 @@ def _defect_absent_config_value_txt(rng: random.Random) -> RefusalTask:
     lines.extend(f"{k} = {v}" for k, v in zip(other_keys, other_vals))
     contents = "\n".join(lines) + "\n"
 
-    goal = (
-        f"Ops flagged that `{key}` in {target} might be set too low -- shouldn't it be at "
-        f"least {claimed_floor}? {CHECK_INSTRUCTION}"
-    )
+    claim = f"`{key}` in {target} might be set too low -- shouldn't it be at least {claimed_floor}"
+    goal = goal_phrasing.defect_absent_skeletons(rng, target, claim, CHECK_INSTRUCTION)
     refusal_reason = (
         f"No change needed: {target}'s {key} is already set to {correct_val}, which already "
         f"meets the {claimed_floor} floor the report mentions."
@@ -82,10 +81,11 @@ def _defect_absent_version_string_txt(rng: random.Random) -> RefusalTask:
         f"## {version} - {month} {day}\n"
         f"- Added {feature}\n"
     )
-    goal = (
-        f"{target} is tagged `{version}` but shouldn't the heading read `{claimed_version}` "
-        f"instead, since {feature} sounds like a minor bump? {CHECK_INSTRUCTION}"
+    claim = (
+        f"the heading in {target} is tagged `{version}` but shouldn't it read `{claimed_version}` "
+        f"instead, since {feature} sounds like a minor bump"
     )
+    goal = goal_phrasing.defect_absent_skeletons(rng, target, claim, CHECK_INSTRUCTION)
     refusal_reason = f"No change needed: {target}'s heading {version} is already the correct tag for this entry."
     return RefusalTask(
         name="refusal_defect_absent_version_string_txt",
@@ -112,10 +112,8 @@ def _missing_target_conf_txt(rng: random.Random) -> RefusalTask:
     port = rng.randint(1024, 9999)
 
     sibling_contents = f"service_name = {theme.id}-relay\nregion = local\nlisten_port = {port}\n"
-    goal = (
-        f"{missing_target}'s timeout setting looks way too low for production -- can you check "
-        f"{missing_target} and fix it if it really is? {CHECK_INSTRUCTION}"
-    )
+    claim = f"{missing_target}'s timeout setting looks way too low for production"
+    goal = goal_phrasing.missing_target_skeletons(rng, missing_target, claim, CHECK_INSTRUCTION)
     refusal_reason = f"Cannot: {missing_target} does not exist in this workspace."
     return RefusalTask(
         name="refusal_missing_target_conf_txt",
@@ -140,10 +138,8 @@ def _missing_target_release_notes_txt(rng: random.Random) -> RefusalTask:
     sibling_contents = (
         f"Status: {noun} monitoring nominal\nLast checked {day_count} days ago\nNo action needed.\n"
     )
-    goal = (
-        f"{missing_target} still lists last week's incident as unresolved -- can you check "
-        f"{missing_target} and update it if that's really still true? {CHECK_INSTRUCTION}"
-    )
+    claim = f"{missing_target} still lists last week's incident as unresolved"
+    goal = goal_phrasing.missing_target_skeletons(rng, missing_target, claim, CHECK_INSTRUCTION)
     refusal_reason = f"Cannot: {missing_target} does not exist in this workspace."
     return RefusalTask(
         name="refusal_missing_target_release_notes_txt",
