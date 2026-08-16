@@ -11,6 +11,10 @@ pub mod contract;
 pub mod fake;
 #[cfg(feature = "llama")]
 pub mod llama;
+/// The envelope-v3 stop-sequence scan (protocol §11), split out so it can be
+/// unit-tested GPU-free even though its only caller (`llama::generate_from`)
+/// is compiled solely under the `llama` feature — see its own doc comment.
+pub(crate) mod stop_scan;
 
 /// The substring every KV-image rejection carries in its
 /// [`SubstrateError::State`] message.

@@ -519,36 +519,35 @@ fn generate_from(
 
         // Envelope-v3 stop sequence (protocol §11, Amendment 3; the law-3
         // ruling: a stop string is *termination, not constraint* — nothing
-        // above this point touched the model's distribution). Matched on
-        // the accumulated bytes decoded STRICTLY (`str::from_utf8`, not
-        // `_lossy`): a token whose bytes leave the tail of `bytes`
-        // mid-multibyte-character makes this `Err`, which is read as "not
-        // yet, wait for the next token's continuation bytes" rather than
-        // "no match" — never a false miss AND never a false match against a
-        // `U+FFFD` replacement char that isn't actually in the model's
-        // output. Because the check only ever runs on a buffer that just
-        // decoded successfully, the byte offset `find` returns is exact
-        // against `bytes` itself, so truncating at it is exact too.
+        // above this point touched the model's distribution). `stop_hit`
+        // scans the longest valid UTF-8 PREFIX of `bytes`, not the whole
+        // buffer — `bytes` is not guaranteed to be valid UTF-8 as a whole
+        // mid-generation (a multi-byte character may be mid-flight at the
+        // tail, or a byte-fallback token may append a genuinely invalid
+        // sequence that is not merely incomplete). Requiring the whole
+        // buffer to decode before scanning at all — an earlier version of
+        // this loop did exactly that — has two costs `stop_hit` avoids: see
+        // its own doc comment for the trailing-incomplete case (no
+        // detection lag) and the genuinely-invalid case (a stop tag before
+        // the bad byte is still found; the check is never silently
+        // disabled for the rest of the turn the way a whole-buffer
+        // `str::from_utf8(&bytes).ok()` skip would be).
         //
-        // The tag is INCLUDED (truncate at `idx + stop.len()`, not `idx`),
-        // and `completion_tokens` already counted this token in full above
-        // — an honest count of what was actually sampled, never adjusted
-        // down to match the shorter returned text. Note the boundary this
-        // leaves: the KV cache above already absorbed this whole token
-        // (`batch.add`/`ctx.decode` just ran with the FULL token, not the
-        // truncated text), so if a token's bytes carry content past the
-        // stop tag, the model's own context has "seen" that trailing
-        // content even though the caller never does — the same behavior
-        // every stop-sequence implementation in a token-based serving stack
-        // has, and not reachable without a token straddling the tag in the
-        // shipped `codec-tasks-v1` fixtures (protocol §11's recorded
-        // limit).
+        // The tag is INCLUDED (`stop_hit` already returns one past the
+        // match), and `completion_tokens` already counted this token in
+        // full above — an honest count of what was actually sampled, never
+        // adjusted down to match the shorter returned text. Note the
+        // boundary this leaves: the KV cache above already absorbed this
+        // whole token (`batch.add`/`ctx.decode` just ran with the FULL
+        // token, not the truncated text), so if a token's bytes carry
+        // content past the stop tag, the model's own context has "seen"
+        // that trailing content even though the caller never does — the
+        // same behavior every stop-sequence implementation in a token-based
+        // serving stack has.
         if let Some(stop) = stop {
-            if let Ok(text_so_far) = std::str::from_utf8(&bytes) {
-                if let Some(idx) = text_so_far.find(stop) {
-                    bytes.truncate(idx + stop.len());
-                    break;
-                }
+            if let Some(cut) = crate::stop_scan::stop_hit(&bytes, stop) {
+                bytes.truncate(cut);
+                break;
             }
         }
     }
