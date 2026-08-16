@@ -241,7 +241,7 @@ fn agent_task_policy_resolves_through_the_agents_model() {
 
     assert_eq!(
         p.agent_task_policy(&a.id),
-        Some((PatchCodec::WholeFile, true))
+        Some((PatchCodec::WholeFile, true, false))
     );
 }
 
@@ -250,6 +250,25 @@ fn agent_task_policy_is_none_for_an_unknown_agent() {
     let dir = fresh_dir("bloomery-codec-gate-agentpolicy-unknown");
     let (p, _) = pager_with_model(&dir);
     assert_eq!(p.agent_task_policy("nope"), None);
+}
+
+/// Protocol §10 (Amendment 2): `agent_task_policy`'s third field resolves a
+/// preseeded model's `think_preseed = true` through the same one-source
+/// lookup as `patch_codec`/`mutating_verbs` — set via `Pager::set_think_preseed`.
+#[test]
+fn agent_task_policy_resolves_think_preseed_through_the_agents_model() {
+    let dir = fresh_dir("bloomery-codec-gate-agentpolicy-preseed");
+    let (mut p, _) = pager_with_model(&dir);
+    p.attach_profile("qwen", Profile::from_json(WF_WINS_PROFILE).unwrap(), false)
+        .unwrap();
+    p.set_codec_gate("qwen", keep_gate()).unwrap();
+    p.set_think_preseed("qwen", true).unwrap();
+    let a = p.create_agent("qwen", 50, None, 10_000).unwrap();
+
+    assert_eq!(
+        p.agent_task_policy(&a.id),
+        Some((PatchCodec::WholeFile, true, true))
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -820,3 +820,101 @@ fn a_stored_keep_gate_lets_the_patch_turn_execute_for_real() {
 
     handle.shutdown();
 }
+
+// ---------------------------------------------------------------------------
+// Protocol §10, Amendment 2: envelope-v2 (think-preseeded) tasks over HTTP
+// ---------------------------------------------------------------------------
+
+/// Test (d): a model configured `think_preseed = true`
+/// (`Pager::set_think_preseed`) gets its HTTP-created tasks rendering with
+/// the literal pre-seed appended — resolved through the same
+/// `Pager::agent_task_policy` one-source triple `patch_codec`/
+/// `mutating_verbs`/`think_preseed` already flows through `create_task`
+/// (closing the same "one policy source" rule test (a) proved for
+/// `patch_codec`, now for the third field). Observed the same way test (a)
+/// does: `FakeSubstrate::ctx_history` holds exactly the one rendered prompt
+/// the model was sent, since this task's only scripted turn is `done`.
+#[test]
+fn a_think_preseed_model_renders_its_task_prompt_with_the_preseed_literal() {
+    let (port, handle, sandbox, pager) = serve_codec_gate_fixture(vec![done_reply("ok")]);
+    let addr = format!("127.0.0.1:{port}");
+
+    let agent_id = {
+        let mut p = pager.lock().unwrap();
+        p.set_think_preseed("qwen", true).unwrap();
+        p.create_agent("qwen", 100, None, 1_000_000).unwrap().id
+    };
+
+    let (st, body) = http(
+        &addr,
+        "POST",
+        &format!("/agents/{agent_id}/task"),
+        &task_create_request(&sandbox, "say done"),
+    );
+    assert_eq!(st, 202, "{body}");
+    let task_id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let last_body = wait_for_terminal(&addr, &agent_id, &task_id);
+    let v: serde_json::Value = serde_json::from_str(&last_body).unwrap();
+    assert_eq!(v["status"], "Done", "{last_body}");
+
+    let p = pager.lock().unwrap();
+    let history = p
+        .substrate()
+        .ctx_history(1)
+        .expect("context 1 is still resident after the task's only step");
+    assert!(
+        history.ends_with("<think>\n\n</think>\n\n"),
+        "expected the rendered prompt to end with the think-preseed literal, \
+         got: {history}"
+    );
+    drop(p);
+
+    handle.shutdown();
+}
+
+/// The counterpart: a model with no `think_preseed` configured (the
+/// default, `false`) never carries the literal — `create_task`'s policy
+/// triple resolves the flag off just as reliably as it resolves it on.
+#[test]
+fn a_non_preseeded_model_never_renders_the_preseed_literal_over_http() {
+    let (port, handle, sandbox, pager) = serve_codec_gate_fixture(vec![done_reply("ok")]);
+    let addr = format!("127.0.0.1:{port}");
+
+    let agent_id = {
+        let mut p = pager.lock().unwrap();
+        p.create_agent("qwen", 100, None, 1_000_000).unwrap().id
+    };
+
+    let (st, body) = http(
+        &addr,
+        "POST",
+        &format!("/agents/{agent_id}/task"),
+        &task_create_request(&sandbox, "say done"),
+    );
+    assert_eq!(st, 202, "{body}");
+    let task_id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let last_body = wait_for_terminal(&addr, &agent_id, &task_id);
+    let v: serde_json::Value = serde_json::from_str(&last_body).unwrap();
+    assert_eq!(v["status"], "Done", "{last_body}");
+
+    let p = pager.lock().unwrap();
+    let history = p
+        .substrate()
+        .ctx_history(1)
+        .expect("context 1 is still resident after the task's only step");
+    assert!(
+        !history.contains("<think>\n\n</think>\n\n"),
+        "a non-preseeded model must never carry the literal, got: {history}"
+    );
+    drop(p);
+
+    handle.shutdown();
+}

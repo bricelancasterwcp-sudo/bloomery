@@ -180,6 +180,13 @@ fn run(config: Config, journal: Journal) -> ! {
         pager
             .set_model_tuning(name, spec.n_gpu_layers(), weights_vram_bytes)
             .unwrap_or_else(|e| fail(format!("model {name}: {e}")));
+        // Amendment 2 (docs/superpowers/evidence/2026-08-15-g4-protocol.md
+        // §10): an explicit per-model operator choice, wired the same way as
+        // every other tuning field above — `main.rs` is the one place a
+        // config value takes effect.
+        pager
+            .set_think_preseed(name, spec.think_preseed())
+            .unwrap_or_else(|e| fail(format!("model {name}: {e}")));
     }
 
     // Opened before the socket binds, so no request can arrive in the gap
