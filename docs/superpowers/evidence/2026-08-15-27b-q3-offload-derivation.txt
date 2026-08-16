@@ -1,0 +1,42 @@
+# qwen3.8-27b Q3 (batiai/qwen3.8-27b:q3) partial-offload derivation — 2026-08-15 eve
+#
+# Subject identity: model × quant. This is a DIFFERENT subject from the
+# Q4 blob derived earlier today (2026-08-15-27b-offload-derivation.txt);
+# it gets its own ladder rung. Blob sha256-9af7a683… = 13,301,443,456 B
+# (12,685 MiB). This GGUF exports 65 offload units (the Q4 blob: 66).
+# One measured load on the enthusiast-16gb tier, bloomery @ ea5cfe9
+# (master, PR #6 merged). Provisional declared 11264 MiB admitted the
+# derivation boot. Preflight: "offloaded 55/65 layers" matches config.
+#
+# ── llama.cpp log excerpt (verbatim) ──
+# load_tensors: offloaded 55/65 layers to GPU
+# load_tensors:   CPU_Mapped model buffer size =  2314.34 MiB
+# load_tensors:      Vulkan0 model buffer size = 10360.42 MiB
+# llama_kv_cache:        CPU KV buffer size =    36.00 MiB
+# llama_kv_cache:    Vulkan0 KV buffer size =   252.00 MiB
+# sched_reserve:    Vulkan0 compute buffer size =   505.00 MiB
+# sched_reserve: Vulkan_Host compute buffer size =    34.63 MiB
+#
+# nvidia-smi: 1,774 MiB before load → 12,186 MiB after (context freed)
+# = 10,412 MiB delta ≈ the 10,360.42 MiB Vulkan0 model buffer. ✓
+#
+# ── Measured facts ──
+# * 55/65 units → 10,360.42 MiB VRAM ≈ 188.4 MiB per GPU unit.
+# * Compute buffer 505.00 MiB — fits the 640 MiB ctx_overhead reservation
+#   chosen for the 27B family (same as the Q4 derivation).
+# * Generation: 128 tokens in 8.26 s ≈ 15.5 tok/s at 55/65 (vs 5.3 tok/s
+#   for the Q4 blob at 30/66) — ~3× faster.
+# * Thinks under the raw lens (first reply began "<think>"), as Q4.
+# * Full offload does NOT clear the accounting budget on this box
+#   (12,685 weights + 640 ctx vs ~13,000 avail after the 1 GiB margin);
+#   ollama's CUDA runner ran it fully-offloaded at 12,834 MiB total,
+#   so physical fit is borderline; partial is the honest configuration.
+#
+# ── Candidate run configs (window arithmetic at a ~14,529 MiB-free boot,
+#    budget = free − 1024; pager kv charge 0.254 MiB/token — its known
+#    ~4× overcount for this hybrid arch is what makes windows this small) ──
+# n_gpu_layers=55: declared 10880 → window ≈  7.8k tokens, ~15.5 tok/s
+# n_gpu_layers=50: declared  9890 → window ≈ 11.7k tokens, est ~12-13 tok/s
+# n_gpu_layers=45: declared  8900 → window ≈ 15.6k tokens, est ~10-11 tok/s
+# Probe projection at ~12-15 tok/s: realistic ~4-7 h, worst ~11 h
+# (20 fixtures × 30k-token budget cap). OS-detach either way.
