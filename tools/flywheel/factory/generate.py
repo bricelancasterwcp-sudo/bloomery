@@ -1,0 +1,245 @@
+"""The corpus generator (design spec §3, brief rules 3-6).
+
+CLI: ``python3 -m tools.flywheel.factory.generate --seed N --count 1000
+--tool <path to flywheel-tool> --out corpus.jsonl --report
+fingerprint.json``
+
+Pipeline, all driven by ONE `random.Random(seed)` instance (rule 3 —
+determinism depends on a single deterministic sequence of draws):
+
+1. Generate `count` candidate tasks by cycling template families in a
+   fixed 3:2 python:plaintext pattern (design spec §3's ~600/~400 split
+   at count=1000), each family drawing from `rng`. Every candidate is
+   structurally validated immediately (rule 2) — a violation is a
+   factory bug and aborts the run.
+2. Dedup on normalized (goal, target_contents) (rule 5); drops counted.
+3. Every surviving task is verified through the real `flywheel-tool
+   trajectory` subprocess (design spec §2/§3 — "training artifacts run
+   through the serving code"), kept alive as ONE long-lived process for
+   the whole run (Task 1's report). `landed:false` ABORTS the entire run
+   with the failing task printed to stderr — never dropped silently
+   (rule 4). Nothing is written to `--out`/`--report` on abort.
+4. A deterministic 5% validation split is drawn from the SAME `rng`,
+   continuing its stream after task generation (rule 6).
+5. corpus.jsonl (3 pair-rows per surviving task, in read/patch/done
+   order) and the fingerprint JSON are written together at the end.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import random
+import sys
+from pathlib import Path
+
+from tools.flywheel.factory import templates
+from tools.flywheel.factory.contamination import normalize
+from tools.flywheel.factory.task import Task
+from tools.flywheel.factory.toolclient import ToolClient
+
+ENVELOPE = "v3"
+PATCH_CODEC = "search_replace"
+VALIDATION_SPLIT_FRACTION = 0.05
+
+# Fixed 3:2 python:plaintext cycle (design spec §3: ~600/~400 of ~1000).
+# NOT rng-derived -- which family a given slot uses is a pure function of
+# its position, so determinism (rule 3) never depends on draw order here;
+# only each family's *content* consumes rng.
+_FAMILY_PATTERN: tuple[str, ...] = ("python", "python", "python", "plaintext", "plaintext")
+
+
+def _family_functions(count: int) -> list:
+    """The ordered list of template functions the run will call, one per
+    task slot, cycling each lens's own families in their sorted order."""
+    python_i = 0
+    plaintext_i = 0
+    fns = []
+    for i in range(count):
+        lens = _FAMILY_PATTERN[i % len(_FAMILY_PATTERN)]
+        if lens == "python":
+            _, fn = templates.PYTHON_TEMPLATES[python_i % len(templates.PYTHON_TEMPLATES)]
+            python_i += 1
+        else:
+            _, fn = templates.TEXT_TEMPLATES[plaintext_i % len(templates.TEXT_TEMPLATES)]
+            plaintext_i += 1
+        fns.append(fn)
+    return fns
+
+
+def fail(message: str) -> None:
+    """A factory bug: printed to stderr, run aborted nonzero. Called
+    before any output file is opened, so a failed run leaves no
+    corpus/report behind — never a silently-dropped or partial result
+    (rule 4)."""
+    print(f"flywheel factory: FATAL: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def generate_candidate_tasks(rng: random.Random, count: int) -> list[Task]:
+    """Calls each slot's template family in order, validating every
+    result immediately (rule 2). A structurally invalid task is always a
+    factory bug, never dropped silently."""
+    tasks = []
+    for fn in _family_functions(count):
+        task = fn(rng)
+        violations = templates.validate_task(task)
+        if violations:
+            fail(f"template {task.name!r} produced a structurally invalid task: {violations}\ngoal: {task.goal}")
+        tasks.append(task)
+    return tasks
+
+
+def dedup_tasks(tasks: list[Task]) -> tuple[list[Task], int]:
+    """Rule 5: normalized (goal, target_contents) uniqueness, first
+    occurrence wins, input order preserved. `seen` is a `set` used only
+    for O(1) membership testing (never iterated), so this stays
+    deterministic despite Python's randomized string hashing."""
+    seen: set[tuple[str, str]] = set()
+    unique: list[Task] = []
+    dropped = 0
+    for task in tasks:
+        target_contents = task.files[task.target]
+        key = (normalize(task.goal), normalize(target_contents))
+        if key in seen:
+            dropped += 1
+            continue
+        seen.add(key)
+        unique.append(task)
+    return unique, dropped
+
+
+def _build_trajectory_request(task: Task) -> dict:
+    target_contents = task.files[task.target]
+    return {
+        "cmd": "trajectory",
+        "goal": task.goal,
+        "patch_codec": PATCH_CODEC,
+        "envelope": ENVELOPE,
+        "target": task.target,
+        "target_contents": target_contents,
+        "search": task.search,
+        "replace": task.replace,
+        "summary": task.summary,
+    }
+
+
+def _verify_and_build_rows(assigned: list[tuple[str, Task]], tool_path: Path) -> tuple[list[dict], int]:
+    """Rule 4: every task goes through flywheel-tool `trajectory`; a
+    `landed:false` response ABORTS generation with the task printed. Uses
+    ONE long-lived subprocess for the whole run (Task 1's report)."""
+    rows: list[dict] = []
+    total_pairs = 0
+    with ToolClient(tool_path) as client:
+        for task_id, task in assigned:
+            request = _build_trajectory_request(task)
+            response = client.trajectory(request)
+
+            if "error" in response:
+                fail(f"flywheel-tool error for task {task_id} ({task.name}): {response['error']}\ngoal: {task.goal}")
+
+            if not response.get("landed", False):
+                fail(
+                    f"task {task_id} ({task.name}) did not land -- reference patch failed to "
+                    f"apply through the real tool. This is always a factory bug, never dropped "
+                    f"silently.\n"
+                    f"goal: {task.goal}\n"
+                    f"target: {task.target}\n"
+                    f"search: {task.search!r}\n"
+                    f"replace: {task.replace!r}\n"
+                    f"landing_detail: {response.get('landing_detail')}"
+                )
+
+            pairs = response["pairs"]
+            if len(pairs) != 3:
+                fail(f"task {task_id} ({task.name}) landed but returned {len(pairs)} pairs, expected 3")
+
+            target_contents = task.files[task.target]
+            for pair_name, pair in zip(("read", "patch", "done"), pairs):
+                rows.append(
+                    {
+                        "prompt": pair["prompt"],
+                        "completion": pair["completion"],
+                        "meta": {
+                            "task_id": task_id,
+                            "template": task.name,
+                            "lens": task.lens,
+                            "pair": pair_name,
+                            "goal": task.goal,
+                            "target": task.target,
+                            "target_contents": target_contents,
+                            "search": task.search,
+                        },
+                    }
+                )
+                total_pairs += 1
+    return rows, total_pairs
+
+
+def _validation_split(rng: random.Random, sorted_task_ids: list[str]) -> list[str]:
+    """Rule 6: 5% of task_ids, deterministic from seed. Draws from the
+    SAME rng that generated the tasks (continuing its stream, not a fresh
+    one), over a sorted LIST (never a `set`) so the draw is reproducible."""
+    val_count = round(len(sorted_task_ids) * VALIDATION_SPLIT_FRACTION)
+    if val_count <= 0:
+        return []
+    return sorted(rng.sample(sorted_task_ids, val_count))
+
+
+def parse_args(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Generate the flywheel training corpus (design spec §3).")
+    parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument("--count", type=int, required=True)
+    parser.add_argument("--tool", type=Path, required=True, help="Path to the flywheel-tool binary (or a stub).")
+    parser.add_argument("--out", type=Path, required=True, help="Output corpus.jsonl path.")
+    parser.add_argument("--report", type=Path, required=True, help="Output fingerprint JSON path.")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+
+    rng = random.Random(args.seed)
+    candidate_tasks = generate_candidate_tasks(rng, args.count)
+    unique_tasks, dropped = dedup_tasks(candidate_tasks)
+
+    assigned = [(f"s{args.seed}-{i:06d}", task) for i, task in enumerate(unique_tasks)]
+
+    rows, total_pairs = _verify_and_build_rows(assigned, args.tool)
+
+    sorted_ids = sorted(task_id for task_id, _task in assigned)
+    val_split_ids = _validation_split(rng, sorted_ids)
+
+    with args.out.open("w", encoding="utf-8", newline="\n") as f:
+        for row in rows:
+            f.write(json.dumps(row, sort_keys=True) + "\n")
+    corpus_sha256 = hashlib.sha256(args.out.read_bytes()).hexdigest()
+
+    tasks_by_template: dict[str, int] = {}
+    tasks_by_lens: dict[str, int] = {}
+    for _task_id, task in assigned:
+        tasks_by_template[task.name] = tasks_by_template.get(task.name, 0) + 1
+        tasks_by_lens[task.lens] = tasks_by_lens.get(task.lens, 0) + 1
+
+    fingerprint = {
+        "seed": args.seed,
+        "tasks_by_template": dict(sorted(tasks_by_template.items())),
+        "tasks_by_lens": dict(sorted(tasks_by_lens.items())),
+        "pairs": total_pairs,
+        "dedup_dropped": dropped,
+        "corpus_sha256": corpus_sha256,
+        "val_split_ids": val_split_ids,
+    }
+    args.report.write_text(json.dumps(fingerprint, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    print(
+        f"flywheel factory: wrote {len(assigned)} task(s) / {total_pairs} pair(s) to {args.out} "
+        f"({dropped} dedup drop(s)); fingerprint at {args.report}",
+        file=sys.stderr,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
