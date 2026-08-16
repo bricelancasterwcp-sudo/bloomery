@@ -161,3 +161,25 @@ GPU-free (`cargo test --workspace`), the P4 habits:
 3. Derive the 27B's declared numbers (one measured load, committed).
 4. Run **qwen3.8:27b** through the gate — second data point, its own
    evidence doc.
+
+## 10. Addendum (2026-08-16, Brice-approved in conversation): declared KV-per-token override
+
+The pager's GGUF-derived `kv_per_token` overcounts hybrid-DeltaNet
+architectures ~4× (measured: qwen3.8-27b real KV 576 MiB at a
+9,034-token window ≈ 0.064 MiB/token vs the charged 0.254 — recorded in
+the Q3 derivation and both Q3 evidence docs). The same declared-value
+pattern as §3 closes it:
+
+- Per-model config `kv_per_token_bytes = N` (bytes). Present → it IS the
+  KV charge everywhere `kv_per_token` is read for this model (window
+  law and reservation — one source, both places, the §3 discipline).
+  Absent → the GGUF-derived value, unchanged.
+- **Declared too small is the OOM direction** (window law grants tokens
+  whose real KV exceeds VRAM). The value is measured once from
+  llama.cpp's own `KV buffer size` log lines at a known window
+  (§5-style derivation, committed), declared WITH HEADROOM ABOVE the
+  measured per-token figure, and the docs say so. No clamp against the
+  GGUF value — a declared value larger than GGUF is allowed (extra
+  conservative), smaller is the point.
+- Refusal arithmetic and `/status` must not present the declared number
+  as measured (the §3 naming rule applies).
