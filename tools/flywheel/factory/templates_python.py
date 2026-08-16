@@ -21,6 +21,7 @@ from tools.flywheel.factory.task import DONE_INSTRUCTION, Task
 from tools.flywheel.factory.wordlists import (
     DICT_KEY_POOL,
     FLAG_NAMES,
+    INDEX_VAR_NAMES,
     THEMES,
     VALUE_HOLDER_NAMES,
     Theme,
@@ -77,45 +78,69 @@ def _family_wrong_comparison_operator(rng: random.Random) -> Task:
 
 
 def _family_off_by_one_index(rng: random.Random) -> Task:
+    """The defect line (and hence `search`) used to be the hardcoded
+    literal `"    last_reading = readings[0]"` -- byte-identical on EVERY
+    draw regardless of seed. That's a real bug (task 6a's follow-on
+    fix): a fixed search string can permanently collide with a frozen
+    gate fixture generated from this same family, and no amount of
+    rejection-sampling retries can ever clear a collision that has
+    probability 1. `param_name` (from `noun`, ~120 reachable values) and
+    `holder` (from `VALUE_HOLDER_NAMES`, independent draw, 10 values)
+    together parameterize every identifier the defect line touches, the
+    same way `_family_wrong_comparison_operator` parameterizes its own
+    search line with `holder`/`wrong_op`."""
     theme, target = _theme_and_target(rng)
     noun = rng.choice(theme.nouns)
+    holder = rng.choice(VALUE_HOLDER_NAMES)
     fn_name = f"first_and_last_{noun}"
+    param_name = f"{noun}_values"
+    first_name = f"first_{holder}"
+    last_name = f"last_{holder}"
     values = rng.sample(range(1, 500), rng.choice((3, 4, 5)))
 
     contents = (
-        f"def {fn_name}(readings):\n"
-        f"    # Return the first and last {noun} reading from readings.\n"
-        f"    first_reading = readings[0]\n"
-        f"    last_reading = readings[0]\n"
-        f"    return (first_reading, last_reading)\n"
+        f"def {fn_name}({param_name}):\n"
+        f"    # Return the first and last {noun} reading from {param_name}.\n"
+        f"    {first_name} = {param_name}[0]\n"
+        f"    {last_name} = {param_name}[0]\n"
+        f"    return ({first_name}, {last_name})\n"
     )
-    search = "    last_reading = readings[0]"
-    replace = "    last_reading = readings[-1]"
+    search = f"    {last_name} = {param_name}[0]"
+    replace = f"    {last_name} = {param_name}[-1]"
     goal = (
         f"{target}'s {fn_name}() returns the first {noun} reading twice instead of the first "
         f"and last -- {fn_name}({values}) returns ({values[0]}, {values[0]}) instead of "
         f"({values[0]}, {values[-1]}). Fix the last assignment in {fn_name}() in {target} so "
         f"it takes the last {noun} reading. {DONE_INSTRUCTION}"
     )
-    summary = f"Fixed last_reading in {fn_name}() to index from the end."
+    summary = f"Fixed {last_name} in {fn_name}() to index from the end."
     return Task("py_off_by_one_index", "python", target, {target: contents}, goal, search, replace, summary)
 
 
 def _family_off_by_one_range_bound(rng: random.Random) -> Task:
+    """Same fix as `_family_off_by_one_index`, above: the defect line
+    used to be the hardcoded literal
+    `"    for cycle in range(1, count):"`. `loop_var` (from
+    `INDEX_VAR_NAMES`, 6 values -- previously unused by any family) and
+    `bound_name` (from `noun`, ~120 reachable values, independent draw)
+    together parameterize the loop header the defect line is built
+    from."""
     theme, target = _theme_and_target(rng)
     noun = rng.choice(theme.nouns)
+    loop_var = rng.choice(INDEX_VAR_NAMES)
     fn_name = f"{noun}_checkpoints"
+    bound_name = f"{noun}_count"
     n = rng.randint(3, 12)
 
     contents = (
-        f"def {fn_name}(count):\n"
+        f"def {fn_name}({bound_name}):\n"
         f"    markers = []\n"
-        f"    for cycle in range(1, count):\n"
-        f'        markers.append(f"cycle {{cycle}}")\n'
+        f"    for {loop_var} in range(1, {bound_name}):\n"
+        f'        markers.append(f"cycle {{{loop_var}}}")\n'
         f"    return markers\n"
     )
-    search = "    for cycle in range(1, count):"
-    replace = "    for cycle in range(1, count + 1):"
+    search = f"    for {loop_var} in range(1, {bound_name}):"
+    replace = f"    for {loop_var} in range(1, {bound_name} + 1):"
     goal = (
         f"{fn_name}() in {target} is supposed to produce one {noun} marker per cycle from 1 "
         f"through count inclusive, but the loop bound stops one short -- calling {fn_name}({n}) "
