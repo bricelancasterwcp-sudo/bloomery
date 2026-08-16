@@ -26,6 +26,7 @@ use bloomery_core::grant::Grant;
 use bloomery_core::journal::{Event, Journal};
 use bloomery_substrate::Substrate;
 
+use crate::config::EnvelopeLens;
 use crate::pager::{Pager, PagerError};
 use crate::task::exec::absolutize;
 use crate::task::{exec_find, exec_patch, exec_read, exec_run, ExecBounds, Observation};
@@ -68,12 +69,14 @@ pub struct TaskSpec {
     /// `true`; a later task (Task 8) wires the real per-model value decided
     /// by the gate at agent-admission time.
     pub mutating_verbs: bool,
-    /// Selects the envelope-v2 (think-preseeded) lens
-    /// (`docs/superpowers/evidence/2026-08-15-g4-protocol.md` §10, Amendment
-    /// 2): when `true`, [`render_prompt`] appends the literal
-    /// [`THINK_PRESEED`] pre-seed at the very end of the rendered prompt.
-    /// `false` renders exactly envelope-v1's prompt, byte-for-byte.
-    pub think_preseed: bool,
+    /// The task-loop prompt envelope
+    /// (`docs/superpowers/evidence/2026-08-15-g4-protocol.md` §10/§11,
+    /// Amendments 2 and 3): [`render_prompt`] appends the literal
+    /// [`THINK_PRESEED`] pre-seed at the very end of the rendered prompt for
+    /// `V2` and `V3`; [`propose_action`] passes [`ACTION_STOP`] as the
+    /// substrate's stop sequence for `V3` only. `V1` renders exactly
+    /// envelope-v1's prompt, byte-for-byte, with no stop sequence.
+    pub envelope: EnvelopeLens,
 }
 
 /// How a task ended. `run_task` only ever returns `Done`, `BudgetExhausted`,
@@ -207,11 +210,23 @@ fn record_step(
 /// which lens produced a result, never averaging v1 and v2 rungs together.
 const THINK_PRESEED: &str = "<think>\n\n</think>\n\n";
 
+/// The envelope-v3 stop sequence (protocol
+/// `docs/superpowers/evidence/2026-08-15-g4-protocol.md` §11, Amendment 3):
+/// generation of a task turn terminates at the first occurrence of this
+/// literal in the completion, tag INCLUDED. Passed to [`Pager::infer`]'s
+/// `stop` parameter for `EnvelopeLens::V3` turns only — never for `/v1` or
+/// native HTTP inference (§11: "the `/v1` chat surface is untouched"). The
+/// law-3 ruling (§11): a stop string is *termination, not constraint* — the
+/// model's distribution is untouched up to the tag, the same class as
+/// `max_tokens` and chat-template stop tokens, never grammar-forced
+/// decoding.
+const ACTION_STOP: &str = "</action>";
+
 /// Builds the prompt for one model turn: the task's goal, the verb card for
 /// `spec.patch_codec`, and everything accumulated in `transcript` so far —
-/// then, when `spec.think_preseed` is set (protocol §10, Amendment 2), the
-/// literal [`THINK_PRESEED`] appended at the very end, after the transcript,
-/// with nothing after it.
+/// then, when `spec.envelope.think_preseed()` is set (protocol §10, `V2`
+/// and `V3`), the literal [`THINK_PRESEED`] appended at the very end, after
+/// the transcript, with nothing after it.
 ///
 /// Deliberately does no windowing or truncation of its own. The pager's own
 /// `infer` is what refuses — with arithmetic — a prompt too large for the
@@ -226,7 +241,7 @@ fn render_prompt(spec: &TaskSpec, transcript: &str) -> String {
         spec.goal,
         verb_card_for(spec.patch_codec, spec.mutating_verbs)
     );
-    if spec.think_preseed {
+    if spec.envelope.think_preseed() {
         format!("{prompt}{THINK_PRESEED}")
     } else {
         prompt
@@ -265,10 +280,14 @@ fn propose_action<S: Substrate>(
     state: &mut TaskState,
     step: u32,
 ) -> ProposeOutcome {
+    // Protocol §11 (Amendment 3): the substrate stop sequence applies ONLY
+    // to `V3` task-loop turns — computed once per call (not per attempt)
+    // since `spec.envelope` never changes across re-asks.
+    let stop = spec.envelope.action_stop().then_some(ACTION_STOP);
     for attempt in 1..=MAX_PARSE_ATTEMPTS {
         let prompt = render_prompt(spec, &state.transcript);
         let started = Instant::now();
-        let reply = match pager.infer(agent_id, &prompt, STEP_MAX_TOKENS) {
+        let reply = match pager.infer(agent_id, &prompt, STEP_MAX_TOKENS, stop) {
             Ok(reply) => reply,
             Err(e) => {
                 // Protocol Amendment 1 (docs/superpowers/evidence/

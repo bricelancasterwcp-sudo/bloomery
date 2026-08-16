@@ -137,7 +137,7 @@ fn a_second_agents_reservation_not_just_its_kv_is_what_refuses_it() {
     let a1 = p
         .create_agent("qwen", 100, Some(WINDOW_CAP), 10_000)
         .unwrap();
-    p.infer(&a1.id, "hello from a1", 16).unwrap();
+    p.infer(&a1.id, "hello from a1", 16, None).unwrap();
     let a1_reserved = KV_BYTES + ctx_overhead;
     assert_eq!(
         p.status().resident_kv_bytes,
@@ -177,7 +177,7 @@ fn a_second_agents_reservation_not_just_its_kv_is_what_refuses_it() {
 
     let a2_reserved = KV_BYTES + ctx_overhead;
     let avail = budget - weights - a1_reserved;
-    match p.infer(&a2.id, "hello from a2", 16) {
+    match p.infer(&a2.id, "hello from a2", 16, None) {
         Err(PagerError::Refused {
             needed,
             free,
@@ -287,9 +287,9 @@ fn the_global_overhead_margin_is_subtracted_from_placement_too() {
         "the window law must not be the binding term in this scenario"
     );
 
-    p.infer(&a1.id, "hello from a1", 16)
+    p.infer(&a1.id, "hello from a1", 16, None)
         .expect("weights + one ctx fits inside the overhead-reduced budget");
-    p.infer(&a2.id, "hello from a2", 16)
+    p.infer(&a2.id, "hello from a2", 16, None)
         .expect("a1 is strictly lower priority, so this evicts rather than refuses");
 
     let events = replay(&jpath).unwrap();
@@ -334,7 +334,7 @@ fn status_reports_reserved_bytes_and_both_overhead_terms() {
         "a fresh agent reserves nothing until it is placed"
     );
 
-    p.infer(&a1.id, "hello", 16).unwrap();
+    p.infer(&a1.id, "hello", 16, None).unwrap();
     assert_eq!(
         p.status().resident_kv_bytes,
         KV_BYTES + ctx_overhead,
@@ -357,7 +357,7 @@ fn eviction_credits_the_whole_reservation_back() {
     let a1 = p
         .create_agent("qwen", 50, Some(WINDOW_CAP), 10_000)
         .unwrap();
-    p.infer(&a1.id, "hello", 16).unwrap();
+    p.infer(&a1.id, "hello", 16, None).unwrap();
     assert_eq!(p.status().resident_kv_bytes, KV_BYTES + ctx_overhead);
 
     p.suspend(&a1.id).unwrap();
@@ -421,7 +421,7 @@ fn a_vram_bound_window_is_placeable_item_7_regression() {
         "this scenario must be VRAM-bound to pin item 7"
     );
 
-    p.infer(&a1.id, "hello", 16)
+    p.infer(&a1.id, "hello", 16, None)
         .expect("a VRAM-bound window must be placeable by construction (item 7 closed)");
 }
 
@@ -488,7 +488,7 @@ fn a_sibling_blind_automatic_window_still_refuses_item_7_third_half() {
         (a1_tokens as u32, "vram"),
         "a1, alone against the whole budget, must land on the automatic Vram term"
     );
-    p.infer(&a1.id, "hello from a1", 16).unwrap();
+    p.infer(&a1.id, "hello from a1", 16, None).unwrap();
     let a1_reserved = a1_tokens * kv_per_token + ctx_overhead;
     assert_eq!(
         p.status().resident_kv_bytes,
@@ -517,7 +517,7 @@ fn a_sibling_blind_automatic_window_still_refuses_item_7_third_half() {
          budget exactly, or this test doesn't isolate the sibling-blindness"
     );
 
-    match p.infer(&a2.id, "hello from a2", 16) {
+    match p.infer(&a2.id, "hello from a2", 16, None) {
         Err(PagerError::Refused {
             needed,
             free,

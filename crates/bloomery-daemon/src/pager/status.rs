@@ -101,7 +101,16 @@ pub struct ModelStatus {
     /// or the operator set `allow_unprofiled` — so this is the field that
     /// explains a `422`.
     pub profiled: bool,
+    /// The effective per-token KV charge (spec §10 addendum): the declared
+    /// override when [`ModelStatus::kv_per_token_declared`] is `true`, else
+    /// the GGUF-derived value.
     pub kv_per_token: u64,
+    /// Whether [`ModelStatus::kv_per_token`] is a DECLARED override
+    /// (`kv_per_token_bytes` config) rather than the GGUF-derived value —
+    /// spec §10's naming rule: "a declared number must never read as a
+    /// measured one," restated for `/status` the same way
+    /// `pager::tuning`'s refusal-string naming does for weights.
+    pub kv_per_token_declared: bool,
     pub training_ctx: u32,
     /// The patch codec tasks on this model actually run under (protocol
     /// §4) — `"search_replace"` or `"whole_file"`. Always populated: an
@@ -185,7 +194,8 @@ impl<S: bloomery_substrate::Substrate> crate::pager::Pager<S> {
                 digest: m.digest.clone(),
                 loaded: m.handle.is_some(),
                 profiled: m.profile.is_some(),
-                kv_per_token: m.kv_per_token,
+                kv_per_token: m.effective_kv_per_token(),
+                kv_per_token_declared: m.kv_per_token_bytes.is_some(),
                 training_ctx: m.meta.training_ctx,
                 patch_codec: codec_gate::patch_codec_str(codec_gate::resolve_patch_codec(
                     m.profile.as_ref(),

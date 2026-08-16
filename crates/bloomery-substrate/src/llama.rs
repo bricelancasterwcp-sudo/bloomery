@@ -229,11 +229,17 @@ impl Substrate for LlamaSubstrate {
     ///
     /// On failure the KV cache is rolled back to where this call found it, so
     /// a failed `infer` leaves the context exactly as usable as before.
+    ///
+    /// `stop` (protocol §11, envelope-v3): when `Some`, generation also
+    /// terminates the instant the accumulated completion contains it — see
+    /// [`generate_from`]'s loop for the exact truncation and KV-boundary
+    /// semantics.
     fn infer(
         &mut self,
         c: CtxHandle,
         prompt: &str,
         max_tokens: u32,
+        stop: Option<&str>,
     ) -> Result<Reply, SubstrateError> {
         let started = Instant::now();
         let arena = self.ctx_arena(c)?;
@@ -241,7 +247,7 @@ impl Substrate for LlamaSubstrate {
             let ctx = contexts
                 .get_mut(&c)
                 .ok_or_else(|| SubstrateError::Context(format!("unknown context handle {c}")))?;
-            generate(model, ctx, prompt, max_tokens)
+            generate(model, ctx, prompt, max_tokens, stop)
         })?;
         Ok(Reply {
             text: generated.text,
@@ -362,12 +368,21 @@ fn generate(
     ctx: &mut LlamaContext<'_>,
     prompt: &str,
     max_tokens: u32,
+    stop: Option<&str>,
 ) -> Result<Generated, SubstrateError> {
     // Where this call found the cache: everything from here on is ours, so
     // this is exactly the rollback point.
     let entry_pos = ctx.kv_cache_seq_pos_max(SEQ_ID) + 1;
     let mut wrote_cache = false;
-    match generate_from(model, ctx, prompt, max_tokens, entry_pos, &mut wrote_cache) {
+    match generate_from(
+        model,
+        ctx,
+        prompt,
+        max_tokens,
+        stop,
+        entry_pos,
+        &mut wrote_cache,
+    ) {
         Ok(generated) => Ok(generated),
         Err(failure) if wrote_cache => Err(roll_back(ctx, entry_pos, failure)),
         Err(failure) => Err(failure),
@@ -400,11 +415,13 @@ fn roll_back(
 ///
 /// Sets `wrote_cache` as soon as one decode has landed, which is what tells
 /// the caller a rollback is owed.
+#[allow(clippy::too_many_arguments)]
 fn generate_from(
     model: &LlamaModel,
     ctx: &mut LlamaContext<'_>,
     prompt: &str,
     max_tokens: u32,
+    stop: Option<&str>,
     entry_pos: i32,
     wrote_cache: &mut bool,
 ) -> Result<Generated, SubstrateError> {
@@ -499,6 +516,40 @@ fn generate_from(
         ctx.decode(&mut batch)
             .map_err(|e| SubstrateError::Infer(format!("decode generated: {e}")))?;
         logits_idx = 0;
+
+        // Envelope-v3 stop sequence (protocol §11, Amendment 3; the law-3
+        // ruling: a stop string is *termination, not constraint* — nothing
+        // above this point touched the model's distribution). `stop_hit`
+        // scans the longest valid UTF-8 PREFIX of `bytes`, not the whole
+        // buffer — `bytes` is not guaranteed to be valid UTF-8 as a whole
+        // mid-generation (a multi-byte character may be mid-flight at the
+        // tail, or a byte-fallback token may append a genuinely invalid
+        // sequence that is not merely incomplete). Requiring the whole
+        // buffer to decode before scanning at all — an earlier version of
+        // this loop did exactly that — has two costs `stop_hit` avoids: see
+        // its own doc comment for the trailing-incomplete case (no
+        // detection lag) and the genuinely-invalid case (a stop tag before
+        // the bad byte is still found; the check is never silently
+        // disabled for the rest of the turn the way a whole-buffer
+        // `str::from_utf8(&bytes).ok()` skip would be).
+        //
+        // The tag is INCLUDED (`stop_hit` already returns one past the
+        // match), and `completion_tokens` already counted this token in
+        // full above — an honest count of what was actually sampled, never
+        // adjusted down to match the shorter returned text. Note the
+        // boundary this leaves: the KV cache above already absorbed this
+        // whole token (`batch.add`/`ctx.decode` just ran with the FULL
+        // token, not the truncated text), so if a token's bytes carry
+        // content past the stop tag, the model's own context has "seen"
+        // that trailing content even though the caller never does — the
+        // same behavior every stop-sequence implementation in a token-based
+        // serving stack has.
+        if let Some(stop) = stop {
+            if let Some(cut) = crate::stop_scan::stop_hit(&bytes, stop) {
+                bytes.truncate(cut);
+                break;
+            }
+        }
     }
 
     Ok(Generated {

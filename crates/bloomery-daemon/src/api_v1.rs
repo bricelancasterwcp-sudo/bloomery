@@ -270,7 +270,9 @@ fn chat_completions<S: Substrate>(
         }
     }
 
-    let infer_result = p.infer(&agent_id, &prompt, max_tokens);
+    // Protocol §11: the `/v1` chat surface is untouched by envelope-v3 — it
+    // always passes `stop: None`, never a task-loop stop sequence.
+    let infer_result = p.infer(&agent_id, &prompt, max_tokens, None);
 
     // Needed only for an honest `PromptTooLarge` message's "(bound by
     // <term>)" parenthetical — looked up from the still-live agent, since

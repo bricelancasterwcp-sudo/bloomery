@@ -41,7 +41,7 @@ fn live_state_restore_preserves_semantics() {
 
     // Plant the fact, then page the context out.
     let c1 = s.create_context(m, 2048).unwrap();
-    let planted = s.infer(c1, PLANT, 24).unwrap();
+    let planted = s.infer(c1, PLANT, 24, None).unwrap();
     assert!(planted.prompt_tokens.unwrap() > 0);
     let img = s.save_state(c1).unwrap();
     assert!(
@@ -54,7 +54,7 @@ fn live_state_restore_preserves_semantics() {
     // Page it back into a brand-new context and ask for the fact.
     let c2 = s.create_context(m, 2048).unwrap();
     s.load_state(c2, &img).unwrap();
-    let recalled = s.infer(c2, RECALL, 24).unwrap();
+    let recalled = s.infer(c2, RECALL, 24, None).unwrap();
     assert!(
         recalled.text.contains(SECRET),
         "restored context lost the conversation: {:?}",
@@ -65,7 +65,7 @@ fn live_state_restore_preserves_semantics() {
     // Control: the same question with no restored state cannot answer it, so
     // the recall above came from the image and not from the prompt.
     let cold = s.create_context(m, 2048).unwrap();
-    let guessed = s.infer(cold, RECALL, 24).unwrap();
+    let guessed = s.infer(cold, RECALL, 24, None).unwrap();
     assert!(
         !guessed.text.contains(SECRET),
         "cold context knew the secret — the recall proves nothing: {:?}",
@@ -82,7 +82,7 @@ fn live_state_restore_preserves_semantics() {
     // the public API, because the window check refuses every prompt that would
     // make llama.cpp's decode fail; see the report.
     let before = s.save_state(c2).unwrap();
-    assert!(s.infer(c2, &"word ".repeat(4000), 8).is_err());
+    assert!(s.infer(c2, &"word ".repeat(4000), 8, None).is_err());
     let after = s.save_state(c2).unwrap();
     assert_eq!(
         before,
@@ -92,7 +92,13 @@ fn live_state_restore_preserves_semantics() {
         after.len()
     );
     // And the context is still usable afterwards, not just unchanged.
-    assert!(s.infer(c2, RECALL, 8).unwrap().completion_tokens.unwrap() > 0);
+    assert!(
+        s.infer(c2, RECALL, 8, None)
+            .unwrap()
+            .completion_tokens
+            .unwrap()
+            > 0
+    );
 
     // A damaged image is refused with the STATE_SIZE_MISMATCH marker, which is
     // Task 13's cue to cold-start rather than crash. Asserting through the
@@ -108,7 +114,10 @@ fn live_state_restore_preserves_semantics() {
     // Law 2: refuse rather than truncate. The window is read back from
     // llama.cpp (which pads it), never assumed from the request.
     let small = s.create_context(m, 64).unwrap();
-    let err = format!("{:?}", s.infer(small, &"word ".repeat(400), 8).unwrap_err());
+    let err = format!(
+        "{:?}",
+        s.infer(small, &"word ".repeat(400), 8, None).unwrap_err()
+    );
     assert!(err.contains("refusing"), "{err}");
 
     // Unloading a model with live contexts must drop contexts first.

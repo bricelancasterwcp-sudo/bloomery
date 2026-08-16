@@ -19,6 +19,8 @@
 
 use bloomery_substrate::Substrate;
 
+use crate::config::EnvelopeLens;
+
 use super::{ModelEntry, PagerError};
 
 impl ModelEntry {
@@ -47,6 +49,24 @@ impl ModelEntry {
         self.weights_vram_bytes
             .filter(|&declared| declared <= self.meta.weights_bytes)
             .map(|_| self.meta.weights_bytes)
+    }
+
+    /// Part B (spec §10 addendum): the declared `kv_per_token_bytes`
+    /// override when present, else the GGUF-derived `kv_per_token` — the ONE
+    /// effective per-token KV figure every charge site reads (see this
+    /// module's doc comment for the parallel with
+    /// [`Self::effective_weights_bytes`]).
+    ///
+    /// **Deliberately unclamped**, unlike [`Self::effective_weights_bytes`]:
+    /// spec §10 is explicit that a declared value SMALLER than the
+    /// GGUF-derived figure is the whole point (the pager's GGUF-derived
+    /// formula overcounts hybrid-DeltaNet architectures ~4×), and a declared
+    /// value LARGER is allowed too (extra conservative, never an OOM
+    /// direction). Declaring too small IS the OOM direction — the window law
+    /// would grant tokens whose real KV exceeds VRAM — so this never
+    /// second-guesses the declared number the way the weights charge does.
+    pub(crate) fn effective_kv_per_token(&self) -> u64 {
+        self.kv_per_token_bytes.unwrap_or(self.kv_per_token)
     }
 }
 
@@ -82,39 +102,83 @@ impl<S: Substrate> crate::pager::Pager<S> {
         Ok(())
     }
 
-    /// Sets `model`'s envelope-v2 (think-preseeded) lens flag
-    /// (`docs/superpowers/evidence/2026-08-15-g4-protocol.md` §10, Amendment
-    /// 2). A sibling setter to [`Pager::set_model_tuning`] rather than a
-    /// third parameter on it: `set_model_tuning` already has eight call
-    /// sites across this crate's test suite (`pager_weights_test.rs`) that
-    /// pass exactly two tuning arguments, and a third positional `bool`
-    /// there would silently reorder or break every one of them for a flag
-    /// that is conceptually independent (task-loop presentation, not VRAM
-    /// accounting) — a dedicated setter is the smaller diff.
+    /// Sets `model`'s task-loop prompt envelope
+    /// (`docs/superpowers/evidence/2026-08-15-g4-protocol.md` §10/§11,
+    /// Amendments 2 and 3). A sibling setter to [`Pager::set_model_tuning`]
+    /// rather than a third parameter on it — same reasoning as that
+    /// method's original `set_think_preseed` sibling: `set_model_tuning`
+    /// already has eight call sites across this crate's test suite
+    /// (`pager_weights_test.rs`) that pass exactly two tuning arguments, and
+    /// a third positional argument there would silently reorder or break
+    /// every one of them for a value that is conceptually independent
+    /// (task-loop presentation, not VRAM accounting) — a dedicated setter is
+    /// the smaller diff.
     ///
     /// `main.rs` is the only production caller, wiring
-    /// `ModelSpec::think_preseed()` in alongside `set_model_tuning`.
+    /// `ModelSpec::envelope_lens()` in alongside `set_model_tuning`.
     /// `UnknownModel` if `model` was never registered.
-    pub fn set_think_preseed(
+    pub fn set_model_envelope(
         &mut self,
         model: &str,
-        think_preseed: bool,
+        envelope: EnvelopeLens,
     ) -> Result<(), PagerError> {
         let entry = self
             .models
             .get_mut(model)
             .ok_or_else(|| PagerError::UnknownModel(model.to_string()))?;
-        entry.think_preseed = think_preseed;
+        entry.envelope = envelope;
         Ok(())
     }
 
-    /// Whether `model` is configured for the envelope-v2 lens — `false`
-    /// (envelope-v1) for an unknown model, matching every other per-model
-    /// accessor's fail-closed-to-default collapse (`model_patch_codec`,
+    /// `model`'s configured task-loop envelope — `EnvelopeLens::V1` for an
+    /// unknown model, matching every other per-model accessor's
+    /// fail-closed-to-default collapse (`model_patch_codec`,
     /// `model_mutating_verbs`).
-    pub fn model_think_preseed(&self, model: &str) -> bool {
+    pub fn model_envelope(&self, model: &str) -> EnvelopeLens {
         self.models
             .get(model)
-            .is_some_and(|entry| entry.think_preseed)
+            .map(|entry| entry.envelope)
+            .unwrap_or_default()
+    }
+
+    /// Sets `model`'s declared KV-per-token override in bytes (spec §10
+    /// addendum). A sibling setter to [`Pager::set_model_tuning`], same
+    /// arity reasoning as [`Pager::set_model_envelope`].
+    ///
+    /// `main.rs` is the only production caller, wiring
+    /// `ModelSpec::kv_per_token_bytes()` in alongside `set_model_tuning`.
+    /// `None` means no override — the GGUF-derived value, unchanged.
+    /// `UnknownModel` if `model` was never registered.
+    pub fn set_kv_per_token_bytes(
+        &mut self,
+        model: &str,
+        kv_per_token_bytes: Option<u64>,
+    ) -> Result<(), PagerError> {
+        let entry = self
+            .models
+            .get_mut(model)
+            .ok_or_else(|| PagerError::UnknownModel(model.to_string()))?;
+        entry.kv_per_token_bytes = kv_per_token_bytes;
+        Ok(())
+    }
+
+    /// `create_agent`'s reservation-side kv charge (spec §10 addendum):
+    /// `tokens * effective_kv_per_token()`, read INDEPENDENTLY of the window
+    /// law's own `GeometryInput.kv_per_token` read — the same "each charge
+    /// site reads through the accessor itself, not a shared local" property
+    /// `effective_weights_bytes()`'s four independent readers have, so a
+    /// one-sided wiring bug at either site is separately testable
+    /// (`pager_weights_test.rs`'s asymmetric kv tests). An unregistered
+    /// `model` reads as `0` here rather than panicking — `create_agent`'s
+    /// own model lookup already failed loudly earlier in the same call if
+    /// that were the case, so this is unreachable in practice, not a second
+    /// fail-open path.
+    pub(crate) fn kv_reservation_bytes(&self, model: &str, tokens: u32) -> u64 {
+        let kv_per_token = self
+            .models
+            .get(model)
+            .map(ModelEntry::effective_kv_per_token)
+            .unwrap_or(0);
+        u64::from(tokens).saturating_mul(kv_per_token)
     }
 }

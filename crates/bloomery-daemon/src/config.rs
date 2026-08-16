@@ -15,6 +15,70 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+/// The three task-loop prompt envelopes a model can be configured for
+/// (`docs/superpowers/evidence/2026-08-15-g4-protocol.md` §10/§11,
+/// Amendments 2 and 3).
+///
+/// - `V1`: the raw completion prompt, no pre-seed, no stop sequence
+///   (`bloomery-task-envelope-v1`).
+/// - `V2`: `V1` plus the literal `<think>\n\n</think>\n\n` pre-seed appended
+///   to the rendered prompt (`bloomery-task-envelope-v2`, Amendment 2).
+/// - `V3`: `V2` plus a stop sequence at the first `</action>` occurrence in
+///   the completion (`bloomery-task-envelope-v3`, Amendment 3) — the
+///   law-3 ruling: termination, not constraint.
+///
+/// `Default` is `V1` — an unconfigured model gets today's behavior,
+/// byte-for-byte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EnvelopeLens {
+    #[default]
+    V1,
+    V2,
+    V3,
+}
+
+impl EnvelopeLens {
+    /// The stable spelling every `CodecVerdict`/`/status` records — protocol
+    /// §11: "the lens name travels ... from the same config read that
+    /// drives the behavior" (Amendment 2's one-source rule, restated for
+    /// v3). `const fn` so `codec_probe`'s pinned string constants can be
+    /// derived from this single source rather than retyped.
+    pub const fn lens_name(&self) -> &'static str {
+        match self {
+            EnvelopeLens::V1 => "bloomery-task-envelope-v1",
+            EnvelopeLens::V2 => "bloomery-task-envelope-v2",
+            EnvelopeLens::V3 => "bloomery-task-envelope-v3",
+        }
+    }
+
+    /// Whether this lens appends the `THINK_PRESEED` literal
+    /// (`task::task_loop::THINK_PRESEED`) to the rendered prompt — `V2` and
+    /// `V3` both do (`V3` = `V2` + the action stop).
+    pub const fn think_preseed(&self) -> bool {
+        matches!(self, EnvelopeLens::V2 | EnvelopeLens::V3)
+    }
+
+    /// Whether this lens stops task-loop generation at the first
+    /// `</action>` occurrence (protocol §11, Amendment 3) — `V3` only.
+    pub const fn action_stop(&self) -> bool {
+        matches!(self, EnvelopeLens::V3)
+    }
+
+    /// Parses the TOML `envelope = "v1" | "v2" | "v3"` string value. Any
+    /// other value is a named config error listing the valid set — never a
+    /// silent fallback to a default.
+    fn parse(raw: &str) -> Result<EnvelopeLens, String> {
+        match raw {
+            "v1" => Ok(EnvelopeLens::V1),
+            "v2" => Ok(EnvelopeLens::V2),
+            "v3" => Ok(EnvelopeLens::V3),
+            other => Err(format!(
+                "invalid envelope {other:?}: valid values are \"v1\", \"v2\", \"v3\""
+            )),
+        }
+    }
+}
+
 /// One `models` entry: either a bare path (today's shape) or a tuning table.
 ///
 /// Per `docs/superpowers/specs/2026-08-15-partial-offload-capability-window-design.md` §2,
@@ -49,8 +113,50 @@ pub enum ModelSpec {
         /// Amendment 2). An explicit operator choice, never inferred:
         /// omitting the key (or using the bare-path shape) is `false` —
         /// envelope-v1, unchanged.
+        ///
+        /// **Shipped as an alias for `envelope = "v2"`** (protocol §11,
+        /// Amendment 3): both keys may be set, but only when they agree —
+        /// see [`ModelSpec::envelope_lens`] for the exact conflict rules.
+        /// Kept as its own field (rather than folded away) so every config
+        /// written against Amendment 2 keeps parsing unchanged.
+        ///
+        /// `Option<bool>`, not `bool`: the conflict check needs to tell
+        /// "the operator never mentioned this key" (`None`, agrees with
+        /// anything) from "the operator wrote `think_preseed = false`"
+        /// (`Some(false)`, which DOES conflict with `envelope = "v2"`/`"v3"`)
+        /// — a plain `bool` with a serde default can't distinguish those two
+        /// cases, since both parse to the same `false`.
         #[serde(default)]
-        think_preseed: bool,
+        think_preseed: Option<bool>,
+        /// Selects the task-loop prompt envelope
+        /// (`docs/superpowers/evidence/2026-08-15-g4-protocol.md` §11,
+        /// Amendment 3): `"v1"`, `"v2"`, or `"v3"`. Raw and unvalidated at
+        /// the parse step on purpose — [`ModelSpec::envelope_lens`] is the
+        /// one place that validates it (against `think_preseed` too), and
+        /// [`load_config`] calls that accessor for every model before
+        /// returning, so an unknown value or a conflicting pair is always a
+        /// named config error, never a silent pick.
+        #[serde(default)]
+        envelope: Option<String>,
+        /// The declared KV-per-token override, in bytes
+        /// (`docs/superpowers/specs/2026-08-15-partial-offload-capability-window-design.md`
+        /// §10 addendum). Present -> it IS the KV charge everywhere
+        /// `kv_per_token` is read for this model (the window law AND the
+        /// reservation charge — the same one-source discipline §3 applies to
+        /// `weights_vram_mib`). Absent -> the GGUF-derived value, unchanged.
+        ///
+        /// **No clamp against the GGUF-derived value** (unlike
+        /// `weights_vram_mib`'s `min(declared, file)`): declaring a SMALLER
+        /// number than GGUF derives is the whole point (hybrid-DeltaNet
+        /// architectures the pager's GGUF-derived formula overcounts ~4×,
+        /// per the spec's measured qwen3.8-27b figure), and a LARGER
+        /// declared number is allowed too (extra conservative). **Declaring
+        /// too small is the OOM direction**: the window law would then grant
+        /// tokens whose real KV exceeds VRAM — this is a declared, measured-
+        /// once-with-headroom number, not something this daemon ever
+        /// verifies against the model's actual runtime KV footprint.
+        #[serde(default)]
+        kv_per_token_bytes: Option<u64>,
     },
 }
 
@@ -95,7 +201,81 @@ impl ModelSpec {
     pub fn think_preseed(&self) -> bool {
         match self {
             Self::Path(_) => false,
-            Self::Tuned { think_preseed, .. } => *think_preseed,
+            Self::Tuned { think_preseed, .. } => think_preseed.unwrap_or(false),
+        }
+    }
+
+    /// Resolves the configured [`EnvelopeLens`] (protocol §11, Amendment 3),
+    /// validating both the raw `envelope` string AND its agreement with
+    /// `think_preseed` — the one place that combines them, so every reader
+    /// of a model's envelope (`main.rs`'s wiring, and this method's own
+    /// tests) goes through the same rule:
+    ///
+    /// - `envelope` absent, `think_preseed` absent/`false` -> `V1` (today's
+    ///   behavior, unchanged).
+    /// - `envelope` absent, `think_preseed = true` -> `V2` (Amendment 2's
+    ///   shipped alias, unchanged).
+    /// - `envelope` present and `think_preseed` doesn't disagree with it ->
+    ///   the parsed `envelope` value. Agreement is checked by the disagreeing
+    ///   PAIRS named in Amendment 3, not by requiring an exact match:
+    ///   `envelope = "v3"` with `think_preseed = true` is fine (`v3` implies
+    ///   the pre-seed `v2` already requires), and `envelope = "v1"` with
+    ///   `think_preseed` absent/`false` is fine too.
+    /// - `envelope = "v1"` with `think_preseed = true`, or `envelope =
+    ///   "v2"`/`"v3"` with `think_preseed = false` -> a named config error:
+    ///   the two keys disagree, and this is never resolved by silently
+    ///   picking one.
+    /// - An unrecognized `envelope` string -> a named config error listing
+    ///   the valid set.
+    ///
+    /// The bare-path shape (`Self::Path`) always resolves to `V1` — it has
+    /// no tuning fields to disagree with anything.
+    pub fn envelope_lens(&self) -> Result<EnvelopeLens, String> {
+        let (envelope, think_preseed) = match self {
+            Self::Path(_) => return Ok(EnvelopeLens::V1),
+            Self::Tuned {
+                envelope,
+                think_preseed,
+                ..
+            } => (envelope, *think_preseed),
+        };
+        let parsed = match envelope.as_deref() {
+            None => None,
+            Some(raw) => Some(EnvelopeLens::parse(raw)?),
+        };
+        // `think_preseed: None` means the operator never mentioned the key
+        // at all — it agrees with any `envelope` value, unlike an
+        // EXPLICIT `Some(true)`/`Some(false)`, which is what the conflict
+        // rule actually checks against.
+        match (parsed, think_preseed) {
+            (Some(EnvelopeLens::V1), Some(true)) => Err(
+                "envelope = \"v1\" conflicts with think_preseed = true (think_preseed is an \
+                 alias for envelope = \"v2\")"
+                    .to_string(),
+            ),
+            (Some(EnvelopeLens::V2), Some(false)) => {
+                Err("envelope = \"v2\" conflicts with think_preseed = false".to_string())
+            }
+            (Some(EnvelopeLens::V3), Some(false)) => {
+                Err("envelope = \"v3\" conflicts with think_preseed = false".to_string())
+            }
+            (Some(lens), _) => Ok(lens),
+            (None, Some(true)) => Ok(EnvelopeLens::V2),
+            (None, _) => Ok(EnvelopeLens::V1),
+        }
+    }
+
+    /// Returns the per-model declared KV-per-token override, in bytes, if
+    /// configured (spec §10 addendum).
+    ///
+    /// The `Path` variant returns `None` (no tuning configured), matching
+    /// every other bare-path tuning accessor's default.
+    pub fn kv_per_token_bytes(&self) -> Option<u64> {
+        match self {
+            Self::Path(_) => None,
+            Self::Tuned {
+                kv_per_token_bytes, ..
+            } => *kv_per_token_bytes,
         }
     }
 }
@@ -278,7 +458,18 @@ pub struct AssayConfig {
 pub fn load_config(path: &Path) -> Result<Config, String> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("failed to read config {}: {e}", path.display()))?;
-    toml::from_str(&text).map_err(|e| format!("failed to parse config {}: {e}", path.display()))
+    let config: Config = toml::from_str(&text)
+        .map_err(|e| format!("failed to parse config {}: {e}", path.display()))?;
+    // Protocol §11 (Amendment 3): "an explicit per-model config enum ...
+    // setting both `envelope` and `think_preseed` inconsistently is a named
+    // config error, never a silent pick" — validated here, once, for every
+    // model, so a bad config fails at load rather than at first task-loop
+    // use.
+    for (name, spec) in &config.models {
+        spec.envelope_lens()
+            .map_err(|e| format!("model {name}: {e}"))?;
+    }
+    Ok(config)
 }
 
 #[cfg(test)]

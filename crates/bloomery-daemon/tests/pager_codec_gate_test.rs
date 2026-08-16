@@ -10,6 +10,7 @@ use bloomery_core::action::PatchCodec;
 use bloomery_core::journal::{replay, Event, Journal};
 use bloomery_core::profile::Profile;
 use bloomery_daemon::agents::ImageStore;
+use bloomery_daemon::config::EnvelopeLens;
 use bloomery_daemon::pager::*;
 use bloomery_substrate::fake::FakeSubstrate;
 use std::path::{Path, PathBuf};
@@ -241,7 +242,7 @@ fn agent_task_policy_resolves_through_the_agents_model() {
 
     assert_eq!(
         p.agent_task_policy(&a.id),
-        Some((PatchCodec::WholeFile, true, false))
+        Some((PatchCodec::WholeFile, true, EnvelopeLens::V1))
     );
 }
 
@@ -253,21 +254,21 @@ fn agent_task_policy_is_none_for_an_unknown_agent() {
 }
 
 /// Protocol §10 (Amendment 2): `agent_task_policy`'s third field resolves a
-/// preseeded model's `think_preseed = true` through the same one-source
-/// lookup as `patch_codec`/`mutating_verbs` — set via `Pager::set_think_preseed`.
+/// preseeded model's envelope through the same one-source lookup as
+/// `patch_codec`/`mutating_verbs` — set via `Pager::set_model_envelope`.
 #[test]
-fn agent_task_policy_resolves_think_preseed_through_the_agents_model() {
+fn agent_task_policy_resolves_envelope_through_the_agents_model() {
     let dir = fresh_dir("bloomery-codec-gate-agentpolicy-preseed");
     let (mut p, _) = pager_with_model(&dir);
     p.attach_profile("qwen", Profile::from_json(WF_WINS_PROFILE).unwrap(), false)
         .unwrap();
     p.set_codec_gate("qwen", keep_gate()).unwrap();
-    p.set_think_preseed("qwen", true).unwrap();
+    p.set_model_envelope("qwen", EnvelopeLens::V2).unwrap();
     let a = p.create_agent("qwen", 50, None, 10_000).unwrap();
 
     assert_eq!(
         p.agent_task_policy(&a.id),
-        Some((PatchCodec::WholeFile, true, true))
+        Some((PatchCodec::WholeFile, true, EnvelopeLens::V2))
     );
 }
 

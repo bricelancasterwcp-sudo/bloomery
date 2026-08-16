@@ -65,7 +65,7 @@ fn remove_agent_destroys_context_and_forgets_the_agent() {
     let gguf = write_gguf(&dir, b"w");
     p.register_model("qwen", &gguf, meta(), None).unwrap();
     let a = p.create_agent("qwen", 50, None, 1000).unwrap();
-    p.infer(&a.id, "hi", 16).unwrap();
+    p.infer(&a.id, "hi", 16, None).unwrap();
     assert!(p
         .substrate()
         .calls()
@@ -79,7 +79,7 @@ fn remove_agent_destroys_context_and_forgets_the_agent() {
         .calls()
         .iter()
         .any(|c| c.starts_with("destroy_context")));
-    match p.infer(&a.id, "hi again", 16) {
+    match p.infer(&a.id, "hi again", 16, None) {
         Err(PagerError::UnknownAgent(id)) => assert_eq!(id, a.id),
         other => panic!("expected UnknownAgent after removal, got {other:?}"),
     }

@@ -125,16 +125,16 @@ fn within_the_quantum_equal_priority_stays_refused() {
         .create_agent("qwen", 100, Some(WINDOW_CAP), 10_000)
         .unwrap();
 
-    p.infer(&a1.id, "hello from a1", 16)
+    p.infer(&a1.id, "hello from a1", 16, None)
         .expect("weights(200)+kv(56)=256 <= 270: fits, a1 resident");
 
-    match p.infer(&a2.id, "hello from a2", 16) {
+    match p.infer(&a2.id, "hello from a2", 16, None) {
         Err(PagerError::Refused { .. }) => {}
         other => panic!("expected Refused (avail 14 MiB < kv 56 MiB, same priority): {other:?}"),
     }
 
     clock.store(29_999, Ordering::SeqCst);
-    match p.infer(&a2.id, "hello from a2 again", 16) {
+    match p.infer(&a2.id, "hello from a2 again", 16, None) {
         Err(PagerError::Refused { .. }) => {}
         other => panic!("expected still-Refused one ms short of the quantum: {other:?}"),
     }
@@ -177,15 +177,15 @@ fn after_the_quantum_the_lru_equal_priority_resident_is_evicted() {
         .create_agent("qwen", 100, Some(WINDOW_CAP), 10_000)
         .unwrap();
 
-    p.infer(&a1.id, "hello from a1", 16).unwrap(); // a1 resident, last-use = 0
+    p.infer(&a1.id, "hello from a1", 16, None).unwrap(); // a1 resident, last-use = 0
 
-    match p.infer(&a2.id, "hello from a2", 16) {
+    match p.infer(&a2.id, "hello from a2", 16, None) {
         Err(PagerError::Refused { .. }) => {}
         other => panic!("expected Refused: {other:?}"),
     }
 
     clock.store(30_000, Ordering::SeqCst);
-    p.infer(&a2.id, "hello from a2 again", 16)
+    p.infer(&a2.id, "hello from a2 again", 16, None)
         .expect("quantum elapsed: time-share evicts a1, freeing room for a2");
 
     let events = replay(&jpath).unwrap();
@@ -243,21 +243,21 @@ fn lru_picks_the_least_recently_used_among_equals() {
         .create_agent("qwen", 100, Some(WINDOW_CAP), 10_000)
         .unwrap();
 
-    p.infer(&a1.id, "hello from a1", 16).unwrap(); // last-use a1 = 0
+    p.infer(&a1.id, "hello from a1", 16, None).unwrap(); // last-use a1 = 0
 
     clock.store(10_000, Ordering::SeqCst);
-    p.infer(&a2.id, "hello from a2", 16)
+    p.infer(&a2.id, "hello from a2", 16, None)
         .expect("avail 74 MiB fits a2's 56 MiB ctx beside a1: both resident, no eviction");
     // last-use a2 = 10_000
 
     clock.store(20_000, Ordering::SeqCst);
-    match p.infer(&a3.id, "hello from a3", 16) {
+    match p.infer(&a3.id, "hello from a3", 16, None) {
         Err(PagerError::Refused { .. }) => {}
         other => panic!("expected Refused (avail 18 MiB < kv 56 MiB): {other:?}"),
     }
 
     clock.store(50_001, Ordering::SeqCst);
-    p.infer(&a3.id, "hello from a3 again", 16)
+    p.infer(&a3.id, "hello from a3 again", 16, None)
         .expect("quantum elapsed: time-share evicts the LRU equal-priority resident");
 
     let events = replay(&jpath).unwrap();
@@ -298,15 +298,15 @@ fn mixed_priorities_never_time_share() {
         .create_agent("qwen", 100, Some(WINDOW_CAP), 10_000)
         .unwrap();
 
-    p.infer(&a1.id, "hello from a1", 16).unwrap(); // a1 resident, priority 150
+    p.infer(&a1.id, "hello from a1", 16, None).unwrap(); // a1 resident, priority 150
 
-    match p.infer(&a2.id, "hello from a2", 16) {
+    match p.infer(&a2.id, "hello from a2", 16, None) {
         Err(PagerError::Refused { .. }) => {}
         other => panic!("expected Refused (a1 outranks a2, never evictable): {other:?}"),
     }
 
     clock.store(60_000, Ordering::SeqCst);
-    match p.infer(&a2.id, "hello from a2 again", 16) {
+    match p.infer(&a2.id, "hello from a2 again", 16, None) {
         Err(PagerError::Refused { .. }) => {}
         other => {
             panic!("mixed priority must never time-share, even well past the quantum: {other:?}")
@@ -355,9 +355,9 @@ fn successful_placement_clears_the_waiting_tracker() {
         .create_agent("qwen", 100, Some(WINDOW_CAP), 10_000)
         .unwrap();
 
-    p.infer(&a1.id, "hello from a1", 16).unwrap(); // a1 resident
+    p.infer(&a1.id, "hello from a1", 16, None).unwrap(); // a1 resident
 
-    match p.infer(&a2.id, "hello from a2", 16) {
+    match p.infer(&a2.id, "hello from a2", 16, None) {
         Err(PagerError::Refused { .. }) => {} // qualifying refusal: waiting_since[a2] = 0
         other => panic!("expected Refused: {other:?}"),
     }
@@ -365,7 +365,7 @@ fn successful_placement_clears_the_waiting_tracker() {
     p.remove_agent(&a1.id, "test teardown").unwrap(); // frees the slot
 
     clock.store(5_000, Ordering::SeqCst);
-    p.infer(&a2.id, "hello from a2 again", 16)
+    p.infer(&a2.id, "hello from a2 again", 16, None)
         .expect("a1 gone: avail 70 MiB fits a2 directly, ordinary placement");
 
     let events = replay(&jpath).unwrap();
@@ -382,18 +382,18 @@ fn successful_placement_clears_the_waiting_tracker() {
         .create_agent("qwen", 100, Some(WINDOW_CAP), 10_000)
         .unwrap();
     clock.store(10_000, Ordering::SeqCst);
-    p.infer(&a3.id, "hello from a3", 16)
+    p.infer(&a3.id, "hello from a3", 16, None)
         .expect("a2 suspended, model already loaded: avail 70 MiB fits a3");
     // last-use a3 = 10_000
 
     clock.store(20_000, Ordering::SeqCst);
-    match p.infer(&a2.id, "a2 wants back in", 16) {
+    match p.infer(&a2.id, "a2 wants back in", 16, None) {
         Err(PagerError::Refused { .. }) => {} // fresh waiting_since[a2] = 20_000
         other => panic!("expected Refused (a3 occupies the only slot, same priority): {other:?}"),
     }
 
     clock.store(49_999, Ordering::SeqCst);
-    match p.infer(&a2.id, "a2 still waiting", 16) {
+    match p.infer(&a2.id, "a2 still waiting", 16, None) {
         Err(PagerError::Refused { .. }) => {}
         other => panic!(
             "must still require the fresh quantum boundary at t=50_000, not a leftover \
@@ -402,7 +402,7 @@ fn successful_placement_clears_the_waiting_tracker() {
     }
 
     clock.store(50_000, Ordering::SeqCst);
-    p.infer(&a2.id, "a2 finally back", 16)
+    p.infer(&a2.id, "a2 finally back", 16, None)
         .expect("the fresh wait (20_000 -> 50_000) has now elapsed a full quantum");
 
     let events = replay(&jpath).unwrap();
@@ -444,22 +444,22 @@ fn insufficient_lru_eviction_stays_refused_past_the_quantum() {
         .create_agent("qwen", 100, Some(WINDOW_CAP), 10_000)
         .unwrap(); // 56 MiB
 
-    p.infer(&a1.id, "hello from a1", 16).unwrap();
+    p.infer(&a1.id, "hello from a1", 16, None).unwrap();
     // last-use a1 = 0; resident, 14 MiB: weights(200)+kv(14)=214 <= 300: fits
 
     clock.store(10_000, Ordering::SeqCst);
-    p.infer(&a2.id, "hello from a2", 16)
+    p.infer(&a2.id, "hello from a2", 16, None)
         .expect("avail 86 MiB fits a2's 56 MiB ctx beside a1: both resident");
     // last-use a2 = 10_000
 
     clock.store(20_000, Ordering::SeqCst);
-    match p.infer(&a3.id, "hello from a3", 16) {
+    match p.infer(&a3.id, "hello from a3", 16, None) {
         Err(PagerError::Refused { .. }) => {} // avail 30 MiB < kv 56 MiB
         other => panic!("expected Refused: {other:?}"),
     }
 
     clock.store(50_000, Ordering::SeqCst); // 30_000ms past a3's refusal: quantum elapsed
-    match p.infer(&a3.id, "hello from a3 again", 16) {
+    match p.infer(&a3.id, "hello from a3 again", 16, None) {
         Err(PagerError::Refused { .. }) => {}
         other => panic!(
             "evicting the LRU victim a1 (14 MiB) would still leave avail+14 = 44 MiB < \
@@ -468,7 +468,7 @@ fn insufficient_lru_eviction_stays_refused_past_the_quantum() {
     }
 
     clock.store(200_000, Ordering::SeqCst); // several quantums later: still deterministic
-    match p.infer(&a3.id, "hello from a3 yet again", 16) {
+    match p.infer(&a3.id, "hello from a3 yet again", 16, None) {
         Err(PagerError::Refused { .. }) => {}
         other => panic!("insufficiency never resolves on its own: expected Refused: {other:?}"),
     }
@@ -519,18 +519,18 @@ fn lru_ties_on_last_use_break_lexically_by_id() {
         .unwrap();
 
     // a1 and a2 both complete their most recent inference at t=0 — tied.
-    p.infer(&a1.id, "hello from a1", 16).unwrap();
-    p.infer(&a2.id, "hello from a2", 16)
+    p.infer(&a1.id, "hello from a1", 16, None).unwrap();
+    p.infer(&a2.id, "hello from a2", 16, None)
         .expect("avail 74 MiB fits a2's 56 MiB ctx beside a1: both resident, tied last-use=0");
 
     clock.store(20_000, Ordering::SeqCst);
-    match p.infer(&a3.id, "hello from a3", 16) {
+    match p.infer(&a3.id, "hello from a3", 16, None) {
         Err(PagerError::Refused { .. }) => {}
         other => panic!("expected Refused (avail 18 MiB < kv 56 MiB): {other:?}"),
     }
 
     clock.store(50_000, Ordering::SeqCst);
-    p.infer(&a3.id, "hello from a3 again", 16)
+    p.infer(&a3.id, "hello from a3 again", 16, None)
         .expect("quantum elapsed: time-share evicts the lexically-first tied resident");
 
     let events = replay(&jpath).unwrap();
@@ -578,7 +578,7 @@ fn a_just_resumed_never_inferred_resident_counts_as_recently_used() {
         .unwrap();
 
     clock.store(10_000, Ordering::SeqCst);
-    p.infer(&a1.id, "hello from a1", 16).unwrap();
+    p.infer(&a1.id, "hello from a1", 16, None).unwrap();
     // last-use a1 = 10_000 (its only inference)
 
     clock.store(20_000, Ordering::SeqCst);
@@ -587,13 +587,13 @@ fn a_just_resumed_never_inferred_resident_counts_as_recently_used() {
     // last-use a2 = 20_000 (placement, not inference)
 
     clock.store(30_000, Ordering::SeqCst);
-    match p.infer(&a3.id, "hello from a3", 16) {
+    match p.infer(&a3.id, "hello from a3", 16, None) {
         Err(PagerError::Refused { .. }) => {}
         other => panic!("expected Refused (avail 18 MiB < kv 56 MiB): {other:?}"),
     }
 
     clock.store(60_000, Ordering::SeqCst);
-    p.infer(&a3.id, "hello from a3 again", 16)
+    p.infer(&a3.id, "hello from a3 again", 16, None)
         .expect("quantum elapsed: time-share evicts the genuinely older resident");
 
     let events = replay(&jpath).unwrap();

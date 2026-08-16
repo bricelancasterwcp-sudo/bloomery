@@ -1,4 +1,4 @@
-use bloomery_daemon::config::load_config;
+use bloomery_daemon::config::{load_config, EnvelopeLens};
 
 fn write_temp_toml(name: &str, contents: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join("bloomery-daemon-config-test");
@@ -339,4 +339,241 @@ n_gpu_layers = 5
         err.contains("path") || err.contains("data"),
         "error should indicate missing path field: {err}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Protocol §11 (Amendment 3): the `envelope` enum + `kv_per_token_bytes`.
+// ---------------------------------------------------------------------------
+
+fn envelope_toml(envelope: &str) -> String {
+    format!(
+        r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = {{ name = "enthusiast-16gb", emulated = false }}
+assay = {{ enabled = false, python = "python3" }}
+
+[models."qwen3.8:27b"]
+path = "/mnt/extra/models/qwen3.8-27b.gguf"
+envelope = "{envelope}"
+"#
+    )
+}
+
+/// All three envelope values parse and resolve to the matching
+/// [`EnvelopeLens`] variant.
+#[test]
+fn envelope_parses_for_all_three_values() {
+    for (raw, expected) in [
+        ("v1", EnvelopeLens::V1),
+        ("v2", EnvelopeLens::V2),
+        ("v3", EnvelopeLens::V3),
+    ] {
+        let path = write_temp_toml(&format!("envelope-{raw}.toml"), &envelope_toml(raw));
+        let config = load_config(&path).unwrap_or_else(|e| panic!("envelope {raw:?}: {e}"));
+        let model = config.models.get("qwen3.8:27b").unwrap();
+        assert_eq!(
+            model.envelope_lens().unwrap(),
+            expected,
+            "envelope = {raw:?} must resolve to {expected:?}"
+        );
+    }
+}
+
+/// An unrecognized `envelope` value is a named config error that lists the
+/// valid set — never a silent fallback to a default. Caught at `load_config`
+/// time (protocol §11: "validated at load"), not deferred to first use.
+#[test]
+fn unknown_envelope_value_is_a_named_error_mentioning_the_valid_set() {
+    let path = write_temp_toml("envelope-bogus.toml", &envelope_toml("v99"));
+    let err = load_config(&path).unwrap_err();
+    assert!(
+        err.contains("v99"),
+        "error should name the bad value: {err}"
+    );
+    assert!(err.contains("v1"), "error should list the valid set: {err}");
+    assert!(err.contains("v2"), "error should list the valid set: {err}");
+    assert!(err.contains("v3"), "error should list the valid set: {err}");
+}
+
+/// The shipped `think_preseed = true` key is accepted as an alias for
+/// `envelope = "v2"` when `envelope` itself is absent (protocol §11).
+#[test]
+fn think_preseed_true_alone_aliases_to_v2() {
+    let toml = r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = { name = "enthusiast-16gb", emulated = false }
+assay = { enabled = false, python = "python3" }
+
+[models."qwen3.8:27b"]
+path = "/mnt/extra/models/qwen3.8-27b.gguf"
+think_preseed = true
+"#;
+    let path = write_temp_toml("envelope-alias-v2.toml", toml);
+    let config = load_config(&path).unwrap();
+    let model = config.models.get("qwen3.8:27b").unwrap();
+    assert_eq!(model.envelope_lens().unwrap(), EnvelopeLens::V2);
+}
+
+/// Absent `envelope` and absent/`false` `think_preseed` both resolve to
+/// `V1` — byte-for-byte today's behavior for every existing config.
+#[test]
+fn absent_envelope_and_think_preseed_resolves_to_v1() {
+    let path = write_temp_toml(
+        "envelope-absent.toml",
+        r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = { name = "enthusiast-16gb", emulated = false }
+assay = { enabled = false, python = "python3" }
+
+[models."qwen3.8:27b"]
+path = "/mnt/extra/models/qwen3.8-27b.gguf"
+"#,
+    );
+    let config = load_config(&path).unwrap();
+    let model = config.models.get("qwen3.8:27b").unwrap();
+    assert_eq!(model.envelope_lens().unwrap(), EnvelopeLens::V1);
+
+    // The bare-path shape resolves to V1 too — no tuning table at all.
+    let bare_path = write_temp_toml(
+        "envelope-bare-path.toml",
+        r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = { name = "enthusiast-16gb", emulated = false }
+assay = { enabled = false, python = "python3" }
+
+[models]
+"qwen3:14b" = "/mnt/extra/models/qwen3-14b.gguf"
+"#,
+    );
+    let config = load_config(&bare_path).unwrap();
+    let model = config.models.get("qwen3:14b").unwrap();
+    assert_eq!(model.envelope_lens().unwrap(), EnvelopeLens::V1);
+}
+
+/// `envelope`/`think_preseed` conflict combos are named config errors, never
+/// a silent pick — the three disagreeing pairs protocol §11 names verbatim.
+#[test]
+fn conflicting_envelope_and_think_preseed_combos_are_named_errors() {
+    let cases = [
+        ("v1", true),  // think_preseed=true with envelope="v1"
+        ("v2", false), // think_preseed=false with envelope="v2"
+        ("v3", false), // think_preseed=false with envelope="v3"
+    ];
+    for (envelope, think_preseed) in cases {
+        let toml = format!(
+            r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = {{ name = "enthusiast-16gb", emulated = false }}
+assay = {{ enabled = false, python = "python3" }}
+
+[models."qwen3.8:27b"]
+path = "/mnt/extra/models/qwen3.8-27b.gguf"
+envelope = "{envelope}"
+think_preseed = {think_preseed}
+"#
+        );
+        let path = write_temp_toml(
+            &format!("envelope-conflict-{envelope}-{think_preseed}.toml"),
+            &toml,
+        );
+        let err = load_config(&path).unwrap_err();
+        assert!(
+            err.contains("envelope") && err.contains("think_preseed"),
+            "envelope={envelope:?} think_preseed={think_preseed}: error must name both \
+             conflicting keys: {err}"
+        );
+    }
+}
+
+/// Consistent (non-conflicting) pairs are never errors: `envelope = "v3"`
+/// with `think_preseed = true` is fine (v3 implies the pre-seed v2 already
+/// requires), and `envelope = "v1"` with `think_preseed` absent/`false` is
+/// fine too.
+#[test]
+fn consistent_envelope_and_think_preseed_combos_parse() {
+    let toml = r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = { name = "enthusiast-16gb", emulated = false }
+assay = { enabled = false, python = "python3" }
+
+[models."qwen3.8:27b"]
+path = "/mnt/extra/models/qwen3.8-27b.gguf"
+envelope = "v3"
+think_preseed = true
+"#;
+    let path = write_temp_toml("envelope-consistent-v3-true.toml", toml);
+    let config = load_config(&path).unwrap();
+    assert_eq!(
+        config
+            .models
+            .get("qwen3.8:27b")
+            .unwrap()
+            .envelope_lens()
+            .unwrap(),
+        EnvelopeLens::V3
+    );
+}
+
+/// `EnvelopeLens::lens_name` returns the exact pinned strings protocol
+/// §10/§11 name.
+#[test]
+fn envelope_lens_names_are_pinned() {
+    assert_eq!(EnvelopeLens::V1.lens_name(), "bloomery-task-envelope-v1");
+    assert_eq!(EnvelopeLens::V2.lens_name(), "bloomery-task-envelope-v2");
+    assert_eq!(EnvelopeLens::V3.lens_name(), "bloomery-task-envelope-v3");
+}
+
+/// `kv_per_token_bytes` parses when present, and is `None` when absent
+/// (spec §10 addendum).
+#[test]
+fn kv_per_token_bytes_parses_and_defaults_to_none() {
+    let toml = r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = { name = "enthusiast-16gb", emulated = false }
+assay = { enabled = false, python = "python3" }
+
+[models."qwen3.8:27b"]
+path = "/mnt/extra/models/qwen3.8-27b.gguf"
+kv_per_token_bytes = 67109
+"#;
+    let path = write_temp_toml("kv-per-token-bytes.toml", toml);
+    let config = load_config(&path).unwrap();
+    let model = config.models.get("qwen3.8:27b").unwrap();
+    assert_eq!(model.kv_per_token_bytes(), Some(67109));
+
+    let absent_toml = r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = { name = "enthusiast-16gb", emulated = false }
+assay = { enabled = false, python = "python3" }
+
+[models."qwen3.8:27b"]
+path = "/mnt/extra/models/qwen3.8-27b.gguf"
+"#;
+    let absent_path = write_temp_toml("kv-per-token-bytes-absent.toml", absent_toml);
+    let config = load_config(&absent_path).unwrap();
+    let model = config.models.get("qwen3.8:27b").unwrap();
+    assert_eq!(model.kv_per_token_bytes(), None);
+
+    // The bare-path shape has no tuning fields at all.
+    let bare_toml = r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = { name = "enthusiast-16gb", emulated = false }
+assay = { enabled = false, python = "python3" }
+
+[models]
+"qwen3:14b" = "/mnt/extra/models/qwen3-14b.gguf"
+"#;
+    let bare_path = write_temp_toml("kv-per-token-bytes-bare.toml", bare_toml);
+    let config = load_config(&bare_path).unwrap();
+    let model = config.models.get("qwen3:14b").unwrap();
+    assert_eq!(model.kv_per_token_bytes(), None);
 }

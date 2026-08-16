@@ -11,6 +11,10 @@ pub mod contract;
 pub mod fake;
 #[cfg(feature = "llama")]
 pub mod llama;
+/// The envelope-v3 stop-sequence scan (protocol §11), split out so it can be
+/// unit-tested GPU-free even though its only caller (`llama::generate_from`)
+/// is compiled solely under the `llama` feature — see its own doc comment.
+pub(crate) mod stop_scan;
 
 /// The substring every KV-image rejection carries in its
 /// [`SubstrateError::State`] message.
@@ -81,11 +85,24 @@ pub trait Substrate {
 
     fn destroy_context(&mut self, c: CtxHandle) -> Result<(), SubstrateError>;
 
+    /// `stop`, when `Some`, is a literal stop string (protocol §11's
+    /// action-terminated envelope-v3, Amendment 3): generation terminates at
+    /// the first occurrence of `stop` in the accumulated completion, the
+    /// occurrence is INCLUDED in the returned text, and `completion_tokens`
+    /// still counts every token actually generated (never fudged down to
+    /// match the truncated text). `None` is today's behavior, unchanged —
+    /// generation runs to `max_tokens` or an end-of-generation token.
+    ///
+    /// The law-3 ruling (protocol §11): a stop string is *termination, not
+    /// constraint* — the model's distribution is untouched up to the tag,
+    /// the same class as `max_tokens` and chat-template stop tokens, never
+    /// grammar-forced decoding.
     fn infer(
         &mut self,
         c: CtxHandle,
         prompt: &str,
         max_tokens: u32,
+        stop: Option<&str>,
     ) -> Result<Reply, SubstrateError>;
 
     fn save_state(&mut self, c: CtxHandle) -> Result<Vec<u8>, SubstrateError>;

@@ -102,8 +102,9 @@ impl Substrate for SendLlama {
         c: CtxHandle,
         prompt: &str,
         max_tokens: u32,
+        stop: Option<&str>,
     ) -> Result<Reply, SubstrateError> {
-        self.0.infer(c, prompt, max_tokens)
+        self.0.infer(c, prompt, max_tokens, stop)
     }
 
     fn save_state(&mut self, c: CtxHandle) -> Result<Vec<u8>, SubstrateError> {

@@ -29,7 +29,7 @@ fn live_infer_reports_stats_and_state_round_trips() {
     let mut s = LlamaSubstrate::new().unwrap();
     let m = s.load_model(std::path::Path::new(&gguf), 99).unwrap();
     let c = s.create_context(m, 2048).unwrap();
-    let r = s.infer(c, "Reply with exactly: OK", 8).unwrap();
+    let r = s.infer(c, "Reply with exactly: OK", 8, None).unwrap();
     assert!(
         r.prompt_tokens.is_some() && r.completion_tokens.is_some(),
         "real counts by construction — we count decoded tokens ourselves"
@@ -39,6 +39,6 @@ fn live_infer_reports_stats_and_state_round_trips() {
     s.destroy_context(c).unwrap();
     let c2 = s.create_context(m, 2048).unwrap();
     s.load_state(c2, &img).unwrap();
-    let r2 = s.infer(c2, " Again: OK", 8).unwrap(); // continues on restored KV
+    let r2 = s.infer(c2, " Again: OK", 8, None).unwrap(); // continues on restored KV
     assert!(r2.completion_tokens.unwrap() > 0);
 }
