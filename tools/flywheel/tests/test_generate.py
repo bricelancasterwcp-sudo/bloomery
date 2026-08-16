@@ -9,6 +9,12 @@ Rule 6 (validation split): 5% of task_ids marked in the fingerprint.
 
 All but one test use the canned stub_tool.py fixture (brief step 1); one
 integration test drives the real built flywheel-tool binary end to end.
+
+G5's extension (refuse-task generation via `--refusal-count`, design doc
+§5 / task-4 brief) lives in `test_generate_refusal.py` — split out to keep
+this file under the 400-line house cap, same reasoning turn 1 used for
+`templates_python.py`/`templates_text.py`. It imports `STUB_TOOL` and
+`run_generate` from this module.
 """
 
 import json

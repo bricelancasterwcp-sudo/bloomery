@@ -1459,26 +1459,43 @@ fn a_set_with_no_refuse_fixtures_aborts_rather_than_a_vacuous_refuse_keep() {
     assert!(err.reason.contains("0 refuse"), "got {}", err.reason);
 }
 
-/// `run_boot_g5_probe` refuses to run against the SHIPPED placeholder set
-/// (Task 2 ships `codec-tasks-v2-mixed.toml` as a placeholder — see
-/// `fixtures::shipped_fixture_set_v2_mixed`'s doc comment): every opted-in
-/// model is skipped, one `Degraded` line is journaled, and no
-/// `CodecFixture`/`CodecVerdictMixed` event is ever produced — a
-/// placeholder must never take a measurement.
+/// `run_boot_g5_probe` no longer refuses to run against the shipped set
+/// (Task 4 replaced the Task-2 placeholder in place with the real, frozen
+/// 20-fixture `codec-tasks-v2-mixed` set — see
+/// `fixtures::shipped_fixture_set_v2_mixed`'s doc comment). This test
+/// replaces `run_boot_g5_probe_refuses_to_run_against_the_shipped_placeholder_set`
+/// (which pinned the OPPOSITE behavior against the shipped file — that
+/// behavior is gone now that the file's content changed) and proves the
+/// inverse cheaply, without needing to script all 20 fixtures' worth of
+/// replies: [`MODEL`] is never registered on this pager, so `create_agent`
+/// is refused on the very first fixture the probe attempts — an
+/// infrastructure abort that can ONLY happen if `run_boot_g5_probe`
+/// actually tried to run the real set, since the placeholder-skip branch
+/// never calls `create_agent` at all. The degraded reason therefore names
+/// a per-model probe abort (`g5_probe_aborted_reason`'s shape), never the
+/// placeholder-skip line.
 #[test]
-fn run_boot_g5_probe_refuses_to_run_against_the_shipped_placeholder_set() {
-    let dir = fresh_dir("g5-boot-placeholder");
-    let pager = Mutex::new(build_pager(&dir, vec![]));
+fn run_boot_g5_probe_runs_the_real_shipped_set_not_a_placeholder_skip() {
+    let dir = fresh_dir("g5-boot-real-set");
+    let journal = Journal::open(&dir.join("pager.jsonl")).unwrap();
+    let images = ImageStore::new(&dir.join("img")).unwrap();
+    let fake = FakeSubstrate::new();
+    let mut pager = Pager::new(fake, journal, images, Box::new(|| Some(1024 * 1024 * 1024)));
+    pager.set_task_journal_path(dir.join("tasks.jsonl"));
+    let pager = Mutex::new(pager);
     let g5_models = vec![MODEL.to_string()];
 
     run_boot_g5_probe(&pager, &g5_models, &dir.join("scratch"))
-        .expect("a placeholder skip is a clean boot, not a journal failure");
+        .expect("an aborted probe is a clean boot, not a journal failure");
 
     let events = pager_events(&dir);
-    assert!(fixture_events(&events).is_empty(), "no fixture ever ran");
+    assert!(
+        fixture_events(&events).is_empty(),
+        "the very first fixture's agent creation fails before any CodecFixture is journaled"
+    );
     assert!(
         verdict_mixed_events(&events).is_empty(),
-        "no verdict ever recorded"
+        "an aborted probe never journals a verdict"
     );
 
     let degraded: Vec<&str> = events
@@ -1488,15 +1505,43 @@ fn run_boot_g5_probe_refuses_to_run_against_the_shipped_placeholder_set() {
             _ => None,
         })
         .collect();
-    assert_eq!(degraded.len(), 1, "exactly one skip line: {degraded:?}");
     assert_eq!(
-        degraded[0],
-        g5_placeholder_skip_reason("codec-tasks-v2-mixed-PLACEHOLDER")
+        degraded.len(),
+        1,
+        "exactly one skip/abort line: {degraded:?}"
+    );
+    assert!(
+        degraded[0].starts_with("G5 refusal probe aborted for"),
+        "must be a per-model abort (proving the real set was attempted), not a placeholder skip: {:?}",
+        degraded[0]
+    );
+    assert!(
+        !degraded[0].contains("Task-2 placeholder"),
+        "must NOT take the placeholder-skip path against the real shipped set: {:?}",
+        degraded[0]
     );
 
     let p = pager.lock().unwrap();
-    assert!(p.status().models[0].done_trust.is_none());
-    assert!(p.status().models[0].refusal_gate.is_none());
+    assert!(
+        p.status().models.is_empty(),
+        "MODEL is deliberately never registered on this pager"
+    );
+}
+
+/// The placeholder-skip branch itself stays correct and reachable in
+/// principle — it just cannot be exercised through the shipped file
+/// anymore (see the test above). `g5_placeholder_skip_reason`'s exact
+/// wording is still pinned directly, so a future accidental wording
+/// change is still caught even though the shipped-file integration path
+/// no longer covers it.
+#[test]
+fn g5_placeholder_skip_reason_wording_is_pinned() {
+    assert_eq!(
+        g5_placeholder_skip_reason("codec-tasks-v2-mixed-PLACEHOLDER"),
+        "G5 refusal probe skipped: fixture set codec-tasks-v2-mixed-PLACEHOLDER is a Task-2 \
+         placeholder (the real codec-tasks-v2-mixed set has not landed yet); no model measured \
+         — done_trust stays unmeasured"
+    );
 }
 
 /// An empty `g5_models` list is a true no-op: no model opted in, so there

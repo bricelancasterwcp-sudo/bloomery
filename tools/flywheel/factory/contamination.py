@@ -1,12 +1,15 @@
-"""The contamination guard (design spec §3, brief rule 7).
+"""The contamination guard (design spec §3, brief rule 7; extended by G5
+design doc §3: "the contamination guard runs against both gate sets from
+now on").
 
-Proves the generated corpus shares nothing with the frozen G4 gate set
-(`crates/bloomery-daemon/fixtures/codec-tasks-v1.toml`, "codec-tasks-v1"):
-no shared goals, file contents, target filenames, or search strings
+Proves the generated corpus shares nothing with one or more frozen gate
+sets: no shared goals, file contents, target filenames, or search strings
 (exact or whitespace/case-normalized), and no near-duplicate goals (>=
 0.8 Jaccard token-set similarity). This is the machine check the design
 spec calls for: "a structural comparator proves zero overlap between the
-corpus and codec-tasks-v1."
+corpus and codec-tasks-v1" — G5 widens the same comparator to cover
+`codec-tasks-v2-mixed` too, rather than teaching it a second, parallel
+rule set.
 
 Two responsibilities live here:
 
@@ -22,12 +25,34 @@ Two responsibilities live here:
    "example.com"). ``test_contamination.py`` mechanically checks the
    auto-derived half for completeness against the live TOML.
 
+   Deliberately kept scoped to `codec-tasks-v1` ONLY, not unioned with
+   `codec-tasks-v2-mixed`: `codec-tasks-v2-mixed` is itself factory-
+   authored, drawing its target filenames and identifiers from the SAME
+   `wordlists.py` pools every repair/refusal template already uses (Task 4
+   authors it "VIA the factory"). Folding its vocabulary into
+   `GATE_VOCABULARY` would ban the factory's own shared word pools from
+   ever being used again — the `templates.py`-level
+   ``assert not (ALL_TEMPLATE_WORDS & GATE_VOCABULARY)`` would fail at
+   import time the moment `codec-tasks-v2-mixed` existed. `codec-tasks-v1`
+   is different: it was hand-authored independently of the factory's word
+   pools, so banning its specific vocabulary is meaningful hygiene with no
+   such paradox.
+
 2. ``check_corpus`` — the CLI's actual comparator, run over a generated
-   corpus.jsonl against the parsed gate fixtures.
+   corpus.jsonl against the union of every gate's parsed fixtures. This is
+   the half the multi-``--gate`` CLI flag (below) parameterizes: unlike
+   ``GATE_VOCABULARY``, `check_corpus` compares specific fixture CONTENT
+   (goals/targets/contents/search), not raw vocabulary, so unioning
+   `codec-tasks-v1` and `codec-tasks-v2-mixed` fixtures here has none of
+   responsibility 1's paradox — it just means a generated corpus task can
+   never coincide with either frozen set's actual authored content.
 
 CLI: ``python3 -m tools.flywheel.factory.contamination --corpus
 corpus.jsonl --gate crates/bloomery-daemon/fixtures/codec-tasks-v1.toml
---out contamination-report.json`` — exits nonzero on ANY overlap.
+--gate crates/bloomery-daemon/fixtures/codec-tasks-v2-mixed.toml --out
+contamination-report.json`` — ``--gate`` is repeatable (checks run against
+the union of every gate given); exits nonzero on ANY overlap with ANY of
+them.
 """
 
 from __future__ import annotations
@@ -50,26 +75,37 @@ _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 @dataclass(frozen=True)
 class GateFixture:
-    """One `[[fixture]]` entry from the gate TOML."""
+    """One `[[fixture]]` entry from the gate TOML. `search`/`replace` are
+    `None` for an `expect = "refuse"` fixture (G5 design doc §2: a refuse
+    fixture carries no `[fixture.reference]` at all) — `None`, never a
+    fabricated empty string, so `check_corpus`'s `search_match` rule can
+    tell "nothing to compare" apart from "an empty search string" and skip
+    the comparison rather than risk a false positive."""
 
     name: str
     lens: str
     target: str
     files: dict[str, str]
     goal: str
-    search: str
-    replace: str
+    expect: str
+    search: str | None
+    replace: str | None
+    refusal_reason: str | None
 
 
 def load_gate_fixtures(path: Path) -> list[GateFixture]:
     """Parses the gate TOML (stdlib `tomllib`, per the brief) into
     structured fixtures, in file order (deterministic — TOML arrays
-    preserve order; never a `set`)."""
+    preserve order; never a `set`). Handles both fixture classes (G5
+    design doc §2): `expect` defaults to `"patch"` when absent (every
+    `codec-tasks-v1` fixture), matching the Rust parser's own default."""
     with open(path, "rb") as f:
         data = tomllib.load(f)
     fixtures = []
     for fx in data["fixture"]:
         files = {file_entry["path"]: file_entry["contents"] for file_entry in fx["file"]}
+        expect = fx.get("expect", "patch")
+        reference = fx.get("reference")
         fixtures.append(
             GateFixture(
                 name=fx["name"],
@@ -77,8 +113,10 @@ def load_gate_fixtures(path: Path) -> list[GateFixture]:
                 target=fx["target"],
                 files=files,
                 goal=fx["goal"],
-                search=fx["reference"]["search"],
-                replace=fx["reference"]["replace"],
+                expect=expect,
+                search=reference["search"] if reference is not None else None,
+                replace=reference["replace"] if reference is not None else None,
+                refusal_reason=fx.get("refusal_reason"),
             )
         )
     return fixtures
@@ -245,7 +283,7 @@ def check_corpus(rows: Iterable[dict], fixtures: list[GateFixture], jaccard_thre
                         "detail": f"corpus target {task['target']!r} matches gate target {fixture.target!r}",
                     }
                 )
-            if search_norm == normalize(fixture.search):
+            if fixture.search is not None and search_norm == normalize(fixture.search):
                 violations.append(
                     {
                         "rule": "search_match",
@@ -297,15 +335,32 @@ def _read_jsonl(path: Path) -> list[dict]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Contamination guard: prove the generated corpus is disjoint from codec-tasks-v1.")
+    parser = argparse.ArgumentParser(
+        description="Contamination guard: prove the generated corpus is disjoint from one or more gate sets."
+    )
     parser.add_argument("--corpus", required=True, type=Path, help="Path to corpus.jsonl (generate.py's output).")
-    parser.add_argument("--gate", required=True, type=Path, help="Path to the gate TOML (codec-tasks-v1.toml).")
+    parser.add_argument(
+        "--gate",
+        action="append",
+        dest="gates",
+        required=True,
+        type=Path,
+        metavar="PATH",
+        help=(
+            "Path to a gate TOML (e.g. codec-tasks-v1.toml). Repeatable — with the design doc "
+            "§3 change ('the contamination guard runs against both gate sets from now on'), "
+            "checks run against the UNION of every --gate given, so a plant in ANY one gate set "
+            "is caught."
+        ),
+    )
     parser.add_argument("--out", required=True, type=Path, help="Path to write the contamination report JSON.")
     parser.add_argument("--jaccard-threshold", type=float, default=0.8, help="Near-duplicate goal similarity threshold (default 0.8).")
     args = parser.parse_args(argv)
 
     rows = _read_jsonl(args.corpus)
-    fixtures = load_gate_fixtures(args.gate)
+    fixtures: list[GateFixture] = []
+    for gate_path in args.gates:
+        fixtures.extend(load_gate_fixtures(gate_path))
     report = check_corpus(rows, fixtures, jaccard_threshold=args.jaccard_threshold)
 
     out_data = {
@@ -316,16 +371,17 @@ def main(argv: list[str] | None = None) -> int:
     }
     args.out.write_text(json.dumps(out_data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
+    gate_paths_str = ", ".join(str(g) for g in args.gates)
     if not report.clean:
         print(
-            f"contamination guard: {len(report.violations)} violation(s) found against {args.gate} "
-            f"(see {args.out})",
+            f"contamination guard: {len(report.violations)} violation(s) found against "
+            f"[{gate_paths_str}] (see {args.out})",
             file=sys.stderr,
         )
         return 1
     print(
         f"contamination guard: clean — {report.corpus_tasks_checked} corpus task(s) checked against "
-        f"{report.gate_fixtures_checked} gate fixture(s)",
+        f"{report.gate_fixtures_checked} gate fixture(s) across [{gate_paths_str}]",
         file=sys.stderr,
     )
     return 0

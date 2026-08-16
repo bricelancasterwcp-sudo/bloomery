@@ -86,9 +86,24 @@ pub struct Reference {
 }
 
 /// Parses `toml_text` under the wire format above and checks that every
-/// fixture's `target` names one of its own `files`. Any other malformed
-/// shape (missing field, wrong type, etc.) surfaces as `toml`'s own parse
-/// error, which already names the offending field.
+/// `expect = "patch"` fixture's `target` names one of its own `files`.
+///
+/// This check applies ONLY to patch-class fixtures. A `refuse` fixture's
+/// `target` MAY be absent from `files` — that absence IS the missing-target
+/// family (G5 design doc §5): the goal names a file that genuinely does not
+/// exist in the fixture dir. A `refuse` fixture whose target IS among files
+/// is the other family (defect-absent) and remains representable too — this
+/// function does not require either shape from a refuse fixture, only that
+/// a *patch* fixture's target is real, since only a patch fixture's
+/// `reference` fix is meant to land against it.
+///
+/// (Task 4 cross-task fix: this check used to be unconditional, which made
+/// the missing-target refuse family unrepresentable in this schema — see
+/// `.superpowers/sdd/2026-08-16-flywheel2-honest-refusal/task-3-report.md`'s
+/// "Concerns" section, which flagged exactly this gap.)
+///
+/// Any other malformed shape (missing field, wrong type, etc.) surfaces as
+/// `toml`'s own parse error, which already names the offending field.
 ///
 /// Errors are 1-indexed and named with the fixture's position and name
 /// (e.g. `"fixture 7 (py-...): target 'x.py' not among files"`) so an
@@ -99,7 +114,9 @@ pub fn parse_fixture_set(toml_text: &str) -> Result<FixtureSet, String> {
         toml::from_str(toml_text).map_err(|e| format!("failed to parse fixture set: {e}"))?;
     for (i, fixture) in set.fixtures.iter().enumerate() {
         let position = i + 1;
-        if !fixture.files.iter().any(|f| f.path == fixture.target) {
+        if fixture.expect == Expect::Patch
+            && !fixture.files.iter().any(|f| f.path == fixture.target)
+        {
             return Err(format!(
                 "fixture {position} ({}): target '{}' not among files",
                 fixture.name, fixture.target
@@ -355,10 +372,122 @@ contents = "broken\n"
         assert!(err.contains("reference"), "{err}");
     }
 
+    /// Task 3's cross-task gap, fixed here: the target-among-files check
+    /// (`parse_fixture_set`'s first loop) used to be unconditional, which
+    /// made a missing-target *refuse* fixture unrepresentable — exactly the
+    /// family this task's `templates_refusal.py` needs to author. The check
+    /// now applies ONLY when `expect = "patch"`; a `refuse` fixture whose
+    /// target is genuinely absent from `files` (the missing-target family)
+    /// must parse cleanly.
     #[test]
-    fn shipped_v2_mixed_placeholder_parses_and_is_named_a_placeholder() {
-        let set = shipped_fixture_set_v2_mixed().expect("placeholder set must parse");
-        assert_eq!(set.set, V2_MIXED_PLACEHOLDER_SET_NAME);
+    fn refuse_fixture_with_absent_target_parses() {
+        let toml_text = r#"
+set = "codec-tasks-v2-mixed"
+
+[[fixture]]
+name = "missing-target-example"
+lens = "plaintext"
+target = "does-not-exist.txt"
+goal = "does-not-exist.txt needs a fix -- check it first"
+expect = "refuse"
+refusal_reason = "Cannot: does-not-exist.txt does not exist in this workspace."
+
+[[fixture.file]]
+path = "sibling.txt"
+contents = "a real sibling file\n"
+"#;
+        let set = parse_fixture_set(toml_text)
+            .expect("a refuse fixture with an absent target must parse");
+        assert_eq!(set.fixtures[0].expect, Expect::Refuse);
+        assert!(
+            !set.fixtures[0]
+                .files
+                .iter()
+                .any(|f| f.path == set.fixtures[0].target),
+            "the whole point: target is genuinely absent from files"
+        );
+    }
+
+    /// The mirror pin: a `refuse` fixture whose target DOES appear among
+    /// `files` (the defect-absent family) must also still parse — the
+    /// relaxed check does not accidentally forbid that case either.
+    #[test]
+    fn refuse_fixture_with_present_target_still_parses() {
+        let toml_text = r#"
+set = "codec-tasks-v2-mixed"
+
+[[fixture]]
+name = "defect-absent-example"
+lens = "plaintext"
+target = "report.txt"
+goal = "report.txt claims the totals column is wrong -- check first"
+expect = "refuse"
+refusal_reason = "No change needed: the totals already sum correctly."
+
+[[fixture.file]]
+path = "report.txt"
+contents = "totals: 2 + 2 = 4\n"
+"#;
+        let set = parse_fixture_set(toml_text)
+            .expect("a refuse fixture with a present target must still parse");
+        assert!(set.fixtures[0]
+            .files
+            .iter()
+            .any(|f| f.path == set.fixtures[0].target));
+    }
+
+    /// The relaxation must NOT weaken `expect = "patch"` fixtures: a patch
+    /// fixture with an absent target still errors with the existing named
+    /// message (mirrors `rejects_a_target_absent_from_files`, but pins the
+    /// explicit `expect = "patch"` spelling too, not just the defaulted
+    /// case, so the class-conditional check is proven from both sides).
+    #[test]
+    fn explicit_patch_fixture_with_absent_target_still_errors() {
+        let toml_text = r#"
+set = "codec-tasks-v2-mixed"
+
+[[fixture]]
+name = "bad-patch"
+lens = "plaintext"
+target = "missing.txt"
+goal = "goal mentioning missing.txt"
+expect = "patch"
+
+[[fixture.file]]
+path = "other.txt"
+contents = "hello"
+
+[fixture.reference]
+search = "hello"
+replace = "goodbye"
+"#;
+        let err = parse_fixture_set(toml_text)
+            .expect_err("a patch fixture still requires target among files");
+        assert!(err.contains("fixture 1 (bad-patch)"), "{err}");
+        assert!(err.contains("missing.txt"), "{err}");
+        assert!(err.contains("not among files"), "{err}");
+    }
+
+    /// Task 4 lands the real, frozen `codec-tasks-v2-mixed` set (G5 design
+    /// doc §3), replacing the Task-2 placeholder content in place — same
+    /// path, same function, same struct shape, so no caller (`boot.rs`)
+    /// changes. This test replaces
+    /// `shipped_v2_mixed_placeholder_parses_and_is_named_a_placeholder`
+    /// (which asserted the OPPOSITE: that the shipped file was still the
+    /// placeholder) now that it no longer is — the exhaustive structural
+    /// checks (20 fixtures, 10+10, both lenses per class, names unique
+    /// across both shipped sets, references land, goal-plausibility) live
+    /// in `tests/codec_fixtures_test.rs`; this unit test only pins the two
+    /// facts scoped to this module: the set is no longer the placeholder,
+    /// and its name is exactly `"codec-tasks-v2-mixed"`.
+    #[test]
+    fn shipped_v2_mixed_is_the_real_frozen_set_not_a_placeholder() {
+        let set = shipped_fixture_set_v2_mixed().expect("the real v2-mixed set must parse");
+        assert_eq!(set.set, "codec-tasks-v2-mixed");
+        assert_ne!(
+            set.set, V2_MIXED_PLACEHOLDER_SET_NAME,
+            "boot::run_boot_g5_probe's placeholder guard must never trigger on the real set"
+        );
         assert!(set.fixtures.iter().any(|f| f.expect == Expect::Patch));
         assert!(set.fixtures.iter().any(|f| f.expect == Expect::Refuse));
     }
