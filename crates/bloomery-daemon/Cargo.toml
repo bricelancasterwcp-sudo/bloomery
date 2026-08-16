@@ -3,6 +3,16 @@ name = "bloomery-daemon"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+# Explicit target so the produced binary is named `flywheel-tool` (hyphen),
+# matching the flywheel task-1 brief's wire contract and
+# `tests/flywheel_tool_test.rs`'s `env!("CARGO_BIN_EXE_flywheel-tool")` —
+# cargo's autobins default would otherwise name it `flywheel_tool` (the
+# `src/bin/` filename verbatim, underscore). No GPU toolchain required to
+# build this target — see `src/bin/flywheel_tool.rs`'s module docs.
+name = "flywheel-tool"
+path = "src/bin/flywheel_tool.rs"
+
 [features]
 # The real llama.cpp backend, forwarded straight through to bloomery-substrate
 # so the whole workspace stays GPU-free by default (see that crate's Cargo.toml).
