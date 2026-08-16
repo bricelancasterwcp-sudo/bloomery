@@ -173,7 +173,7 @@ fn create_task<S: Substrate + Send + 'static>(
     // this arm is unreachable given the check above already passed — matched
     // explicitly rather than unwrapped so that invariant stays a compile-time
     // fact, not an assumption.
-    let (patch_codec, mutating_verbs) = match task_policy {
+    let (patch_codec, mutating_verbs, think_preseed) = match task_policy {
         Some(policy) => policy,
         None => return unknown_agent(agent_id),
     };
@@ -207,6 +207,12 @@ fn create_task<S: Substrate + Send + 'static>(
         patch_codec,
         bounds,
         mutating_verbs,
+        // Amendment 2 (docs/superpowers/evidence/2026-08-15-g4-protocol.md
+        // §10): the same `agent_task_policy` one-source tuple as
+        // `patch_codec`/`mutating_verbs` above — a preseeded model's HTTP
+        // task renders with the pre-seed, resolved through the identical
+        // lookup rather than a second, potentially-drifting path.
+        think_preseed,
     };
 
     let task_id = registry.spawn_task(Arc::clone(pager), agent_id.to_string(), spec, journal_path);

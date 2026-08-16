@@ -68,6 +68,12 @@ pub struct TaskSpec {
     /// `true`; a later task (Task 8) wires the real per-model value decided
     /// by the gate at agent-admission time.
     pub mutating_verbs: bool,
+    /// Selects the envelope-v2 (think-preseeded) lens
+    /// (`docs/superpowers/evidence/2026-08-15-g4-protocol.md` §10, Amendment
+    /// 2): when `true`, [`render_prompt`] appends the literal
+    /// [`THINK_PRESEED`] pre-seed at the very end of the rendered prompt.
+    /// `false` renders exactly envelope-v1's prompt, byte-for-byte.
+    pub think_preseed: bool,
 }
 
 /// How a task ended. `run_task` only ever returns `Done`, `BudgetExhausted`,
@@ -189,8 +195,23 @@ fn record_step(
     Ok(())
 }
 
+/// The envelope-v2 pre-seed literal (protocol
+/// `docs/superpowers/evidence/2026-08-15-g4-protocol.md` §10, Amendment 2):
+/// a pre-closed `<think>` block appended at the very end of the rendered
+/// prompt so the model continues generation already past its own thinking
+/// phase, rather than opening a fresh one. Motivated by the 2026-08-15 eve
+/// feasibility probe (Q3 subject) recorded in §10: `/no_think` did NOT
+/// suppress thinking under the raw-completion lens, while appending this
+/// pre-closed think block did. Exact bytes are load-bearing — [`run_task`]'s
+/// mutation check pins them, and the codec probe's verdict `detail` records
+/// which lens produced a result, never averaging v1 and v2 rungs together.
+const THINK_PRESEED: &str = "<think>\n\n</think>\n\n";
+
 /// Builds the prompt for one model turn: the task's goal, the verb card for
-/// `spec.patch_codec`, and everything accumulated in `transcript` so far.
+/// `spec.patch_codec`, and everything accumulated in `transcript` so far —
+/// then, when `spec.think_preseed` is set (protocol §10, Amendment 2), the
+/// literal [`THINK_PRESEED`] appended at the very end, after the transcript,
+/// with nothing after it.
 ///
 /// Deliberately does no windowing or truncation of its own. The pager's own
 /// `infer` is what refuses — with arithmetic — a prompt too large for the
@@ -200,11 +221,16 @@ fn record_step(
 /// (see `pager.rs`'s module docs) forbids applying to this loop's own
 /// prompt.
 fn render_prompt(spec: &TaskSpec, transcript: &str) -> String {
-    format!(
+    let prompt = format!(
         "{}\n\n{}\n\n{transcript}",
         spec.goal,
         verb_card_for(spec.patch_codec, spec.mutating_verbs)
-    )
+    );
+    if spec.think_preseed {
+        format!("{prompt}{THINK_PRESEED}")
+    } else {
+        prompt
+    }
 }
 
 /// What one call to [`propose_action`] produced.

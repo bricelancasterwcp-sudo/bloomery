@@ -336,6 +336,7 @@ mod tests {
             patch_codec: PatchCodec::WholeFile,
             bounds: ExecBounds::default(),
             mutating_verbs: false,
+            think_preseed: false,
         };
 
         let task_id =
@@ -393,6 +394,7 @@ mod tests {
             patch_codec: PatchCodec::SearchReplace,
             bounds: ExecBounds::default(),
             mutating_verbs: true,
+            think_preseed: false,
         };
 
         let id1 = registry.spawn_task(
@@ -512,6 +514,7 @@ mod tests {
             patch_codec: PatchCodec::SearchReplace,
             bounds: ExecBounds::default(),
             mutating_verbs: true,
+            think_preseed: false,
         };
 
         let task_id =

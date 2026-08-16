@@ -26,7 +26,7 @@ use bloomery_daemon::agents::ImageStore;
 use bloomery_daemon::codec_probe::fixtures::{parse_fixture_set, FixtureSet};
 use bloomery_daemon::codec_probe::{
     fixture_set_unparseable_reason, gate_decision, is_provisional, probe_aborted_reason,
-    run_boot_codec_probe, run_codec_probe, should_run_codec_probe, ENVELOPE_LENS,
+    run_boot_codec_probe, run_codec_probe, should_run_codec_probe, ENVELOPE_LENS, ENVELOPE_LENS_V2,
     FIXTURE_BUDGET_TOKENS, FIXTURE_MAX_STEPS, POST_DISABLED_CODEC_SKIP_REASON,
 };
 use bloomery_daemon::pager::Pager;
@@ -308,6 +308,8 @@ fn instrument_parameters_match_the_pre_registered_protocol() {
     assert_eq!(FIXTURE_BUDGET_TOKENS, 30_000);
     assert_eq!(FIXTURE_MAX_STEPS, 6);
     assert_eq!(ENVELOPE_LENS, "bloomery-task-envelope-v1");
+    // Protocol §10, Amendment 2 — the second envelope lens's pinned name.
+    assert_eq!(ENVELOPE_LENS_V2, "bloomery-task-envelope-v2");
 }
 
 // ---------------------------------------------------------------------------
@@ -418,6 +420,10 @@ fn all_fixtures_landing_keeps_mutating_verbs_and_journals_one_verdict() {
                 "the verdict must name its lens: {detail}"
             );
             assert!(
+                !detail.contains(ENVELOPE_LENS_V2),
+                "an unpreseeded model's verdict must name v1, never v2: {detail}"
+            );
+            assert!(
                 detail.contains("default (codecs unmeasured)"),
                 "an unprofiled model's codec provenance must say so: {detail}"
             );
@@ -435,6 +441,54 @@ fn all_fixtures_landing_keeps_mutating_verbs_and_journals_one_verdict() {
         )),
         "a probe spec must never be demoted"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Protocol §10, Amendment 2: the envelope-v2 (think-preseeded) lens
+// ---------------------------------------------------------------------------
+
+/// The v2 companion to `all_fixtures_landing_keeps_mutating_verbs_and_
+/// journals_one_verdict` above: same fixture set, same scripted replies, same
+/// happy-path landing — the only difference is `set_think_preseed(MODEL,
+/// true)` before the probe runs. The verdict's `detail` must name
+/// `ENVELOPE_LENS_V2`, never the v1 name, proving `run_codec_probe` reads the
+/// model's configured lens (via `ProbeContext::think_preseed`) rather than
+/// hardcoding v1.
+#[test]
+fn a_preseeded_model_probe_journals_the_v2_lens_in_the_verdict_detail() {
+    let dir = fresh_dir("preseeded-verdict");
+    let mut p = build_pager(
+        &dir,
+        vec![
+            sr_patch("a.txt", "broken", "fixed"),
+            done("repaired a.txt"),
+            sr_patch("b.txt", "broken", "fixed"),
+            done("repaired b.txt"),
+        ],
+    );
+    p.set_think_preseed(MODEL, true).unwrap();
+    let pager = Mutex::new(p);
+
+    let result =
+        run_codec_probe(&pager, MODEL, &test_set(), &dir.join("scratch")).expect("probe completes");
+
+    assert_eq!(result.landed, 2);
+    assert_eq!(result.n, 2);
+
+    let events = pager_events(&dir);
+    match verdict_events(&events)[0] {
+        Event::CodecVerdict { detail, .. } => {
+            assert!(
+                detail.contains(ENVELOPE_LENS_V2),
+                "a preseeded model's verdict must name v2: {detail}"
+            );
+            assert!(
+                !detail.contains(ENVELOPE_LENS),
+                "a v2 verdict must never also carry the v1 name: {detail}"
+            );
+        }
+        other => panic!("expected CodecVerdict, got {other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------------------

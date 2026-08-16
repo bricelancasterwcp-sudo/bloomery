@@ -81,4 +81,40 @@ impl<S: Substrate> crate::pager::Pager<S> {
         entry.weights_vram_bytes = weights_vram_bytes;
         Ok(())
     }
+
+    /// Sets `model`'s envelope-v2 (think-preseeded) lens flag
+    /// (`docs/superpowers/evidence/2026-08-15-g4-protocol.md` §10, Amendment
+    /// 2). A sibling setter to [`Pager::set_model_tuning`] rather than a
+    /// third parameter on it: `set_model_tuning` already has eight call
+    /// sites across this crate's test suite (`pager_weights_test.rs`) that
+    /// pass exactly two tuning arguments, and a third positional `bool`
+    /// there would silently reorder or break every one of them for a flag
+    /// that is conceptually independent (task-loop presentation, not VRAM
+    /// accounting) — a dedicated setter is the smaller diff.
+    ///
+    /// `main.rs` is the only production caller, wiring
+    /// `ModelSpec::think_preseed()` in alongside `set_model_tuning`.
+    /// `UnknownModel` if `model` was never registered.
+    pub fn set_think_preseed(
+        &mut self,
+        model: &str,
+        think_preseed: bool,
+    ) -> Result<(), PagerError> {
+        let entry = self
+            .models
+            .get_mut(model)
+            .ok_or_else(|| PagerError::UnknownModel(model.to_string()))?;
+        entry.think_preseed = think_preseed;
+        Ok(())
+    }
+
+    /// Whether `model` is configured for the envelope-v2 lens — `false`
+    /// (envelope-v1) for an unknown model, matching every other per-model
+    /// accessor's fail-closed-to-default collapse (`model_patch_codec`,
+    /// `model_mutating_verbs`).
+    pub fn model_think_preseed(&self, model: &str) -> bool {
+        self.models
+            .get(model)
+            .is_some_and(|entry| entry.think_preseed)
+    }
 }

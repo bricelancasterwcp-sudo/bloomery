@@ -44,6 +44,13 @@ pub enum ModelSpec {
         n_gpu_layers: Option<u32>,
         #[serde(default)]
         weights_vram_mib: Option<u64>,
+        /// Selects the envelope-v2 (think-preseeded) lens for this model
+        /// (`docs/superpowers/evidence/2026-08-15-g4-protocol.md` §10,
+        /// Amendment 2). An explicit operator choice, never inferred:
+        /// omitting the key (or using the bare-path shape) is `false` —
+        /// envelope-v1, unchanged.
+        #[serde(default)]
+        think_preseed: bool,
     },
 }
 
@@ -77,6 +84,18 @@ impl ModelSpec {
             Self::Tuned {
                 weights_vram_mib, ..
             } => *weights_vram_mib,
+        }
+    }
+
+    /// Returns whether this model is configured for the envelope-v2
+    /// (think-preseeded) lens (protocol §10, Amendment 2).
+    ///
+    /// The `Path` variant returns `false` (no tuning configured), matching
+    /// every other tuning accessor's bare-path default.
+    pub fn think_preseed(&self) -> bool {
+        match self {
+            Self::Path(_) => false,
+            Self::Tuned { think_preseed, .. } => *think_preseed,
         }
     }
 }

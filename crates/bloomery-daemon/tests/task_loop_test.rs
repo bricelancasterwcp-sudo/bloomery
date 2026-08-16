@@ -125,6 +125,16 @@ fn demoted_spec(grant: Grant, cwd: PathBuf, max_steps: u32, mutating_verbs: bool
         patch_codec: PatchCodec::SearchReplace,
         bounds: bounds(),
         mutating_verbs,
+        think_preseed: false,
+    }
+}
+
+/// Like [`spec`], but with `think_preseed: true` — the envelope-v2 lens
+/// (`docs/superpowers/evidence/2026-08-15-g4-protocol.md` §10, Amendment 2).
+fn preseeded_spec(grant: Grant, cwd: PathBuf, max_steps: u32) -> TaskSpec {
+    TaskSpec {
+        think_preseed: true,
+        ..demoted_spec(grant, cwd, max_steps, true)
     }
 }
 
@@ -606,4 +616,68 @@ fn a_demoted_spec_still_executes_read_normally() {
     );
     assert!(result.steps[0].content.contains("hello"));
     assert_eq!(result.steps[1].verb, "done");
+}
+
+/// Protocol §10 (Amendment 2, envelope-v2): with `think_preseed: true`, the
+/// prompt the substrate actually receives ENDS WITH the literal pre-seed
+/// `<think>\n\n</think>\n\n` — asserted with `ends_with`, not `contains`, so
+/// a mutation that appended the literal anywhere else in the prompt (rather
+/// than strictly after the transcript, with nothing after it) would still
+/// fail this test. A single-turn `[done]` task means `FakeSubstrate`'s
+/// `ctx_history` holds exactly the one rendered prompt (no `\n`-joined prior
+/// turns to introduce ambiguity about which turn "ends" the string).
+#[test]
+fn a_preseeded_spec_ends_the_rendered_prompt_with_the_think_preseed_literal() {
+    let dir = fresh_dir("preseed-on");
+    let (sb, g) = sandbox(&dir);
+    let (mut pager, agent_id) = fixture(
+        &dir,
+        1_000_000,
+        vec![scripted("<action verb=\"done\">\nok\n</action>")],
+    );
+    let task_journal_path = dir.join("task.jsonl");
+    let mut task_journal = Journal::open(&task_journal_path).unwrap();
+    let spec = preseeded_spec(g, sb, 5);
+
+    let result = run_task(&mut pager, &agent_id, &spec, &mut task_journal);
+
+    assert_eq!(result.status, TaskStatus::Done);
+    let history = pager
+        .substrate()
+        .ctx_history(1)
+        .expect("context 1 is still resident after the task's only step");
+    assert!(
+        history.ends_with("<think>\n\n</think>\n\n"),
+        "the rendered prompt must end with the literal pre-seed, got: {history:?}"
+    );
+}
+
+/// The counterpart: with `think_preseed: false` (envelope-v1, the default),
+/// the pre-seed literal is absent ANYWHERE in the rendered prompt — not just
+/// missing from the end.
+#[test]
+fn a_non_preseeded_spec_never_carries_the_think_preseed_literal() {
+    let dir = fresh_dir("preseed-off");
+    let (sb, g) = sandbox(&dir);
+    let (mut pager, agent_id) = fixture(
+        &dir,
+        1_000_000,
+        vec![scripted("<action verb=\"done\">\nok\n</action>")],
+    );
+    let task_journal_path = dir.join("task.jsonl");
+    let mut task_journal = Journal::open(&task_journal_path).unwrap();
+    let spec = spec(g, sb, 5);
+    assert!(!spec.think_preseed, "spec()'s default must be false");
+
+    let result = run_task(&mut pager, &agent_id, &spec, &mut task_journal);
+
+    assert_eq!(result.status, TaskStatus::Done);
+    let history = pager
+        .substrate()
+        .ctx_history(1)
+        .expect("context 1 is still resident after the task's only step");
+    assert!(
+        !history.contains("<think>\n\n</think>\n\n"),
+        "a non-preseeded prompt must never carry the literal, got: {history:?}"
+    );
 }

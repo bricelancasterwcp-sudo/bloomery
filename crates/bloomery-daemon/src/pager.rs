@@ -53,14 +53,12 @@ pub use error::PagerError;
 pub use status::{AgentInfo, AgentStatus, CodecGateStatus, ModelStatus, StatusReport, TierStatus};
 
 /// VRAM held back from the window law for allocator and compute buffers.
-///
 /// Zero by default: the pager has not measured this machine's overhead, and
 /// an unmeasured term is not silently invented (law 5). The daemon wires the
 /// operator's `config.overhead_mib` in via [`Pager::set_overhead_bytes`].
 const DEFAULT_OVERHEAD_BYTES: u64 = 0;
 
 /// VRAM reserved per resident context *on top of* its KV cache.
-///
 /// Zero by default for the same reason as [`DEFAULT_OVERHEAD_BYTES`]: the
 /// pager has measured nothing about this machine and will not invent a
 /// number. The daemon wires `config.ctx_overhead_mib` in via
@@ -95,7 +93,6 @@ const DEFAULT_BUDGET_TOKENS: u64 = 200_000;
 const DEFAULT_TIME_SHARE_QUANTUM_MS: u64 = 30_000;
 
 /// Source of bloomery's static VRAM budget — see [`Pager::new`].
-///
 /// `Send + Sync` from the start: Task 14 shares one pager across request
 /// threads behind a lock, and adding the bounds later would be a breaking
 /// change to every caller that built one.
@@ -145,6 +142,8 @@ struct ModelEntry {
     n_gpu_layers_override: Option<u32>,
     /// Declared weights-VRAM ceiling in bytes (`pager::tuning`); `None` -> full charge.
     weights_vram_bytes: Option<u64>,
+    /// Envelope-v2 (think-preseeded) lens flag (`pager::tuning`, protocol §10); `false` -> v1.
+    think_preseed: bool,
 }
 
 pub struct Pager<S: Substrate> {
@@ -471,6 +470,7 @@ impl<S: Substrate> Pager<S> {
                 codec_gate: None,
                 n_gpu_layers_override: None,
                 weights_vram_bytes: None,
+                think_preseed: false,
             },
         );
         Ok(())

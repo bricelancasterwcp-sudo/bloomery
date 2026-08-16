@@ -151,6 +151,10 @@ assay = { enabled = false, python = "python3" }
     );
     assert_eq!(model.n_gpu_layers(), None);
     assert_eq!(model.weights_vram_mib(), None);
+    assert!(
+        !model.think_preseed(),
+        "a bare path entry must default think_preseed to false"
+    );
 }
 
 /// A table entry with path, n_gpu_layers, and weights_vram_mib parses and
@@ -205,6 +209,32 @@ path = "/mnt/extra/models/qwen3-14b.gguf"
     );
     assert_eq!(model.n_gpu_layers(), None);
     assert_eq!(model.weights_vram_mib(), None);
+    assert!(
+        !model.think_preseed(),
+        "a table entry that omits think_preseed must default to false"
+    );
+}
+
+/// A table entry with `think_preseed = true` parses, and the accessor
+/// reflects it (protocol §10, Amendment 2 — the envelope-v2 lens is an
+/// explicit per-model operator choice).
+#[test]
+fn think_preseed_true_parses() {
+    let toml = r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = { name = "enthusiast-16gb", emulated = false }
+assay = { enabled = false, python = "python3" }
+
+[models."qwen3.8:27b"]
+path = "/mnt/extra/models/qwen3.8-27b.gguf"
+think_preseed = true
+"#;
+    let path = write_temp_toml("think-preseed-true.toml", toml);
+    let config = load_config(&path).unwrap();
+
+    let model = config.models.get("qwen3.8:27b").unwrap();
+    assert!(model.think_preseed());
 }
 
 /// A config mixing both bare-string and table-entry model shapes parses

@@ -123,16 +123,29 @@ impl<S: Substrate> crate::pager::Pager<S> {
             .is_some()
     }
 
-    /// The `(patch_codec, mutating_verbs)` pair a running task dispatches
-    /// under, resolved through `agent_id`'s model. `None` when `agent_id`
-    /// names no agent — the same `404`-shaped signal
+    /// The `(patch_codec, mutating_verbs, think_preseed)` triple a running
+    /// task dispatches under, resolved through `agent_id`'s model. `None`
+    /// when `agent_id` names no agent — the same `404`-shaped signal
     /// [`Pager::agent_budget_granted`] gives Task 5's task-creation route,
     /// for the codec-gate policy Task 8's route needs alongside it.
-    pub fn agent_task_policy(&self, agent_id: &str) -> Option<(PatchCodec, bool)> {
+    ///
+    /// `think_preseed` (protocol §10, Amendment 2) joined this tuple rather
+    /// than growing a separate accessor path: `api_task.rs::create_task` is
+    /// this method's one caller with a live `agent_id`, and resolving all
+    /// three fields through the one lookup keeps `patch_codec`/
+    /// `mutating_verbs`/`think_preseed` from ever being read through two
+    /// different call paths that could drift apart (the same one-source rule
+    /// `pager::tuning`'s module doc states for `effective_weights_bytes`).
+    /// The codec probe has no agent yet when it needs this model's
+    /// `think_preseed` (it reads it before creating one, alongside
+    /// `model_patch_codec`/`model_codec_from_profile`), so it reads the same
+    /// underlying [`Pager::model_think_preseed`] directly instead.
+    pub fn agent_task_policy(&self, agent_id: &str) -> Option<(PatchCodec, bool, bool)> {
         let model = &self.table.get(agent_id)?.model;
         Some((
             self.model_patch_codec(model),
             self.model_mutating_verbs(model),
+            self.model_think_preseed(model),
         ))
     }
 
