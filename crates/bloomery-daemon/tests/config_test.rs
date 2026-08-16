@@ -577,3 +577,49 @@ assay = { enabled = false, python = "python3" }
     let model = config.models.get("qwen3:14b").unwrap();
     assert_eq!(model.kv_per_token_bytes(), None);
 }
+
+// ---------------------------------------------------------------------------
+// `g5_probe` (docs/superpowers/evidence/2026-08-16-g5-protocol.md §1: "opt-in
+// via `g5_probe = true` ... absent = false")
+// ---------------------------------------------------------------------------
+
+/// `g5_probe = true` parses and the accessor reflects it.
+#[test]
+fn g5_probe_true_parses() {
+    let toml = r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = { name = "enthusiast-16gb", emulated = false }
+assay = { enabled = false, python = "python3" }
+
+[models."qwen3.8:27b"]
+path = "/mnt/extra/models/qwen3.8-27b.gguf"
+g5_probe = true
+"#;
+    let path = write_temp_toml("g5-probe-true.toml", toml);
+    let config = load_config(&path).unwrap();
+    let model = config.models.get("qwen3.8:27b").unwrap();
+    assert!(model.g5_probe());
+}
+
+/// A table entry that omits `g5_probe` defaults to `false`, and the
+/// bare-path shape (which cannot express any opt-in) is `false` too.
+#[test]
+fn g5_probe_absent_defaults_to_false_for_both_shapes() {
+    let toml = r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = { name = "enthusiast-16gb", emulated = false }
+assay = { enabled = false, python = "python3" }
+
+[models]
+"qwen3:14b" = "/mnt/extra/models/qwen3-14b.gguf"
+
+[models."qwen3.8:27b"]
+path = "/mnt/extra/models/qwen3.8-27b.gguf"
+"#;
+    let path = write_temp_toml("g5-probe-absent.toml", toml);
+    let config = load_config(&path).unwrap();
+    assert!(!config.models.get("qwen3:14b").unwrap().g5_probe());
+    assert!(!config.models.get("qwen3.8:27b").unwrap().g5_probe());
+}

@@ -120,9 +120,40 @@ fn every_goal_is_non_empty_and_names_its_target() {
 fn search_never_equals_replace() {
     let set = shipped_fixture_set().expect("shipped_fixture_set");
     for f in &set.fixtures {
+        let reference = f
+            .reference
+            .as_ref()
+            .unwrap_or_else(|| panic!("fixture {}: expect=\"patch\" but no reference", f.name));
         assert_ne!(
-            f.reference.search, f.reference.replace,
+            reference.search, reference.replace,
             "fixture {}: search == replace, not a repair",
+            f.name
+        );
+    }
+}
+
+/// G5 design doc §2: `expect` is absent from every v1 fixture, so it must
+/// default to `Patch` — the schema-level compat pin, restated at the
+/// shipped-set level.
+#[test]
+fn every_v1_fixture_defaults_to_patch_expect() {
+    use bloomery_daemon::codec_probe::fixtures::Expect;
+    let set = shipped_fixture_set().expect("shipped_fixture_set");
+    for f in &set.fixtures {
+        assert_eq!(
+            f.expect,
+            Expect::Patch,
+            "fixture {}: not patch-class",
+            f.name
+        );
+        assert!(
+            f.reference.is_some(),
+            "fixture {}: missing reference",
+            f.name
+        );
+        assert!(
+            f.refusal_reason.is_none(),
+            "fixture {}: a v1 fixture must not carry a refusal_reason",
             f.name
         );
     }
@@ -138,9 +169,13 @@ fn every_reference_fix_lands_through_the_real_instrument() {
     let set = shipped_fixture_set().expect("shipped_fixture_set");
     for f in &set.fixtures {
         let initial = target_contents(f);
+        let reference = f
+            .reference
+            .as_ref()
+            .unwrap_or_else(|| panic!("fixture {}: expect=\"patch\" but no reference", f.name));
         let body = PatchBody::SearchReplace {
-            search: f.reference.search.clone(),
-            replace: f.reference.replace.clone(),
+            search: reference.search.clone(),
+            replace: reference.replace.clone(),
         };
         let landing = match f.lens.as_str() {
             "python" => land(initial, &body, &PythonLens),

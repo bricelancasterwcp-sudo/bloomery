@@ -124,6 +124,15 @@ pub struct ModelStatus {
     /// one. `None` renders as JSON `null` — never a confident zero — so a
     /// reader can tell "measured 0/20" from "never measured" at a glance.
     pub codec_gate: Option<CodecGateStatus>,
+    /// The G5 done-trust mark (`docs/superpowers/evidence/2026-08-16-g5-protocol.md`
+    /// §3): both class decisions cleared their ≥80% floor. `None` = never
+    /// measured — the fail-closed-analog "unmeasured", never a fake pass
+    /// (design doc §4). Advisory only: unlike [`ModelStatus::mutating_verbs`],
+    /// nothing reads this for enforcement.
+    pub done_trust: Option<bool>,
+    /// This model's stored G5 gate, or `None` when it has never completed a
+    /// mixed-set probe — same null-not-zero rule as [`ModelStatus::codec_gate`].
+    pub refusal_gate: Option<RefusalGateStatus>,
 }
 
 /// One model's stored G4 gate, as `/status` renders it (protocol §5).
@@ -139,6 +148,24 @@ pub struct CodecGateStatus {
     pub n: u32,
     pub interval95: [f64; 2],
     pub provisional: bool,
+}
+
+/// One model's stored G5 gate, as `/status` renders it (protocol §3).
+/// `done_trust` is deliberately not repeated here — same reasoning as
+/// [`CodecGateStatus`] not repeating `mutating_verbs`: it lives on
+/// [`ModelStatus::done_trust`], the one rendered value.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RefusalGateStatus {
+    pub fixture_set: String,
+    pub codec: &'static str,
+    pub patch_landed: u32,
+    pub patch_n: u32,
+    pub patch_interval95: [f64; 2],
+    pub patch_provisional: bool,
+    pub refuse_landed: u32,
+    pub refuse_n: u32,
+    pub refuse_interval95: [f64; 2],
+    pub refuse_provisional: bool,
 }
 
 /// Stable wire spelling for the binding term of the window law.
@@ -208,6 +235,19 @@ impl<S: bloomery_substrate::Substrate> crate::pager::Pager<S> {
                     n: g.n,
                     interval95: [g.interval95.0, g.interval95.1],
                     provisional: g.provisional,
+                }),
+                done_trust: m.refusal_gate.as_ref().map(|g| g.done_trust),
+                refusal_gate: m.refusal_gate.as_ref().map(|g| RefusalGateStatus {
+                    fixture_set: g.fixture_set.clone(),
+                    codec: codec_gate::patch_codec_str(g.codec),
+                    patch_landed: g.patch_landed,
+                    patch_n: g.patch_n,
+                    patch_interval95: [g.patch_interval95.0, g.patch_interval95.1],
+                    patch_provisional: g.patch_provisional,
+                    refuse_landed: g.refuse_landed,
+                    refuse_n: g.refuse_n,
+                    refuse_interval95: [g.refuse_interval95.0, g.refuse_interval95.1],
+                    refuse_provisional: g.refuse_provisional,
                 }),
             })
             .collect();

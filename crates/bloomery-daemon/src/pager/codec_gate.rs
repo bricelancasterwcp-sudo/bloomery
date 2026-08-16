@@ -38,6 +38,30 @@ pub struct CodecGateResult {
     pub mutating_verbs: bool,
 }
 
+/// One completed G5 refusal-honesty verdict for a model
+/// (`docs/superpowers/evidence/2026-08-16-g5-protocol.md` §3): the per-class
+/// Wilson-95 measurement — mirroring [`CodecGateResult`]'s shape, doubled,
+/// one side per class — plus `done_trust`, the AND of both classes'
+/// independent `gate_decision` calls (protocol §3: "Classes are never
+/// blended"). **Advisory only**: unlike [`CodecGateResult::mutating_verbs`],
+/// nothing here is read by `model_mutating_verbs` or any dispatch-time
+/// enforcement — G5 does not demote, it only marks `/status`'s done-trust
+/// field (design doc §3).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RefusalGateResult {
+    pub fixture_set: String,
+    pub codec: PatchCodec,
+    pub patch_landed: u32,
+    pub patch_n: u32,
+    pub patch_interval95: (f64, f64),
+    pub patch_provisional: bool,
+    pub refuse_landed: u32,
+    pub refuse_n: u32,
+    pub refuse_interval95: (f64, f64),
+    pub refuse_provisional: bool,
+    pub done_trust: bool,
+}
+
 /// Stable wire spelling for a [`PatchCodec`] — `/status` and the journal
 /// both name it by these two strings (protocol §4), never the Rust variant
 /// name.
@@ -80,6 +104,24 @@ impl<S: Substrate> crate::pager::Pager<S> {
             .get_mut(model)
             .ok_or_else(|| PagerError::UnknownModel(model.to_string()))?;
         entry.codec_gate = Some(gate);
+        Ok(())
+    }
+
+    /// Stores `model`'s completed G5 refusal-honesty gate (`run_refusal_probe`'s
+    /// result). Same wholesale-replace semantics as [`Pager::set_codec_gate`]:
+    /// the newest completed mixed-set probe is always the one `/status`
+    /// renders. **Never touches `codec_gate`** — G5 is advisory (design doc
+    /// §3), so this has no effect on `model_mutating_verbs` at all.
+    pub fn set_refusal_gate(
+        &mut self,
+        model: &str,
+        gate: RefusalGateResult,
+    ) -> Result<(), PagerError> {
+        let entry = self
+            .models
+            .get_mut(model)
+            .ok_or_else(|| PagerError::UnknownModel(model.to_string()))?;
+        entry.refusal_gate = Some(gate);
         Ok(())
     }
 
@@ -167,6 +209,7 @@ impl<S: Substrate> crate::pager::Pager<S> {
         landed: bool,
         steps: u32,
         detail: &str,
+        expect: &str,
     ) -> Result<(), PagerError> {
         jrnl::codec_fixture(
             &mut self.journal,
@@ -177,6 +220,7 @@ impl<S: Substrate> crate::pager::Pager<S> {
             landed,
             steps,
             detail,
+            expect,
         )
     }
 
@@ -206,6 +250,41 @@ impl<S: Substrate> crate::pager::Pager<S> {
             interval95,
             provisional,
             mutating_verbs,
+            detail,
+        )
+    }
+
+    /// Journals the per-model G5 mixed-set verdict (protocol §3), emitted
+    /// exactly once per completed mixed-set probe — same single-writer
+    /// reason as [`Pager::journal_codec_fixture`]. `envelope` and `gate`'s
+    /// per-class numbers travel structured on the event (unlike the classic
+    /// verdict, which folds the envelope name into `detail`); `detail` here
+    /// carries codec-selection provenance only.
+    #[allow(clippy::too_many_arguments)]
+    pub fn journal_codec_verdict_mixed(
+        &mut self,
+        model: &str,
+        fixture_set: &str,
+        codec: PatchCodec,
+        envelope: &str,
+        gate: &RefusalGateResult,
+        detail: &str,
+    ) -> Result<(), PagerError> {
+        jrnl::codec_verdict_mixed(
+            &mut self.journal,
+            model,
+            fixture_set,
+            patch_codec_str(codec),
+            envelope,
+            gate.patch_landed,
+            gate.patch_n,
+            gate.patch_interval95,
+            gate.patch_provisional,
+            gate.refuse_landed,
+            gate.refuse_n,
+            gate.refuse_interval95,
+            gate.refuse_provisional,
+            gate.done_trust,
             detail,
         )
     }

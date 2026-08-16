@@ -62,15 +62,40 @@
 //!   rows bounded by a verdict, and must never hand-sum orphan rows into a
 //!   score. Splicing a partial score is precisely what §3 forbids, and doing it
 //!   at read time is the same violation as doing it at write time.
+//!
+//! **G5 (`docs/superpowers/evidence/2026-08-16-g5-protocol.md`) adds a
+//! second, sibling engine in [`refuse`], [`run_refusal_probe`], rather than
+//! teaching [`run_codec_probe`] to also handle a mixed set.** That split is
+//! deliberate, not incidental: `run_codec_probe`'s return type
+//! (`Result<CodecGateResult, ProbeAborted>`) is a load-bearing part of its
+//! public signature — every existing caller and test destructures a single
+//! blended `landed`/`n` pair — and protocol §3 forbids ever blending a
+//! mixed set's two classes into one such pair ("Classes are never
+//! blended"). Changing `run_codec_probe`'s signature to accommodate a
+//! `RefusalGateResult` would therefore either (a) break every existing
+//! all-`patch` caller for a case that never applies to them, or (b) force
+//! it to fabricate a blended number G5 exists specifically to forbid.
+//! [`refuse::run_refusal_probe`] instead shares this module's per-fixture
+//! plumbing (`materialize`, `fixture_grant`, `ProbeContext`, `abort`,
+//! `lock_pager` — private items visible to `refuse` as one of this module's
+//! children) by reference, and duplicates the agent-lifecycle SHAPE rather
+//! than extracting it, so [`run_codec_probe`] and [`run_one_fixture`] are —
+//! deliberately — not touched by G5 at all: an all-`patch` set's behavior
+//! through them is not just "equivalent", it is the exact same code
+//! running, which is the strongest form of the "byte identical to today"
+//! requirement this module's tests pin.
 
 mod boot;
 pub mod fixtures;
+mod refuse;
 mod scoring;
 
 pub use boot::{
-    fixture_set_unparseable_reason, probe_aborted_reason, run_boot_codec_probe,
-    should_run_codec_probe, POST_DISABLED_CODEC_SKIP_REASON,
+    fixture_set_unparseable_reason, g5_placeholder_skip_reason, g5_probe_aborted_reason,
+    probe_aborted_reason, run_boot_codec_probe, run_boot_g5_probe, should_run_codec_probe,
+    G5_POST_DISABLED_SKIP_REASON, POST_DISABLED_CODEC_SKIP_REASON,
 };
+pub use refuse::run_refusal_probe;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -401,6 +426,12 @@ fn run_one_fixture<S: Substrate + Send + 'static>(
             landed,
             steps,
             &fixture_detail(&result),
+            // `run_codec_probe` is the classic, G4-only engine (see the
+            // module doc's `run_refusal_probe` note): every fixture it
+            // scores is patch-class by construction, so this is a literal,
+            // not `scoring::expect_str(fixture.expect)` — G5's mixed engine
+            // is the one that reads a fixture's real class.
+            "patch",
         )
         .map_err(|e| {
             abort(format!(

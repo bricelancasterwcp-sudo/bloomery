@@ -101,7 +101,8 @@ fn run(config: Config, journal: Journal) -> ! {
     use bloomery_core::vram::free_vram_bytes;
     use bloomery_daemon::agents::ImageStore;
     use bloomery_daemon::codec_probe::{
-        run_boot_codec_probe, should_run_codec_probe, POST_DISABLED_CODEC_SKIP_REASON,
+        run_boot_codec_probe, run_boot_g5_probe, should_run_codec_probe,
+        G5_POST_DISABLED_SKIP_REASON, POST_DISABLED_CODEC_SKIP_REASON,
     };
     use bloomery_daemon::http::serve_shared;
     use bloomery_daemon::llama_send::SendLlama;
@@ -234,6 +235,15 @@ fn run(config: Config, journal: Journal) -> ! {
         std::fs::create_dir_all(&profiles_dir)
             .unwrap_or_else(|e| fail(format!("failed to create profiles dir: {e}")));
         let models: Vec<String> = config.models.keys().cloned().collect();
+        // G5 (docs/superpowers/evidence/2026-08-16-g5-protocol.md §1):
+        // per-model opt-in, computed the same way `models` above is — every
+        // configured name whose spec has `g5_probe = true`.
+        let g5_models: Vec<String> = config
+            .models
+            .iter()
+            .filter(|(_, spec)| spec.g5_probe())
+            .map(|(name, _)| name.clone())
+            .collect();
         let tier = config.tier.clone();
         let python = config.assay.python.clone();
         let post_pager = Arc::clone(&pager);
@@ -266,6 +276,17 @@ fn run(config: Config, journal: Journal) -> ! {
                             // here means the *journal* failed.
                             eprintln!(
                                 "bloomery-daemon: codec probe could not record its result: {e}"
+                            );
+                        } else if let Err(e) =
+                            run_boot_g5_probe(&post_pager, &g5_models, &codec_scratch_dir)
+                        {
+                            // G5 (protocol §1): strictly after G4 completes,
+                            // same "the journal itself is the only failure
+                            // that reaches here" reasoning as the G4 arm
+                            // above — every per-model outcome is journaled
+                            // by `run_boot_g5_probe` itself.
+                            eprintln!(
+                                "bloomery-daemon: G5 refusal probe could not record its result: {e}"
                             );
                         }
                     }
@@ -301,6 +322,12 @@ fn run(config: Config, journal: Journal) -> ! {
             // truth (`mutating_verbs: false`, `codec_gate: null`).
             p.journal_degraded(POST_DISABLED_CODEC_SKIP_REASON.to_string())
                 .unwrap_or_else(|e| fail(format!("failed to journal codec-probe skip: {e}")));
+            // G5's own mirrored skip line, gated on "at least one model
+            // opted in" — see `G5_POST_DISABLED_SKIP_REASON`'s doc comment.
+            if config.models.values().any(|spec| spec.g5_probe()) {
+                p.journal_degraded(G5_POST_DISABLED_SKIP_REASON.to_string())
+                    .unwrap_or_else(|e| fail(format!("failed to journal G5-probe skip: {e}")));
+            }
         }
     }
     // `_handle`'s workers do the actual serving; the main thread just needs

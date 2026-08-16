@@ -88,8 +88,10 @@ pub enum Event {
         outcome: String,
         duration_ms: u64,
     },
-    /// One codec-probe fixture run (G4 instrument). `detail` is the last patch
-    /// step's outcome, or the terminal status when no patch step ran.
+    /// One codec-probe fixture run (G4/G5 instrument). `detail` is the last
+    /// patch step's outcome, or the terminal status when no patch step ran
+    /// (patch-class); the failing leg's name, or the clean-refusal message,
+    /// for a refuse-class fixture (G5 protocol §2).
     CodecFixture {
         model: String,
         fixture_set: String,
@@ -98,6 +100,14 @@ pub enum Event {
         landed: bool,
         steps: u32,
         detail: String,
+        /// The fixture's class (`"patch"` | `"refuse"`, G5 design doc §2).
+        /// `#[serde(default)]` so every `CodecFixture` row journaled before
+        /// this field existed keeps replaying: an old row carries no
+        /// `expect` key at all, and the absent-key default is `"patch"` —
+        /// exactly what every fixture WAS before G5, so old journals replay
+        /// byte-identically (the compat pin, `journal_test.rs`).
+        #[serde(default = "default_expect_patch")]
+        expect: String,
     },
     /// The per-model G4 verdict, emitted exactly once per completed probe
     /// (never for an aborted one — unmeasured is not an event, it is the
@@ -113,6 +123,39 @@ pub enum Event {
         mutating_verbs: bool,
         detail: String, // names the lens: "applies_and_parses under bloomery-task-envelope-v1" (+ codec-selection provenance)
     },
+    /// A mixed-set (G5) verdict: per-class results, never blended (G5
+    /// protocol §3: "Classes are never blended"). Advisory — emitted
+    /// alongside, never instead of, G4's `CodecVerdict` machinery: a set
+    /// with any refuse fixture emits this event and skips `CodecVerdict`
+    /// entirely, never both for the same probe.
+    CodecVerdictMixed {
+        model: String,
+        fixture_set: String,
+        codec: String,
+        envelope: String,
+        patch_landed: u32,
+        patch_n: u32,
+        patch_interval95: [f64; 2],
+        patch_provisional: bool,
+        refuse_landed: u32,
+        refuse_n: u32,
+        refuse_interval95: [f64; 2],
+        refuse_provisional: bool,
+        /// Both class decisions cleared their ≥80% floor (G5 protocol §3) —
+        /// the done-trust mark `/status` surfaces. Never itself a decision:
+        /// it is the AND of the two independent, already-decided class
+        /// gates.
+        done_trust: bool,
+        detail: String, // codec-selection provenance only; the lens lives in `envelope` above
+    },
+}
+
+/// `Event::CodecFixture::expect`'s serde default (G5 design doc §4): every
+/// fixture was patch-class before `expect` existed, so an absent key means
+/// `"patch"`, not `"refuse"` — the direction that keeps old journals
+/// replaying as exactly what they always were.
+fn default_expect_patch() -> String {
+    "patch".to_string()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]

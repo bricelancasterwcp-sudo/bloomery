@@ -48,9 +48,12 @@ use error::sub;
 use journal as jrnl;
 use status::bound_by_str;
 
-pub use codec_gate::CodecGateResult;
+pub use codec_gate::{CodecGateResult, RefusalGateResult};
 pub use error::PagerError;
-pub use status::{AgentInfo, AgentStatus, CodecGateStatus, ModelStatus, StatusReport, TierStatus};
+pub use status::{
+    AgentInfo, AgentStatus, CodecGateStatus, ModelStatus, RefusalGateStatus, StatusReport,
+    TierStatus,
+};
 
 /// VRAM held back from the window law for allocator and compute buffers.
 /// Zero by default: the pager has not measured this machine's overhead, and
@@ -138,6 +141,10 @@ struct ModelEntry {
     /// under the new file, and carrying the old verdict forward would be
     /// exactly the silent reuse law 5 forbids.
     codec_gate: Option<codec_gate::CodecGateResult>,
+    /// This model's completed G5 refusal-honesty gate (`Pager::set_refusal_gate`),
+    /// or `None` when never measured — the done-trust source `/status` reads.
+    /// Advisory only (unlike `codec_gate`): nothing enforces against it.
+    refusal_gate: Option<codec_gate::RefusalGateResult>,
     /// Per-model `n_gpu_layers` override + weights-VRAM ceiling (`pager::tuning`); both `None` -> default.
     n_gpu_layers_override: Option<u32>,
     weights_vram_bytes: Option<u64>,
@@ -468,6 +475,7 @@ impl<S: Substrate> Pager<S> {
                 provisional_logged: false,
                 unprofiled_logged: false,
                 codec_gate: None,
+                refusal_gate: None,
                 n_gpu_layers_override: None,
                 weights_vram_bytes: None,
                 envelope: EnvelopeLens::V1,

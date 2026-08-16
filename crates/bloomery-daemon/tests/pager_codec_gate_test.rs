@@ -296,6 +296,7 @@ fn journal_codec_fixture_round_trips_through_replay() {
         true,
         4,
         "applies_and_parses",
+        "patch",
     )
     .unwrap();
 
@@ -310,6 +311,206 @@ fn journal_codec_fixture_round_trips_through_replay() {
             landed: true,
             steps: 4,
             detail: "applies_and_parses".to_string(),
+            expect: "patch".to_string(),
+        }]
+    );
+}
+
+/// The `expect` field round-trips its OTHER value too — a refuse-class
+/// fixture row, asymmetric from the test above on every field (including
+/// `landed: false` vs `true`) so a copy-paste of the wrong literal would be
+/// caught.
+#[test]
+fn journal_codec_fixture_round_trips_a_refuse_class_row() {
+    let dir = fresh_dir("bloomery-codec-gate-journal-fixture-refuse");
+    let (mut p, jpath) = pager_with_model(&dir);
+
+    p.journal_codec_fixture(
+        "qwen-fixture-model",
+        "codec-tasks-v2-mixed",
+        "defect-absent-example",
+        PatchCodec::SearchReplace,
+        false,
+        2,
+        "refuse leg (a) failed: a patch step succeeded — not a refusal",
+        "refuse",
+    )
+    .unwrap();
+
+    let events = replay(&jpath).unwrap();
+    assert_eq!(
+        events,
+        vec![Event::CodecFixture {
+            model: "qwen-fixture-model".to_string(),
+            fixture_set: "codec-tasks-v2-mixed".to_string(),
+            fixture: "defect-absent-example".to_string(),
+            codec: "search_replace".to_string(),
+            landed: false,
+            steps: 2,
+            detail: "refuse leg (a) failed: a patch step succeeded — not a refusal".to_string(),
+            expect: "refuse".to_string(),
+        }]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// G5: RefusalGateResult / set_refusal_gate / journal_codec_verdict_mixed /
+// done-trust `/status` rendering (docs/superpowers/evidence/2026-08-16-g5-protocol.md)
+// ---------------------------------------------------------------------------
+
+fn done_trust_gate() -> RefusalGateResult {
+    RefusalGateResult {
+        fixture_set: "codec-tasks-v2-mixed".to_string(),
+        codec: PatchCodec::SearchReplace,
+        patch_landed: 9,
+        patch_n: 10,
+        patch_interval95: (0.59, 0.98),
+        patch_provisional: true,
+        refuse_landed: 8,
+        refuse_n: 10,
+        refuse_interval95: (0.49, 0.94),
+        refuse_provisional: true,
+        done_trust: true,
+    }
+}
+
+fn no_done_trust_gate() -> RefusalGateResult {
+    RefusalGateResult {
+        fixture_set: "codec-tasks-v2-mixed".to_string(),
+        codec: PatchCodec::SearchReplace,
+        patch_landed: 9,
+        patch_n: 10,
+        patch_interval95: (0.59, 0.98),
+        patch_provisional: true,
+        refuse_landed: 3,
+        refuse_n: 10,
+        refuse_interval95: (0.11, 0.60),
+        refuse_provisional: false,
+        done_trust: false,
+    }
+}
+
+/// Protocol §4's "unmeasured, never a fake pass": no stored refusal gate
+/// must render `done_trust: null` and `refusal_gate: null`, never `false`
+/// (a real, decided fail) and never a confident zero count.
+#[test]
+fn unmeasured_model_has_null_done_trust_and_null_refusal_gate() {
+    let dir = fresh_dir("bloomery-refusal-gate-unmeasured");
+    let (p, _) = pager_with_model(&dir);
+
+    let status = p.status();
+    let m = &status.models[0];
+    assert!(m.done_trust.is_none());
+    assert!(m.refusal_gate.is_none());
+
+    let json = serde_json::to_string(&status).unwrap();
+    assert!(json.contains("\"done_trust\":null"), "{json}");
+    assert!(json.contains("\"refusal_gate\":null"), "{json}");
+}
+
+/// Storing a gate whose classes both clear the floor renders `done_trust:
+/// true` and populates every per-class number on `/status`.
+#[test]
+fn stored_gate_with_both_classes_clear_renders_done_trust_true() {
+    let dir = fresh_dir("bloomery-refusal-gate-both-clear");
+    let (mut p, _) = pager_with_model(&dir);
+    p.set_refusal_gate("qwen", done_trust_gate()).unwrap();
+
+    let status = p.status();
+    let m = &status.models[0];
+    assert_eq!(m.done_trust, Some(true));
+    let gate = m.refusal_gate.as_ref().expect("gate stored");
+    assert_eq!(gate.fixture_set, "codec-tasks-v2-mixed");
+    assert_eq!(gate.codec, "search_replace");
+    assert_eq!(gate.patch_landed, 9);
+    assert_eq!(gate.patch_n, 10);
+    assert_eq!(gate.refuse_landed, 8);
+    assert_eq!(gate.refuse_n, 10);
+    assert_eq!(gate.patch_interval95, [0.59, 0.98]);
+    assert_eq!(gate.refuse_interval95, [0.49, 0.94]);
+    assert!(gate.patch_provisional);
+    assert!(gate.refuse_provisional);
+}
+
+/// A gate where only ONE class clears the floor renders `done_trust: false`
+/// — the exact model G5 exists to catch (aces one class, fails the other).
+#[test]
+fn stored_gate_with_one_class_failing_renders_done_trust_false() {
+    let dir = fresh_dir("bloomery-refusal-gate-one-fails");
+    let (mut p, _) = pager_with_model(&dir);
+    p.set_refusal_gate("qwen", no_done_trust_gate()).unwrap();
+
+    let status = p.status();
+    assert_eq!(status.models[0].done_trust, Some(false));
+    assert!(
+        status.models[0].refusal_gate.is_some(),
+        "a failed class is still a measurement, not unmeasured"
+    );
+}
+
+/// G5 is advisory (design doc §3): storing a refusal gate must never touch
+/// `mutating_verbs` or the classic `codec_gate` — the two gates are
+/// independent state.
+#[test]
+fn set_refusal_gate_never_touches_mutating_verbs_or_codec_gate() {
+    let dir = fresh_dir("bloomery-refusal-gate-advisory-only");
+    let (mut p, _) = pager_with_model(&dir);
+    p.set_refusal_gate("qwen", no_done_trust_gate()).unwrap();
+
+    assert!(
+        !p.model_mutating_verbs("qwen"),
+        "an unmeasured G4 gate is still unmeasured after a G5 gate is stored"
+    );
+    assert!(p.status().models[0].codec_gate.is_none());
+}
+
+#[test]
+fn set_refusal_gate_on_unknown_model_is_named() {
+    let dir = fresh_dir("bloomery-refusal-gate-unknown");
+    let (mut p, _) = pager_with_model(&dir);
+    match p.set_refusal_gate("nope", done_trust_gate()) {
+        Err(PagerError::UnknownModel(m)) => assert_eq!(m, "nope"),
+        other => panic!("expected UnknownModel, got {other:?}"),
+    }
+}
+
+/// `journal_codec_verdict_mixed` round-trips through replay — asymmetric on
+/// every field pair that could be swapped (patch vs refuse counts,
+/// intervals, provisional flags), same discipline as the G4 verdict
+/// round-trip test above.
+#[test]
+fn journal_codec_verdict_mixed_round_trips_through_replay() {
+    let dir = fresh_dir("bloomery-refusal-gate-journal-verdict");
+    let (mut p, jpath) = pager_with_model(&dir);
+
+    p.journal_codec_verdict_mixed(
+        "qwen-verdict-model",
+        "codec-tasks-v2-mixed",
+        PatchCodec::WholeFile,
+        "bloomery-task-envelope-v2",
+        &done_trust_gate(),
+        "codec from profile",
+    )
+    .unwrap();
+
+    let events = replay(&jpath).unwrap();
+    assert_eq!(
+        events,
+        vec![Event::CodecVerdictMixed {
+            model: "qwen-verdict-model".to_string(),
+            fixture_set: "codec-tasks-v2-mixed".to_string(),
+            codec: "whole_file".to_string(),
+            envelope: "bloomery-task-envelope-v2".to_string(),
+            patch_landed: 9,
+            patch_n: 10,
+            patch_interval95: [0.59, 0.98],
+            patch_provisional: true,
+            refuse_landed: 8,
+            refuse_n: 10,
+            refuse_interval95: [0.49, 0.94],
+            refuse_provisional: true,
+            done_trust: true,
+            detail: "codec from profile".to_string(),
         }]
     );
 }
