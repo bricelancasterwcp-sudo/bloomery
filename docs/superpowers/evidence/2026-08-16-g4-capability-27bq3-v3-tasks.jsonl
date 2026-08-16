@@ -1,0 +1,59 @@
+{"event":"TaskStep","id":"a77","step":1,"verb":"read","outcome":"read 109 bytes","duration_ms":0}
+{"event":"TaskStep","id":"a77","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":44}
+{"event":"TaskStep","id":"a77","step":3,"verb":"done","outcome":"Fixed mean() in stats.py to divide by len(values) instead of len(values) + 1.","duration_ms":2903}
+{"event":"TaskStep","id":"a78","step":1,"verb":"read","outcome":"read 126 bytes","duration_ms":0}
+{"event":"TaskStep","id":"a78","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":33}
+{"event":"TaskStep","id":"a78","step":3,"verb":"done","outcome":"Fixed the comparison in find_max() in extremes.py: changed `if v < best` to `if v > best` so it keeps the larger value.","duration_ms":3754}
+{"event":"TaskStep","id":"a79","step":1,"verb":"read","outcome":"read 120 bytes","duration_ms":0}
+{"event":"TaskStep","id":"a79","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":33}
+{"event":"TaskStep","id":"a79","step":3,"verb":"done","outcome":"Fixed countdown_labels() in countdown.py by changing range(1, n) to range(1, n + 1) so the final step is included.","duration_ms":3754}
+{"event":"TaskStep","id":"a80","step":1,"verb":"read","outcome":"read 197 bytes","duration_ms":0}
+{"event":"TaskStep","id":"a80","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":33}
+{"event":"TaskStep","id":"a80","step":3,"verb":"done","outcome":"Fixed discounted_price() in pricing.py to subtract the discount instead of adding it.","duration_ms":2551}
+{"event":"TaskStep","id":"a81","step":1,"verb":"read","outcome":"read 144 bytes","duration_ms":0}
+{"event":"TaskStep","id":"a81","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":33}
+{"event":"TaskStep","id":"a81","step":3,"verb":"done","outcome":"Fixed first_and_last() in firstlast.py: changed `last = values[0]` to `last = values[-1]` so it returns the last element.","duration_ms":3994}
+{"event":"TaskStep","id":"a82","step":1,"verb":"read","outcome":"read 157 bytes","duration_ms":0}
+{"event":"TaskStep","id":"a82","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":33}
+{"event":"TaskStep","id":"a82","step":3,"verb":"done","outcome":"Changed the condition in free_shipping() from `cart_total >= 50 and is_member` to `cart_total >= 50 or is_member`, so a $75 cart from a non-member now qualifies for free shipping.","duration_ms":6511}
+{"event":"TaskStep","id":"a83","step":1,"verb":"read","outcome":"read 219 bytes","duration_ms":0}
+{"event":"TaskStep","id":"a83","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":33}
+{"event":"TaskStep","id":"a83","step":3,"verb":"done","outcome":"Fixed the f-string in greeting() in greeting.py to use {age} instead of {name}, so greeting('Ada', 30) now returns 'Hello Ada, you are 30 years old'.","duration_ms":5770}
+{"event":"TaskStep","id":"a84","step":1,"verb":"read","outcome":"read 150 bytes","duration_ms":0}
+{"event":"TaskStep","id":"a84","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":33}
+{"event":"TaskStep","id":"a84","step":3,"verb":"done","outcome":"Fixed cart_total() in cart.py to return subtotal + tax, so cart_total([10, 20]) now returns 32.4.","duration_ms":3751}
+{"event":"TaskStep","id":"a85","step":1,"verb":"read","outcome":"read 186 bytes","duration_ms":0}
+{"event":"TaskStep","id":"a85","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":33}
+{"event":"TaskStep","id":"a85","step":3,"verb":"done","outcome":"Fixed the comparison in restock_needed() in inventory.py: changed `current_stock > reorder_threshold` to `current_stock < reorder_threshold` so items below the threshold are flagged as needing restock.","duration_ms":4385}
+{"event":"TaskStep","id":"a86","step":1,"verb":"read","outcome":"read 185 bytes","duration_ms":0}
+{"event":"TaskStep","id":"a86","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":33}
+{"event":"TaskStep","id":"a86","step":3,"verb":"done","outcome":"Fixed the comparison in is_valid_password() in validator.py from `>` to `>=` so passwords at the minimum length are accepted.","duration_ms":3373}
+{"event":"TaskStep","id":"a87","step":1,"verb":"read","outcome":"read 98 bytes","duration_ms":0}
+{"event":"TaskStep","id":"a87","step":2,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":1}
+{"event":"TaskStep","id":"a87","step":3,"verb":"done","outcome":"Changed listen_port in serve.conf from 8080 to 8181 so the daemon listens on the same port as the upstream reference.","duration_ms":5535}
+{"event":"TaskStep","id":"a88","step":1,"verb":"read","outcome":"read 123 bytes","duration_ms":0}
+{"event":"TaskStep","id":"a88","step":2,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":2}
+{"event":"TaskStep","id":"a88","step":3,"verb":"done","outcome":"Changed db_port in db.conf from 5432 to 5433 so it matches the health_check_url port.","duration_ms":3379}
+{"event":"TaskStep","id":"a89","step":1,"verb":"read","outcome":"read 74 bytes","duration_ms":0}
+{"event":"TaskStep","id":"a89","step":2,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":2}
+{"event":"TaskStep","id":"a89","step":3,"verb":"done","outcome":"Changed retries in worker.ini from 1 to 5 to match the on-call runbook requirement.","duration_ms":2861}
+{"event":"TaskStep","id":"a90","step":1,"verb":"read","outcome":"read 179 bytes","duration_ms":0}
+{"event":"TaskStep","id":"a90","step":2,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":2}
+{"event":"TaskStep","id":"a90","step":3,"verb":"done","outcome":"Fixed the test command in README.txt to read 'npm run test' instead of 'npm run tests'.","duration_ms":2932}
+{"event":"TaskStep","id":"a91","step":1,"verb":"read","outcome":"read 181 bytes","duration_ms":0}
+{"event":"TaskStep","id":"a91","step":2,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":3}
+{"event":"TaskStep","id":"a91","step":3,"verb":"done","outcome":"Fixed the duplicate version heading in CHANGELOG.txt: the August 2nd release now reads 2.4.1 instead of 2.4.0.","duration_ms":4437}
+{"event":"TaskStep","id":"a92","step":1,"verb":"read","outcome":"read 206 bytes","duration_ms":0}
+{"event":"TaskStep","id":"a92","step":2,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":2}
+{"event":"TaskStep","id":"a92","step":3,"verb":"done","outcome":"Fixed the thank-you line in welcome_email.txt to say Bloomery instead of Acme Corp.","duration_ms":2771}
+{"event":"TaskStep","id":"a93","step":1,"verb":"read","outcome":"read 141 bytes","duration_ms":0}
+{"event":"TaskStep","id":"a93","step":2,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":2}
+{"event":"TaskStep","id":"a93","step":3,"verb":"done","outcome":"Fixed proxy_pass in upstream.conf to point at the upstream block (api_backend:9000) instead of the wrong port 9100, so requests now reach the upstream servers.","duration_ms":4413}
+{"event":"TaskStep","id":"a94","step":1,"verb":"read","outcome":"read 236 bytes","duration_ms":0}
+{"event":"TaskStep","id":"a94","step":2,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":3}
+{"event":"TaskStep","id":"a94","step":3,"verb":"done","outcome":"Fixed the billing email in support.txt to use the example.com domain (billing@example.com), matching the rest of the document.","duration_ms":3229}
+{"event":"TaskStep","id":"a95","step":1,"verb":"read","outcome":"read 166 bytes","duration_ms":0}
+{"event":"TaskStep","id":"a95","step":2,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":2}
+{"event":"TaskStep","id":"a95","step":3,"verb":"done","outcome":"Changed HTTP_TIMEOUT_MS in settings.env from 500 to 5000 so the timeout exceeds the 2-4 second upstream call duration.","duration_ms":3779}
+{"event":"TaskStep","id":"a96","step":1,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":2}
+{"event":"TaskStep","id":"a96","step":2,"verb":"done","outcome":"Fixed the release date in release_notes.txt from 2026-02-30 to 2026-02-28.","duration_ms":4748}
