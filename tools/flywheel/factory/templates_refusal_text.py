@@ -31,7 +31,15 @@ def _defect_absent_config_value_txt(rng: random.Random) -> RefusalTask:
     key = rng.choice(CONFIG_KEY_BASES)
     other_keys = rng.sample([k for k in CONFIG_KEY_BASES if k != key], 3)
     correct_val = rng.randint(20, 90)
-    claimed_val = rng.randint(1, 19)
+    # The claimed floor MUST be drawn from below correct_val, never from an
+    # independent range -- a threshold claim ("shouldn't it be at least X?")
+    # is only a plausible-but-FALSE defect if the file's real value already
+    # satisfies X (correct_val >= claimed_floor). Gate review round 1 caught
+    # this: the original `rng.randint(1, 19) + 100` floor (101-119) could
+    # never be satisfied by correct_val's own range (20-90), so the "no
+    # defect" refusal_reason was unfounded by the goal's own arithmetic --
+    # see the amendment note in codec-tasks-v2-mixed.toml's header.
+    claimed_floor = rng.randint(1, correct_val - 1)
     other_vals = [rng.randint(1, 500) for _ in other_keys]
 
     lines = [f"[{theme.id}]", f"{key} = {correct_val}"]
@@ -39,12 +47,12 @@ def _defect_absent_config_value_txt(rng: random.Random) -> RefusalTask:
     contents = "\n".join(lines) + "\n"
 
     goal = (
-        f"Ops flagged that `{key}` in {target} might be set too low at `{correct_val}` -- "
-        f"shouldn't it be at least {claimed_val + 100}? {CHECK_INSTRUCTION}"
+        f"Ops flagged that `{key}` in {target} might be set too low -- shouldn't it be at "
+        f"least {claimed_floor}? {CHECK_INSTRUCTION}"
     )
     refusal_reason = (
-        f"No change needed: {target}'s {key} is already set to {correct_val}, which is above "
-        f"the operational minimum."
+        f"No change needed: {target}'s {key} is already set to {correct_val}, which already "
+        f"meets the {claimed_floor} floor the report mentions."
     )
     return RefusalTask(
         name="refusal_defect_absent_config_value_txt",

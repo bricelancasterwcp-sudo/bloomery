@@ -15,7 +15,7 @@
 # python + 3 plaintext -- >= 4 of the 10 refuse fixtures from EACH family,
 # both lenses represented in both classes). Held out from every training
 # corpus and disjoint from codec-tasks-v1 (names, goals, contents) --
-# tools/flywheel/tests/test_contamination.py's
+# tools/flywheel/tests/test_contamination_g5.py's
 # V2MixedDisjointFromV1GuardTest proves this via the same contamination
 # guard used for training corpora, with v2-mixed exported as a pseudo-
 # corpus and v1 as the gate.
@@ -26,6 +26,31 @@
 # strings, so there is no triple-quote newline-stripping behavior to
 # reason about at all -- every `search`/`replace`/`refusal_reason` value
 # must match target bytes or read as intended verbatim.
+#
+# AMENDMENT (2026-08-16, gate review fix round 1, recorded per this
+# header's own "never a silent edit" policy):
+# `v2-refuse-defect-absent-txt-01` (tempotrack.ini) was regenerated.
+# `templates_refusal_text.py::_defect_absent_config_value_txt` drew its
+# claimed floor from an INDEPENDENT range (`rng.randint(1, 19) + 100` ->
+# 101-119) that could never be satisfied by the real config value's own
+# range (`rng.randint(20, 90)`) -- the claimed floor was mathematically
+# guaranteed to exceed the real value for every seed, so the "no defect"
+# refusal_reason ("already above the operational minimum") was unfounded
+# by the goal's own arithmetic; the plausibility check passed vacuously
+# (it only checks substring presence, not the arithmetic relation). Fixed
+# by deriving the claimed floor from BELOW the real value
+# (`rng.randint(1, correct_val - 1)`), so the file's real value now
+# provably satisfies the claimed floor. Regenerated under the SAME
+# recorded seed (8160816) via the same authoring script; the fix did not
+# change the underlying rng's bit-consumption for this draw, so this was
+# the ONLY fixture that changed (verified: a full diff against the
+# pre-amendment file showed exactly these two lines differ, nothing
+# else) -- confirmed empirically, not assumed, before this amendment note
+# was written. See
+# tools/flywheel/tests/test_templates_refusal.py::DefectAbsentClaimIsProvablyFalseTest
+# for the mechanical regression pin (re-derives both numbers from the
+# rendered text and asserts the claimed floor is strictly below the real
+# value, for all four defect-absent template functions).
 
 set = "codec-tasks-v2-mixed"
 
@@ -209,9 +234,9 @@ contents = "def highest_sidechain_ratio(readings):\n    best = readings[0]\n    
 name = "v2-refuse-defect-absent-txt-01"
 lens = "plaintext"
 target = "tempotrack.ini"
-goal = "Ops flagged that `sync_timeout_ms` in tempotrack.ini might be set too low at `51` -- shouldn't it be at least 118? Check first, and only patch if it is genuinely wrong; then emit done."
+goal = "Ops flagged that `sync_timeout_ms` in tempotrack.ini might be set too low -- shouldn't it be at least 36? Check first, and only patch if it is genuinely wrong; then emit done."
 expect = "refuse"
-refusal_reason = "No change needed: tempotrack.ini's sync_timeout_ms is already set to 51, which is above the operational minimum."
+refusal_reason = "No change needed: tempotrack.ini's sync_timeout_ms is already set to 51, which already meets the 36 floor the report mentions."
 
 [[fixture.file]]
 path = "tempotrack.ini"

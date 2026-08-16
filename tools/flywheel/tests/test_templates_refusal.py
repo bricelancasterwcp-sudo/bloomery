@@ -125,6 +125,119 @@ class DefectAbsentPlausibilityTest(unittest.TestCase):
         self.assertTrue(any("plausibility rule" in v for v in violations), violations)
 
 
+class DefectAbsentClaimIsProvablyFalseTest(unittest.TestCase):
+    """Gate review round 1 (Critical, task-4 fix round 1): backtick-quoting
+    a real identifier (`DefectAbsentPlausibilityTest`, above) is necessary
+    but not SUFFICIENT — a goal can quote a real value and still make a
+    claim that is mechanically GUARANTEED true by construction (the
+    `_defect_absent_config_value_txt` bug: a claimed floor drawn from an
+    independent range that could never be satisfied by the file's own
+    value range). Each test below re-derives both the file's real
+    number/direction and the goal's claimed one straight from the
+    generated TEXT (never the template's internal variables, so a future
+    refactor that keeps the variables right but the rendered text wrong
+    would still be caught) and asserts the numeric/directional relation
+    that makes the claim false, for every one of the four defect-absent
+    template functions."""
+
+    def test_config_value_claimed_floor_is_always_strictly_below_the_real_value(self):
+        import re
+
+        from tools.flywheel.factory.templates_refusal_text import _defect_absent_config_value_txt
+
+        key_value_re = re.compile(r"^(\S+) = (\d+)$", re.MULTILINE)
+        floor_re = re.compile(r"at least (\d+)\?")
+        for seed in range(200):
+            task = _defect_absent_config_value_txt(random.Random(seed))
+            contents = task.files[task.target]
+            key_match = key_value_re.search(contents)
+            self.assertIsNotNone(key_match, f"seed={seed}: no key/value line found in {contents!r}")
+            real_value = int(key_match.group(2))
+            floor_match = floor_re.search(task.goal)
+            self.assertIsNotNone(floor_match, f"seed={seed}: no claimed floor found in {task.goal!r}")
+            claimed_floor = int(floor_match.group(1))
+            self.assertLess(
+                claimed_floor,
+                real_value,
+                f"seed={seed}: claimed floor {claimed_floor} is NOT below the real value "
+                f"{real_value} -- the 'no defect' refusal_reason would be unfounded",
+            )
+
+    def test_version_string_claimed_tag_always_differs_from_the_real_one(self):
+        import re
+
+        from tools.flywheel.factory.templates_refusal_text import _defect_absent_version_string_txt
+
+        heading_re = re.compile(r"## (\S+) - ")
+        claim_re = re.compile(r"read `(\S+)` instead")
+        for seed in range(200):
+            task = _defect_absent_version_string_txt(random.Random(seed))
+            contents = task.files[task.target]
+            heading_match = heading_re.search(contents)
+            self.assertIsNotNone(heading_match, f"seed={seed}: no version heading found in {contents!r}")
+            real_version = heading_match.group(1)
+            claim_match = claim_re.search(task.goal)
+            self.assertIsNotNone(claim_match, f"seed={seed}: no claimed version found in {task.goal!r}")
+            claimed_version = claim_match.group(1)
+            self.assertNotEqual(
+                claimed_version,
+                real_version,
+                f"seed={seed}: claimed version {claimed_version!r} equals the real one -- not a false claim",
+            )
+
+    def test_wrong_multiplier_claimed_factor_always_differs_from_the_real_one(self):
+        import re
+
+        from tools.flywheel.factory.templates_refusal_python import _defect_absent_wrong_multiplier_py
+
+        return_line_re = re.compile(r"return value \* ([\d.]+)")
+        claim_re = re.compile(r"multiply by ([\d.]+) instead of `([\d.]+)`")
+        for seed in range(200):
+            task = _defect_absent_wrong_multiplier_py(random.Random(seed))
+            contents = task.files[task.target]
+            return_match = return_line_re.search(contents)
+            self.assertIsNotNone(return_match, f"seed={seed}: no return line found in {contents!r}")
+            real_factor = return_match.group(1)
+            claim_match = claim_re.search(task.goal)
+            self.assertIsNotNone(claim_match, f"seed={seed}: no claimed/real factor found in {task.goal!r}")
+            claimed_factor, stated_real_factor = claim_match.group(1), claim_match.group(2)
+            self.assertEqual(
+                stated_real_factor, real_factor, f"seed={seed}: goal's stated real factor doesn't match the file"
+            )
+            self.assertNotEqual(
+                claimed_factor,
+                real_factor,
+                f"seed={seed}: claimed factor {claimed_factor!r} equals the real one -- not a false claim",
+            )
+
+    def test_wrong_comparison_claimed_direction_always_differs_from_the_real_one(self):
+        import re
+
+        from tools.flywheel.factory.templates_refusal_python import _defect_absent_wrong_comparison_py
+
+        op_re = re.compile(r"if x ([<>]) best:")
+        claim_re = re.compile(r"returns the (\w+) \w+ instead of the (\w+) one")
+        for seed in range(200):
+            task = _defect_absent_wrong_comparison_py(random.Random(seed))
+            contents = task.files[task.target]
+            op_match = op_re.search(contents)
+            self.assertIsNotNone(op_match, f"seed={seed}: no comparison operator found in {contents!r}")
+            real_direction = "highest" if op_match.group(1) == ">" else "lowest"
+            claim_match = claim_re.search(task.goal)
+            self.assertIsNotNone(claim_match, f"seed={seed}: no claimed/real direction found in {task.goal!r}")
+            claimed_direction, stated_real_direction = claim_match.group(1), claim_match.group(2)
+            self.assertEqual(
+                stated_real_direction,
+                real_direction,
+                f"seed={seed}: goal's stated real direction doesn't match the file's actual comparison",
+            )
+            self.assertNotEqual(
+                claimed_direction,
+                real_direction,
+                f"seed={seed}: claimed direction equals the real one -- not a false claim",
+            )
+
+
 class MissingTargetShapeTest(unittest.TestCase):
     def test_missing_target_templates_never_include_the_target_among_files(self):
         for group_name in ("missing_target_python", "missing_target_plaintext"):
