@@ -160,6 +160,25 @@ struct StepReport<'a> {
     failed: bool,
 }
 
+/// One step's transcript entry — the exact text `record_step` folds into
+/// the running transcript so the next prompt sees it. Pinned format (task-1
+/// brief, flywheel spec §2, `docs/superpowers/specs/2026-08-16-flywheel-14b-design.md`):
+/// `"\n[step {step} {verb}] {outcome}\n{content}\n"`.
+///
+/// Extracted out of `record_step`'s own `push_str` call — `record_step`
+/// below calls this directly, so there is exactly one place this format
+/// string is written. `flywheel-tool`
+/// (`crates/bloomery-daemon/src/bin/flywheel_tool.rs`) is the other caller:
+/// it reconstructs a training pair's transcript by calling this same
+/// function with the same inputs a real task step would have produced, so
+/// the rendered training prompt can never drift from what `record_step`
+/// actually appends during a live task. `pub`, not `pub(crate)`: a bin
+/// target is a separate crate from this library, even within the same
+/// package (see `flywheel_tool.rs`'s module docs).
+pub fn transcript_entry(step: u32, verb: &str, outcome: &str, content: &str) -> String {
+    format!("\n[step {step} {verb}] {outcome}\n{content}\n")
+}
+
 /// Appends `report` to both the journal (as an `Event::TaskStep`) and
 /// `state.steps` (as a richer `TaskStepRecord`), then folds `content` into
 /// the running transcript so the next prompt sees it.
@@ -191,9 +210,11 @@ fn record_step(
         content: report.content.to_string(),
         failed: report.failed,
     });
-    state.transcript.push_str(&format!(
-        "\n[step {step} {}] {}\n{}\n",
-        report.verb, report.outcome, report.content
+    state.transcript.push_str(&transcript_entry(
+        step,
+        report.verb,
+        report.outcome,
+        report.content,
     ));
     Ok(())
 }
@@ -246,6 +267,45 @@ fn render_prompt(spec: &TaskSpec, transcript: &str) -> String {
     } else {
         prompt
     }
+}
+
+/// Serving-faithful prompt rendering for `flywheel-tool`
+/// (`crates/bloomery-daemon/src/bin/flywheel_tool.rs`, design spec §2,
+/// `docs/superpowers/specs/2026-08-16-flywheel-14b-design.md`): **this
+/// function and [`render_prompt`] MUST share one body** — the wrapper
+/// constructs a minimal [`TaskSpec`] and calls the real function. No
+/// second implementation of rendering, anywhere in the flywheel factory.
+///
+/// Only `goal`, `patch_codec`, `envelope`, and `transcript` affect the
+/// rendered text (see [`render_prompt`]'s body: it reads exactly
+/// `spec.goal`, `spec.patch_codec`, `spec.mutating_verbs`, and
+/// `spec.envelope`, plus the `transcript` argument). Every other
+/// `TaskSpec` field — `grant`, `budget_tokens`, `max_steps`, `cwd`,
+/// `bounds` — is irrelevant to rendering, so this wrapper fills them with
+/// cheap, empty/default values: an empty [`Grant`] (no roots, no
+/// commands — never dereferenced by rendering) and `ExecBounds::default()`.
+/// `mutating_verbs` is hardcoded `true`: the flywheel corpus trains the
+/// read-then-patch habit, so every rendered prompt must show the model the
+/// `patch` verb card, exactly like a real mutating-verbs task.
+pub fn render_task_prompt(
+    goal: &str,
+    patch_codec: PatchCodec,
+    envelope: EnvelopeLens,
+    transcript: &str,
+) -> String {
+    let spec = TaskSpec {
+        goal: goal.to_string(),
+        grant: Grant::from_json(r#"{"read_roots":[],"write_roots":[],"commands":[]}"#)
+            .expect("an empty grant (no roots, no commands) is always valid"),
+        budget_tokens: 0,
+        max_steps: 0,
+        cwd: std::path::PathBuf::from("/"),
+        patch_codec,
+        bounds: ExecBounds::default(),
+        mutating_verbs: true,
+        envelope,
+    };
+    render_prompt(&spec, transcript)
 }
 
 /// What one call to [`propose_action`] produced.
