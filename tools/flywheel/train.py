@@ -64,7 +64,7 @@ class PairDataset(torch.utils.data.Dataset):
 
 def collate_single(batch):
     """bs=1 collator: tensorize the one sample, no padding needed."""
-    assert len(batch) == 1, "per_device_train_batch_size must stay 1"
+    assert len(batch) == 1, "train AND eval batch size must stay 1"
     row = batch[0]
     return {k: torch.tensor([v]) for k, v in row.items()}
 
@@ -128,7 +128,8 @@ def main() -> None:
     targs = TrainingArguments(
         output_dir=str(args.out), num_train_epochs=2,
         max_steps=args.max_steps,
-        per_device_train_batch_size=1, gradient_accumulation_steps=8,
+        per_device_train_batch_size=1, per_device_eval_batch_size=1,
+        gradient_accumulation_steps=8,
         learning_rate=2e-4, lr_scheduler_type="cosine", warmup_steps=20,
         logging_steps=10, eval_strategy="steps", eval_steps=100,
         save_strategy="no", bf16=True, report_to=[], seed=20260816)
