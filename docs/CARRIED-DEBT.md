@@ -148,6 +148,123 @@ at smoke); always rebuild with the feature. Gate-screened generation
 the 729-violation first attempt cost a full generation cycle the
 sampler now prevents by construction.
 
+## Delivered in drift-watch (2026-08-17, `feat/drift-watch` branch)
+
+**Settled (standing rulings for this slice — do not re-litigate without a
+recorded amendment):**
+
+- **No slug.** The plan's "reuse POST's slug rule" clause was corrected at
+  pre-flight: no slug helper exists. `ProfileStore` adopts POST's existing
+  raw-name convention (`{model}.json`, `{model}.previous.json`,
+  `{model}.baseline.json`, `{model}.transient-{sha8}.json`). A `/` in a model
+  key would already break POST's own paths today — a **pre-existing
+  POST-breaking constraint, explicitly carried as debt and NOT fixed in this
+  wave**; exposure is filename collisions for exotic keys, exactly the exposure
+  POST already has.
+- **Drift rows carry full byte-shas as identity claims.** `reference_sha` /
+  `current_sha` are the full 64-hex sha256 of each file's bytes at comparison
+  time, beside the paths — the same claim `Blessed`'s `sha` makes, **not**
+  measurement numbers, so spec §4's no-transcribed-numbers law stands unamended
+  and a drift-step row is byte-verifiable with `sha256sum`.
+- **A confirm row spells the settled verdict**, never the raw re-diff outcome:
+  `confirmed` / `transient` / `unconfirmed: <named re-diff outcome>`, one row
+  per confirm and never a third row per comparison. Carrying the raw word would
+  make a confirmed regression read `drift` and a *transient* — a finding in its
+  own right — read `within-noise`, the same word a clean boot gets.
+- **Auto-bless runs after both comparisons**, never before, so a model's first
+  boot has its cumulative comparison honestly recorded as unmeasured rather
+  than silently compared against the document that is about to become its own
+  baseline.
+- **Provenance is a prefix-family, not a closed set** — settled at 254ddb9 in
+  both authoritative sites (core `journal.rs`'s `Event::Blessed` schema doc and
+  `journal_blessed`'s own doc). Two spec-text divergences carry **dated,
+  non-silent footnotes** rather than silent edits: §5's content-addressing is
+  satisfied by the journal's sha fields, not by filename prefixes, and §2's
+  auto-bless spelling is settled as `auto-first-profile`.
+- **Confirms are per comparison and independent** — a boot where step *and*
+  cumulative both read drift spends two confirm probes, not one shared
+  re-probe (§4 describes a confirm per comparison, and a boot where both
+  references disagree is the boot worth the second measurement). Operator
+  consequence, recorded in the Task 6 evidence doc's operator notes: worst
+  case ≈ N × `assay.probe_timeout_secs` added to the provisional-admission
+  window, N being the comparisons that read drift across all models.
+
+**Deferred from this slice (final-review triage: all defer-sound), by task:**
+
+*Task 1 — instrument precheck:*
+
+- Fixtures live in the daemon crate while the parser lives in core (cross-crate
+  `include_str!`) — settle the home before more consumers arrive.
+- Fixture consts and the provenance prose are duplicated across two files.
+- `without_probe_version` is line-oriented — a latent trap on compact JSON.
+- `InstrumentPrecheck` could derive `Eq`, and wants `Display` for Task 3's
+  journal row.
+
+*Task 2 — `ProfileStore`:*
+
+- `retain_transient` can prune the file it just retained — theoretical today
+  (rename preserves mtime, an incidental invariant, not an enforced one).
+- A partial prune drops the accumulated `dropped` record via `?`.
+- Orphan `.tmp` files are never swept, and neither is leftover confirm staging.
+- `rotate` / `retain_transient` return bare `io::Result` rather than
+  `DriftError`'s own context argument.
+- The mtime-tie test is coupled to `profile_doc`'s hash ordering — latent;
+  comment it if the template changes.
+
+*Task 3 — the gate:*
+
+- `if let` on `InstrumentPrecheck` falls through to the spawn (an exhaustive
+  `match` costs one line).
+- `timeout()` reads the field rather than the spawn's own cap — close it via a
+  shared local.
+- `compare`'s doc overclaims "before anything else could touch".
+- `NotComparable` literal repetition.
+
+*Task 4 — boot wiring and confirms:*
+
+- The failed-bless and retention-failure `Degraded` branches are untested.
+- `Infra` folded into `Unmeasured` needs string-sniffing to separate again —
+  the enforcement slice wants the two apart.
+- Unbounded assay stderr rides onto `/status`.
+- ~~`journal.rs`'s `Event::Drift` schema doc is stale ("two rows per boot").~~
+  **CLOSED at the final fix wave (2026-08-17)** — rewritten as the real row
+  family: two first-reading rows per model per boot plus at most one confirm
+  row per comparison that read `drift`, with both outcome vocabularies stated
+  and read by prefix.
+
+*Task 5 — the bless route:*
+
+- `BlessError::Journal` is machine-indistinguishable from nothing-happened; a
+  baseline replaced but unrecorded deserves its own code.
+- The bless route races `auto_bless` during the POST window — double `Blessed`
+  rows with different provenance, i.e. provenance ambiguity in that live
+  window; documented in the Task 6 evidence doc's operator notes.
+- An unreadable old baseline puts free text in the digest slot; a
+  prefix-distinguishable shape would be better.
+
+**Assay-side carry (flagged for the assay repo's own debt / v1.8 — not bloomery
+work):**
+
+- `assay 0.9.0 diff --gate` exits 0 ("no drift beyond noise") on a v8-vs-v4
+  pair while **five families vanish** (long_output, tool_calling, three json
+  cells) — literally true under its own rules, consumer-dangerous. Bloomery's
+  §3 instrument precheck is the only guard. Measured live, boot 3.
+- diff prose falsely reports `dropped: verdict.long_context` on objects that
+  are equal (prose bug; bloomery never parses prose).
+- assay 0.5.0 has no `diff` subcommand at all — argparse exit 2 masquerades as
+  not-comparable, reachable only behind a precheck that already passed.
+
+**Process lessons:** the plan template omitted the merge-time CARRIED-DEBT
+append — this very entry is the gap, dispatched with the final fix wave rather
+than planned; add the append as a standing template task. Review-and-fix rounds
+caught **nine Importants the suites had passed**, among them a crossed-model
+pair journaling one model's row over another model's document, a failed confirm
+probe leaving zero durable trace (a 600 s dead probe that vanished with the
+process), confirm rows spelling raw re-diff verdicts, and production `run_post`
+wiring left unguarded — a revert-to-pre-drift mutant survived the whole suite.
+Live acceptance's chief yield was the assay-side erratum above, **not** a
+bloomery defect: all three boots read the spec-pinned outcomes first try.
+
 ## Phase 2 work items (in recommended order)
 
 5. **NVMe-media KV image read is unmeasured** — every recorded
