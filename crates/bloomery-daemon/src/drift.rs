@@ -35,8 +35,14 @@
 //!
 //! Neither half writes a journal row: every method hands its outcome back as
 //! a named value ([`Rotation`], [`Blessing`], [`Retention`], [`GateReading`])
-//! for the caller to journal — design deliverable 4 owns the boot wiring and
-//! the confirm-then-alarm loop.
+//! for the caller to journal. That caller is [`watch`] — the boot policy
+//! above both halves (spec §4's confirm-then-alarm), which `post::run_post`
+//! drives once per model per boot.
+
+mod watch;
+
+pub(crate) use watch::{rotate_for_boot, watch_model};
+pub use watch::{DriftStatus, ModelDrift, PROVENANCE_AUTO_FIRST};
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -57,6 +63,13 @@ const BASELINE_QUALIFIER: &str = "baseline";
 
 /// Leading text of every transient's qualifier; the sha prefix follows it.
 const TRANSIENT_QUALIFIER_PREFIX: &str = "transient-";
+
+/// The qualifier a confirm probe writes under before retention renames it by
+/// content. Deliberately **not** the transient prefix: a staging file is not
+/// yet evidence — it has no digest in its name — and naming it `transient-`
+/// would put a half-written document inside the bound
+/// [`ProfileStore::retain_transient`] enforces.
+const CONFIRM_QUALIFIER: &str = "confirm";
 
 /// How many hex characters of the sha256 go into a transient's file name.
 /// Enough that two distinct confirm documents colliding is not a practical
@@ -225,6 +238,19 @@ impl ProfileStore {
                 .root
                 .join(retained_file_name(model, BASELINE_QUALIFIER)),
         }
+    }
+
+    /// Where a confirm probe (spec §4) writes its document before
+    /// [`ProfileStore::retain_transient`] gives it a content-addressed name.
+    ///
+    /// One fixed path per model rather than a unique one per run: POST's own
+    /// delete-before-probe clears it before every probe, so a document left by
+    /// an earlier confirm can never be read back as this one's — the same rule
+    /// that protects the current profile, inherited rather than re-invented.
+    /// A model key goes into the name verbatim, exactly as everywhere else in
+    /// this module.
+    pub fn confirm_staging(&self, model: &str) -> PathBuf {
+        self.root.join(retained_file_name(model, CONFIRM_QUALIFIER))
     }
 
     /// Moves this model's current profile to `previous`, if and only if it

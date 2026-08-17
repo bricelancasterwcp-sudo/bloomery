@@ -49,6 +49,7 @@ use bloomery_core::profile::Profile;
 use bloomery_substrate::Substrate;
 
 use crate::config::Tier;
+use crate::drift::{DriftGate, ProfileStore};
 use crate::pager::{Pager, PagerError};
 
 /// How often the spawn layer checks whether the child has exited. Cheap
@@ -363,7 +364,45 @@ pub fn run_post<S: Substrate>(
     tier: &Tier,
     profiles_dir: &Path,
 ) -> Result<(), PagerError> {
-    let outcome = probe_each(pager, runner, models, port, tier, profiles_dir);
+    // The gate's interpreter is the probe's interpreter, taken from the runner
+    // rather than re-read from config: a diff run under a different assay
+    // install than the probe would be comparing documents with a tool that did
+    // not write them (see `DriftGate::new`).
+    let gate = DriftGate::new(runner.python.clone());
+    post_with_gate(pager, runner, models, port, tier, profiles_dir, &gate)
+}
+
+/// [`run_post`] with the drift gate's subprocess injected.
+///
+/// The confirm probe and the profile store need no seam of their own — the
+/// probe is this module's own [`PostRunner`], already injectable, and the store
+/// is filesystem-only. The gate is the one thing left that would otherwise
+/// spawn `assay diff` for real, so this is the whole of what a test replaces
+/// to drive design §4's outcomes without assay installed.
+#[cfg(any(test, feature = "test-support"))]
+pub fn run_post_with_gate<S: Substrate>(
+    pager: &Mutex<Pager<S>>,
+    runner: &PostRunner,
+    models: &[String],
+    port: u16,
+    tier: &Tier,
+    profiles_dir: &Path,
+    gate: &DriftGate,
+) -> Result<(), PagerError> {
+    post_with_gate(pager, runner, models, port, tier, profiles_dir, gate)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn post_with_gate<S: Substrate>(
+    pager: &Mutex<Pager<S>>,
+    runner: &PostRunner,
+    models: &[String],
+    port: u16,
+    tier: &Tier,
+    profiles_dir: &Path,
+    gate: &DriftGate,
+) -> Result<(), PagerError> {
+    let outcome = probe_each(pager, runner, models, port, tier, profiles_dir, gate);
     let cleared = with_pager(pager, |p| {
         p.set_posting(false);
         Ok(())
@@ -371,6 +410,7 @@ pub fn run_post<S: Substrate>(
     outcome.and(cleared)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn probe_each<S: Substrate>(
     pager: &Mutex<Pager<S>>,
     runner: &PostRunner,
@@ -378,7 +418,9 @@ fn probe_each<S: Substrate>(
     port: u16,
     tier: &Tier,
     profiles_dir: &Path,
+    gate: &DriftGate,
 ) -> Result<(), PagerError> {
+    let store = ProfileStore::new(profiles_dir);
     for model in models {
         // The file name comes from `drift::profile_file_name`, not from a
         // `format!` here: the drift watch's retention layer reads this exact
@@ -386,15 +428,30 @@ fn probe_each<S: Substrate>(
         // spellings of one name is precisely how the two would come to
         // disagree. Same bytes as before the extraction (`{model}.json`).
         let out = profiles_dir.join(crate::drift::profile_file_name(model));
+        // Rotation is BEFORE the probe, because the probe's first act is to
+        // delete `out` (drift-watch design §5, and `ProfileStore::rotate`'s
+        // own doc): last boot's document becomes this boot's drift-step
+        // reference, or the journal says why it could not.
+        crate::drift::rotate_for_boot(pager, &store, model)?;
         match runner.probe(port, model, tier, &out) {
-            Ok(profile) => with_pager(pager, |p| {
-                // `true`: this daemon measured itself, so the profile's
-                // ceiling must not clamp its own geometry (the anti-ratchet
-                // rule on `Pager::create_agent`). Everything else in the
-                // document — verdicts, and being profiled at all — counts.
-                p.attach_profile(model, profile, true)?;
-                p.journal_post(model, "ok", Some(out.display().to_string()))
-            })?,
+            Ok(profile) => {
+                with_pager(pager, |p| {
+                    // `true`: this daemon measured itself, so the profile's
+                    // ceiling must not clamp its own geometry (the
+                    // anti-ratchet rule on `Pager::create_agent`). Everything
+                    // else in the document — verdicts, and being profiled at
+                    // all — counts.
+                    p.attach_profile(model, profile, true)?;
+                    p.journal_post(model, "ok", Some(out.display().to_string()))
+                })?;
+                // Strictly after the admission bookkeeping above, and only on
+                // a successful probe: with no current document there is
+                // nothing to compare, and `ModelStatus.drift` stays absent
+                // rather than reading clean. Drift never touches admission
+                // (design §7) — it observes, and this call's failures are
+                // journal failures only (law 7).
+                crate::drift::watch_model(pager, runner, gate, &store, model, port, tier)?;
+            }
             Err(e) => with_pager(pager, |p| {
                 p.journal_post(model, &format!("failed: {e}"), None)?;
                 p.journal_degraded(format!(
@@ -409,7 +466,12 @@ fn probe_each<S: Substrate>(
 
 /// Locks the pager for one short critical section, turning a poisoned mutex
 /// into a named error rather than a panic inside the boot worker.
-fn with_pager<S: Substrate, T>(
+///
+/// `pub(crate)` for the drift watch (`drift::watch`), which records through
+/// the same pager inside the same boot thread and must hold the lock for
+/// exactly as long — a watch that held it across its confirm probe would block
+/// every `/v1` call for the length of a probe.
+pub(crate) fn with_pager<S: Substrate, T>(
     pager: &Mutex<Pager<S>>,
     f: impl FnOnce(&mut Pager<S>) -> Result<T, PagerError>,
 ) -> Result<T, PagerError> {

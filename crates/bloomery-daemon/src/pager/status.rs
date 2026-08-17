@@ -10,6 +10,7 @@ use bloomery_core::geometry::BoundBy;
 
 use super::codec_gate;
 use crate::agents::AgentState;
+use crate::drift::ModelDrift;
 
 /// What [`crate::pager::Pager::create_agent`] hands back: the id to use, the
 /// window the window law computed, and the term that bound it.
@@ -133,6 +134,13 @@ pub struct ModelStatus {
     /// This model's stored G5 gate, or `None` when it has never completed a
     /// mixed-set probe — same null-not-zero rule as [`ModelStatus::codec_gate`].
     pub refusal_gate: Option<RefusalGateStatus>,
+    /// This boot's two drift comparisons (drift-watch design §2), or `None`
+    /// when the watch never ran for this model — a boot where POST failed, or
+    /// one before POST reached it. **Absent is not clean**, the same
+    /// None-honesty [`ModelStatus::done_trust`] has: a comparison nobody made
+    /// must never render as one that passed. Says nothing about `done_trust`
+    /// and nothing about admission — design §7 keeps the two questions apart.
+    pub drift: Option<ModelDrift>,
 }
 
 /// One model's stored G4 gate, as `/status` renders it (protocol §5).
@@ -249,6 +257,7 @@ impl<S: bloomery_substrate::Substrate> crate::pager::Pager<S> {
                     refuse_interval95: [g.refuse_interval95.0, g.refuse_interval95.1],
                     refuse_provisional: g.refuse_provisional,
                 }),
+                drift: m.drift.clone(),
             })
             .collect();
         models.sort_by(|x, y| x.name.cmp(&y.name));

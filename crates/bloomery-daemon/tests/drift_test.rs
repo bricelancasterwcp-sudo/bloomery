@@ -14,8 +14,8 @@ use bloomery_core::journal::{replay, sha256_hex, sha256_hex_bytes, Event, Journa
 use bloomery_daemon::agents::ImageStore;
 use bloomery_daemon::config::{load_config, Tier};
 use bloomery_daemon::drift::{
-    diff_argv, drift_event, profile_file_name, Comparison, DriftError, DriftGate, GateOutcome,
-    ProfileStore, Rotation, DIFF_TIMEOUT_SECS, MAX_TRANSIENTS,
+    diff_argv, drift_event, profile_file_name, Comparison, DriftError, DriftGate, DriftStatus,
+    GateOutcome, ModelDrift, ProfileStore, Rotation, DIFF_TIMEOUT_SECS, MAX_TRANSIENTS,
 };
 use bloomery_daemon::pager::Pager;
 use bloomery_daemon::post::PostRunner;
@@ -53,8 +53,17 @@ fn store_in(tag: &str) -> (PathBuf, PathBuf, ProfileStore) {
 /// A minimal but real assay profile document — the same shape `post_test.rs`
 /// feeds its fake assay, so what parses here parses there.
 fn profile_doc(model: &str) -> String {
+    profile_doc_ceiling(model, 2048)
+}
+
+/// [`profile_doc`] with the ceiling as a knob, so a test can put two
+/// *different* documents on disk that are still the same model measured by the
+/// same instrument — which is what a drift comparison actually meets, and what
+/// makes "which document is the reference" a checkable claim rather than a
+/// tautology.
+fn profile_doc_ceiling(model: &str, max_verified: u32) -> String {
     format!(
-        r#"{{"assay_profile_version":3,"probe_version":"0.4.1","model":{{"name":"{model}"}},"ceiling":{{"max_verified":2048}},"verdicts":{{}}}}"#
+        r#"{{"assay_profile_version":3,"probe_version":"0.4.1","model":{{"name":"{model}"}},"ceiling":{{"max_verified":{max_verified}}},"verdicts":{{}}}}"#
     )
 }
 
@@ -1034,4 +1043,637 @@ fn scripted_assay() -> PostRunner {
             stderr: Vec::new(),
         })
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Confirm-then-alarm, wired into the boot (spec §2, §4, §5)
+//
+// Every test below drives the *real* `run_post` orchestration against a fake
+// assay and a scripted gate: the probe count, the journal rows and the
+// rendered status all come from the shipping code path, not from a
+// re-implementation of it in the test.
+// ---------------------------------------------------------------------------
+
+/// Where a fake assay was asked to write, once per probe, in order. The
+/// *length* is the load-bearing part: confirm-then-alarm is a claim about how
+/// many times a model is probed in one boot.
+type Probes = std::rc::Rc<std::cell::RefCell<Vec<PathBuf>>>;
+
+fn output(status: std::process::ExitStatus, stderr: &str) -> std::process::Output {
+    std::process::Output {
+        status,
+        stdout: Vec::new(),
+        stderr: stderr.as_bytes().to_vec(),
+    }
+}
+
+fn value_of(args: &[String], flag: &str) -> String {
+    args.iter()
+        .position(|a| a == flag)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// A fake assay whose Nth probe follows `script[N]` (the last entry repeats):
+/// `Ok(doc)` writes that document to the `--json` path it was handed and exits
+/// 0; `Err(code)` exits `code` having written nothing, exactly as a failing
+/// probe does.
+fn scripted_probes(script: Vec<Result<String, i32>>) -> (PostRunner, Probes) {
+    let seen: Probes = Probes::default();
+    let sink = seen.clone();
+    let runner = PostRunner::with_runner(Box::new(move |_py, args: &[String]| {
+        let out = PathBuf::from(value_of(args, "--json"));
+        let model = value_of(args, "--model");
+        let step = script[sink.borrow().len().min(script.len() - 1)].clone();
+        sink.borrow_mut().push(out.clone());
+        match step {
+            Ok(doc) => {
+                std::fs::write(&out, doc).unwrap();
+                Ok(output(exited(0), ""))
+            }
+            Err(code) => Ok(output(exited(code), &format!("cannot reach model {model}"))),
+        }
+    }));
+    (runner, seen)
+}
+
+/// A gate that decides each comparison from the pair of paths it was handed,
+/// recording every spawn. The decision function is what a test uses to say
+/// "the step comparison drifts but the cumulative one does not", and
+/// "…and the confirm's re-diff agrees".
+fn gate_deciding(
+    decide: impl Fn(&str, &str) -> std::process::ExitStatus + 'static,
+) -> (DriftGate, Calls) {
+    let calls: Calls = Calls::default();
+    let sink = calls.clone();
+    let gate = DriftGate::with_runner(Box::new(move |program: &str, args: &[String]| {
+        sink.borrow_mut().push((program.to_string(), args.to_vec()));
+        let empty = String::new();
+        let reference = args.get(3).unwrap_or(&empty).clone();
+        let current = args.get(4).unwrap_or(&empty).clone();
+        Ok(output(decide(&reference, &current), ""))
+    }));
+    (gate, calls)
+}
+
+/// True for a confirm run's document: retention names it by content, and that
+/// name is how a test (and an operator reading the journal) tells the confirm
+/// re-diff from the first reading.
+fn is_transient(path: &str) -> bool {
+    path.contains(".transient-")
+}
+
+/// One model's whole boot: a real `Pager` with a real journal, the profiles
+/// directory `main.rs` creates, and `qwen` registered but unprofiled — the
+/// state `run_post` actually meets.
+struct Boot {
+    profiles: PathBuf,
+    jpath: PathBuf,
+    pager: std::sync::Mutex<Pager<FakeSubstrate>>,
+}
+
+fn boot(tag: &str) -> Boot {
+    let (dir, profiles, _store) = store_in(tag);
+    let jpath = dir.join("j.jsonl");
+    let mut pager = Pager::new(
+        FakeSubstrate::new(),
+        Journal::open(&jpath).expect("journal"),
+        ImageStore::new(&dir.join("img")).expect("image store"),
+        Box::new(|| Some(10u64.pow(9))),
+    );
+    let gguf = dir.join("qwen.gguf");
+    std::fs::write(&gguf, b"weights").unwrap();
+    pager
+        .register_model("qwen", &gguf, qwen_like_meta(), None)
+        .unwrap();
+    pager.set_posting(true);
+    Boot {
+        profiles,
+        jpath,
+        pager: std::sync::Mutex::new(pager),
+    }
+}
+
+impl Boot {
+    /// Writes a document into the profiles directory as if an earlier boot (or
+    /// an operator's blessing) had left it there.
+    fn seed(&self, name: &str, doc: &str) {
+        std::fs::write(self.profiles.join(name), doc).unwrap();
+    }
+
+    fn run(&self, runner: &PostRunner, gate: &DriftGate) {
+        bloomery_daemon::post::run_post_with_gate(
+            &self.pager,
+            runner,
+            &["qwen".to_string()],
+            8181,
+            &tier(),
+            &self.profiles,
+            gate,
+        )
+        .expect("POST records its result");
+    }
+
+    fn events(&self) -> Vec<Event> {
+        replay(&self.jpath).unwrap()
+    }
+
+    /// Every drift row as `(comparison, outcome, current_path)` — the three
+    /// fields the orchestration's claims are about.
+    fn drift_rows(&self) -> Vec<(String, String, String)> {
+        self.events()
+            .iter()
+            .filter_map(|e| match e {
+                Event::Drift {
+                    comparison,
+                    outcome,
+                    current_path,
+                    ..
+                } => Some((comparison.clone(), outcome.clone(), current_path.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn drift(&self) -> Option<ModelDrift> {
+        self.pager
+            .lock()
+            .unwrap()
+            .status()
+            .models
+            .into_iter()
+            .find(|m| m.name == "qwen")
+            .expect("qwen is registered")
+            .drift
+    }
+
+    fn read(&self, name: &str) -> String {
+        std::fs::read_to_string(self.profiles.join(name)).unwrap_or_else(|e| {
+            panic!("expected {name} in the profiles directory: {e}");
+        })
+    }
+
+    fn transients(&self) -> Vec<PathBuf> {
+        let mut found: Vec<PathBuf> = std::fs::read_dir(&self.profiles)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| is_transient(&p.display().to_string()))
+            .collect();
+        found.sort();
+        found
+    }
+}
+
+fn sha8(doc: &str) -> String {
+    sha256_hex_bytes(doc.as_bytes())[..8].to_string()
+}
+
+/// A boot where nothing moved: both comparisons run, both read within noise,
+/// the model is probed exactly once, and a baseline that already exists is not
+/// re-blessed behind the operator's back.
+#[test]
+fn a_clean_boot_reads_within_noise_on_both_comparisons_and_probes_once() {
+    let b = boot("watch-clean");
+    b.seed("qwen.json", &profile_doc_ceiling("qwen", 1024)); // last boot's
+    b.seed("qwen.baseline.json", &profile_doc_ceiling("qwen", 900));
+    let (runner, probes) = scripted_probes(vec![Ok(profile_doc("qwen"))]);
+    let (gate, _calls) = gate_deciding(|_r, _c| exited(0));
+
+    b.run(&runner, &gate);
+
+    assert_eq!(
+        probes.borrow().len(),
+        1,
+        "a boot with no drift reading probes once, never speculatively twice"
+    );
+    assert_eq!(
+        b.drift(),
+        Some(ModelDrift {
+            step: DriftStatus::WithinNoise,
+            cumulative: DriftStatus::WithinNoise,
+        })
+    );
+    assert_eq!(
+        b.drift_rows()
+            .iter()
+            .map(|(c, o, _)| (c.as_str(), o.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("step", "within-noise"), ("cumulative", "within-noise")],
+        "exactly one row per comparison, each naming its own verdict"
+    );
+    assert!(
+        !b.events()
+            .iter()
+            .any(|e| matches!(e, Event::Blessed { .. })),
+        "a baseline that already exists is never re-blessed by the daemon"
+    );
+}
+
+/// The rotation law (spec §5), pinned behaviourally: the step comparison's
+/// reference is LAST boot's document, because rotation runs before POST's
+/// delete-before-probe. Rotating after the probe would leave the step
+/// comparison diffing this boot's document against itself — a gate that can
+/// only ever read within-noise.
+#[test]
+fn the_step_reference_is_last_boots_document_rotated_before_this_boots_probe() {
+    let b = boot("watch-rotate-first");
+    let last_boot = profile_doc_ceiling("qwen", 1024);
+    b.seed("qwen.json", &last_boot);
+    let (runner, _probes) = scripted_probes(vec![Ok(profile_doc("qwen"))]);
+    let (gate, _calls) = gate_deciding(|_r, _c| exited(0));
+
+    b.run(&runner, &gate);
+
+    assert_eq!(
+        b.read("qwen.previous.json"),
+        last_boot,
+        "previous must hold LAST boot's measurement"
+    );
+    assert_eq!(
+        b.read("qwen.json"),
+        profile_doc("qwen"),
+        "current must hold THIS boot's measurement"
+    );
+    let step = b
+        .events()
+        .into_iter()
+        .find(|e| matches!(e, Event::Drift { comparison, .. } if comparison == "step"))
+        .expect("a step row");
+    match step {
+        Event::Drift {
+            reference_sha,
+            current_sha,
+            ..
+        } => {
+            assert_eq!(
+                reference_sha,
+                Some(sha256_hex_bytes(last_boot.as_bytes())),
+                "the step row's reference digest is last boot's document"
+            );
+            assert_ne!(
+                reference_sha, current_sha,
+                "a comparison of this boot's document against itself measures nothing"
+            );
+        }
+        other => panic!("expected a Drift row, got {other:?}"),
+    }
+}
+
+/// Spec §4's confirm-then-alarm: a drift reading is a hypothesis, and the
+/// confirm re-probe tests it. Exactly two probes — the boot's, and the one
+/// confirm — and the alarm is only raised because the second diff agreed.
+#[test]
+fn a_step_drift_that_reproduces_is_confirmed_after_exactly_one_re_probe() {
+    let b = boot("watch-confirmed");
+    let last_boot = profile_doc_ceiling("qwen", 1024);
+    b.seed("qwen.json", &last_boot);
+    b.seed("qwen.baseline.json", &profile_doc_ceiling("qwen", 900));
+    let (runner, probes) = scripted_probes(vec![Ok(profile_doc("qwen"))]);
+    // The step reference drifts every time it is asked; the cumulative one
+    // does not — so exactly one comparison has a hypothesis to confirm.
+    let (gate, _calls) = gate_deciding(|reference, _current| {
+        if reference.ends_with(".previous.json") {
+            exited(1)
+        } else {
+            exited(0)
+        }
+    });
+
+    b.run(&runner, &gate);
+
+    assert_eq!(
+        probes.borrow().len(),
+        2,
+        "one boot probe plus exactly one confirm — never zero, never a retry loop"
+    );
+    assert_eq!(
+        b.drift(),
+        Some(ModelDrift {
+            step: DriftStatus::Confirmed {
+                reference: sha8(&last_boot),
+            },
+            cumulative: DriftStatus::WithinNoise,
+        })
+    );
+    let rows = b.drift_rows();
+    assert_eq!(
+        rows.iter()
+            .map(|(c, o, _)| (c.as_str(), o.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("step", "drift"),
+            ("step", "drift"),
+            ("cumulative", "within-noise")
+        ],
+        "the first reading and its confirm each journal their own row: {rows:?}"
+    );
+    assert!(
+        is_transient(&rows[1].2),
+        "the confirm's row must name the fresh document it compared, got {:?}",
+        rows[1].2
+    );
+    assert!(
+        std::path::Path::new(&rows[1].2).exists(),
+        "the confirm document the row names must be on disk to be checkable"
+    );
+    assert_eq!(
+        b.read("qwen.json"),
+        profile_doc("qwen"),
+        "the confirm probe never overwrites this boot's measurement"
+    );
+}
+
+/// Spec §4's second outcome, and assay's founding finding: the serving state
+/// moved between two probes of one boot. That is a finding of its own, not an
+/// alarm — and the document that failed to reproduce is kept beside the row.
+#[test]
+fn a_step_drift_that_does_not_reproduce_is_transient_and_its_document_is_kept() {
+    let b = boot("watch-transient");
+    b.seed("qwen.json", &profile_doc_ceiling("qwen", 1024));
+    b.seed("qwen.baseline.json", &profile_doc_ceiling("qwen", 900));
+    let (runner, probes) = scripted_probes(vec![Ok(profile_doc("qwen"))]);
+    let (gate, _calls) = gate_deciding(|reference, current| {
+        if reference.ends_with(".previous.json") && !is_transient(current) {
+            exited(1)
+        } else {
+            exited(0)
+        }
+    });
+
+    b.run(&runner, &gate);
+
+    assert_eq!(probes.borrow().len(), 2);
+    assert_eq!(
+        b.drift().map(|d| d.step),
+        Some(DriftStatus::Transient),
+        "a reading that does not reproduce is transient, never confirmed"
+    );
+    let kept = b.transients();
+    assert_eq!(kept.len(), 1, "the confirm document is retained: {kept:?}");
+    assert_eq!(
+        std::fs::read_to_string(&kept[0]).unwrap(),
+        profile_doc("qwen")
+    );
+    assert_eq!(
+        b.drift_rows()
+            .iter()
+            .filter(|(c, _, _)| c == "step")
+            .count(),
+        2,
+        "both the reading and its confirm are journaled"
+    );
+}
+
+/// Spec §4's wedged-confirm rule: when the confirm probe itself fails there is
+/// no second reading, so the first one stands as `unconfirmed` — NAMED, and
+/// never silently upgraded to `Confirmed`.
+#[test]
+fn a_confirm_probe_that_fails_leaves_the_reading_unconfirmed_and_never_upgrades_it() {
+    let b = boot("watch-unconfirmed");
+    b.seed("qwen.json", &profile_doc_ceiling("qwen", 1024));
+    b.seed("qwen.baseline.json", &profile_doc_ceiling("qwen", 900));
+    let (runner, probes) = scripted_probes(vec![Ok(profile_doc("qwen")), Err(4)]);
+    let (gate, _calls) = gate_deciding(|reference, _current| {
+        if reference.ends_with(".previous.json") {
+            exited(1)
+        } else {
+            exited(0)
+        }
+    });
+
+    b.run(&runner, &gate);
+
+    assert_eq!(probes.borrow().len(), 2, "the confirm was attempted");
+    match b.drift().map(|d| d.step) {
+        Some(DriftStatus::Unconfirmed { reason }) => assert!(
+            reason.contains("assay exited 4") && reason.contains("cannot reach model"),
+            "the failure that prevented the confirm must be named: {reason:?}"
+        ),
+        other => panic!("expected Unconfirmed after a failed confirm probe, got {other:?}"),
+    }
+    assert_eq!(
+        b.drift_rows()
+            .iter()
+            .filter(|(c, _, _)| c == "step")
+            .count(),
+        1,
+        "a confirm that never produced a document journals no second comparison"
+    );
+}
+
+/// Spec §4's third outcome: the confirm's re-diff refusing to compare is
+/// infrastructure-shaped, not a drift verdict — so the reading stays
+/// unconfirmed, naming what the re-diff answered.
+#[test]
+fn a_confirm_re_diff_that_refuses_is_unconfirmed_naming_the_refusal() {
+    let b = boot("watch-unconfirmed-refusal");
+    b.seed("qwen.json", &profile_doc_ceiling("qwen", 1024));
+    b.seed("qwen.baseline.json", &profile_doc_ceiling("qwen", 900));
+    let (runner, _probes) = scripted_probes(vec![Ok(profile_doc("qwen"))]);
+    let (gate, _calls) = gate_deciding(|reference, current| {
+        if !reference.ends_with(".previous.json") {
+            exited(0)
+        } else if is_transient(current) {
+            exited(2)
+        } else {
+            exited(1)
+        }
+    });
+
+    b.run(&runner, &gate);
+
+    match b.drift().map(|d| d.step) {
+        Some(DriftStatus::Unconfirmed { reason }) => assert!(
+            reason.contains("not-comparable"),
+            "the re-diff's own answer must be named: {reason:?}"
+        ),
+        other => panic!("expected Unconfirmed for a re-diff that refused, got {other:?}"),
+    }
+}
+
+/// The pinned ordering (spec §2 + the controller's ruling): the first profile
+/// auto-blesses AFTER this boot's comparisons have run, so the cumulative
+/// comparison on that boot honestly reads `unmeasured` — there was no baseline
+/// when it was asked. Blessing first would hand the gate a baseline byte-identical
+/// to the current document and manufacture a within-noise pass out of nothing.
+#[test]
+fn the_first_profile_auto_blesses_after_the_comparisons_so_cumulative_reads_unmeasured() {
+    let b = boot("watch-auto-bless");
+    let (runner, _probes) = scripted_probes(vec![Ok(profile_doc("qwen"))]);
+    let (gate, _calls) = gate_deciding(|_r, _c| exited(0));
+
+    b.run(&runner, &gate);
+
+    match b.drift().map(|d| d.cumulative) {
+        Some(DriftStatus::Unmeasured { reason }) => assert!(
+            reason.contains("qwen.baseline.json"),
+            "the missing reference must be named: {reason:?}"
+        ),
+        other => panic!("expected Unmeasured cumulative on the blessing boot, got {other:?}"),
+    }
+    assert_eq!(
+        b.read("qwen.baseline.json"),
+        profile_doc("qwen"),
+        "the baseline is this boot's document, byte for byte"
+    );
+    let blessed = b
+        .events()
+        .into_iter()
+        .find(|e| matches!(e, Event::Blessed { .. }))
+        .expect("the first profile is blessed");
+    match blessed {
+        Event::Blessed {
+            model,
+            profile_path,
+            sha,
+            provenance,
+        } => {
+            assert_eq!(model, "qwen");
+            assert!(profile_path.ends_with("qwen.baseline.json"));
+            assert_eq!(sha, sha256_hex_bytes(profile_doc("qwen").as_bytes()));
+            assert_eq!(
+                provenance, "auto-first-profile",
+                "the provenance of every baseline is explicit"
+            );
+        }
+        other => panic!("expected a Blessed row, got {other:?}"),
+    }
+}
+
+/// `ModelStatus.drift` is `None` when the drift watch never ran for that model
+/// this boot — the same None-honesty `done_trust` has: absent is not clean.
+#[test]
+fn a_model_whose_post_failed_has_no_drift_reading_at_all() {
+    let b = boot("watch-post-failed");
+    let (runner, _probes) = scripted_probes(vec![Err(4)]);
+    let (gate, calls) = gate_deciding(|_r, _c| exited(0));
+
+    b.run(&runner, &gate);
+
+    assert_eq!(
+        b.drift(),
+        None,
+        "no measurement means no verdict — absent, never a clean one"
+    );
+    assert!(
+        b.drift_rows().is_empty(),
+        "a boot with no current document has nothing to compare"
+    );
+    assert!(
+        calls.borrow().is_empty(),
+        "no comparison is attempted at all"
+    );
+}
+
+/// The rendered surface: both fields present under their own names, and a
+/// model that was never compared renders `null` rather than a verdict.
+#[test]
+fn status_renders_the_drift_pair_and_null_when_it_never_ran() {
+    let b = boot("watch-status-json");
+    b.seed("qwen.json", &profile_doc_ceiling("qwen", 1024));
+    b.seed("qwen.baseline.json", &profile_doc_ceiling("qwen", 900));
+    let (runner, _probes) = scripted_probes(vec![Ok(profile_doc("qwen"))]);
+    let (gate, _calls) = gate_deciding(|reference, current| {
+        if reference.ends_with(".previous.json") && !is_transient(current) {
+            exited(1)
+        } else {
+            exited(0)
+        }
+    });
+
+    let unmeasured: serde_json::Value = {
+        let p = b.pager.lock().unwrap();
+        serde_json::to_value(p.status()).unwrap()
+    };
+    assert_eq!(
+        unmeasured["models"][0]["drift"],
+        serde_json::Value::Null,
+        "before the watch runs, drift is null — absent, not clean"
+    );
+
+    b.run(&runner, &gate);
+
+    let rendered: serde_json::Value = {
+        let p = b.pager.lock().unwrap();
+        serde_json::to_value(p.status()).unwrap()
+    };
+    let drift = &rendered["models"][0]["drift"];
+    assert_eq!(drift["step"]["status"], "transient");
+    assert_eq!(drift["cumulative"]["status"], "within-noise");
+    assert_eq!(
+        rendered["models"][0]["done_trust"],
+        serde_json::Value::Null,
+        "drift is its own field and says nothing about done_trust"
+    );
+}
+
+/// Spec §5's rotation-on-successful-parse rule, from the boot's side: a
+/// corrupt current document is never promoted to "the previous boot's
+/// measurement", the older good reference survives, and the degradation of the
+/// drift record is journaled — POST's delete-before-probe then reclaims the
+/// bytes, so the row is what remains of them.
+#[test]
+fn an_unparseable_current_document_is_kept_out_of_previous_and_journaled() {
+    let b = boot("watch-corrupt-current");
+    let older_good = profile_doc_ceiling("qwen", 512);
+    b.seed("qwen.previous.json", &older_good);
+    b.seed("qwen.json", "{ truncated json");
+    let (runner, _probes) = scripted_probes(vec![Ok(profile_doc("qwen"))]);
+    let (gate, _calls) = gate_deciding(|_r, _c| exited(0));
+
+    b.run(&runner, &gate);
+
+    assert_eq!(
+        b.read("qwen.previous.json"),
+        older_good,
+        "the previous reference already on disk survives untouched"
+    );
+    assert!(
+        b.events().iter().any(|e| matches!(e,
+            Event::Degraded { reason }
+                if reason.contains("qwen.json") && reason.contains("drift"))),
+        "the unpromotable document must be named in the journal: {:?}",
+        b.events()
+    );
+}
+
+/// Spec §5's bound: retention keeps the latest N transients per model, and a
+/// file this daemon deleted is a fact about the evidence trail — journaled,
+/// never quiet housekeeping.
+#[test]
+fn a_dropped_transient_is_journaled_by_name() {
+    let b = boot("watch-transient-bound");
+    b.seed("qwen.json", &profile_doc_ceiling("qwen", 1024));
+    b.seed("qwen.baseline.json", &profile_doc_ceiling("qwen", 900));
+    // Fill the bound with older confirm documents from earlier boots.
+    let old = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+    for i in 0..MAX_TRANSIENTS {
+        let name = format!("qwen.transient-0000000{i}.json");
+        b.seed(&name, &profile_doc_ceiling("qwen", 100 + i as u32));
+        set_mtime(&b.profiles.join(&name), old);
+    }
+    let (runner, _probes) = scripted_probes(vec![Ok(profile_doc("qwen"))]);
+    let (gate, _calls) = gate_deciding(|reference, current| {
+        if reference.ends_with(".previous.json") && !is_transient(current) {
+            exited(1)
+        } else {
+            exited(0)
+        }
+    });
+
+    b.run(&runner, &gate);
+
+    assert_eq!(
+        b.transients().len(),
+        MAX_TRANSIENTS,
+        "the bound holds after the confirm run files its document"
+    );
+    assert!(
+        b.events().iter().any(|e| matches!(e,
+            Event::Degraded { reason }
+                if reason.contains("qwen.transient-00000000.json"))),
+        "the dropped document must be named: {:?}",
+        b.events()
+    );
 }
