@@ -235,16 +235,36 @@ impl ProfileStore {
     /// forgetting to check. Every outcome is a named [`Rotation`], including
     /// both no-op cases — an absent current is never an error and never
     /// silent.
+    ///
+    /// **Corruption is a `Rotation`, not an `Err`.** The bytes are read raw
+    /// and decoded here rather than through `read_to_string`, because a torn
+    /// write leaves a file that is not valid UTF-8 (a NUL-filled block, a
+    /// half-written multibyte sequence) — and `read_to_string` reports that
+    /// as `InvalidData`, an `io::Error`. That would send the single most
+    /// likely corruption mode down the one path [`Rotation::KeptUnparseable`]
+    /// exists to keep it off: an error return the caller cannot distinguish
+    /// from an unreadable disk, when the correct answer is "this document is
+    /// not a profile, so previous stands". `Err` is now reserved for the
+    /// filesystem genuinely failing.
     pub fn rotate(&self, model: &str) -> std::io::Result<Rotation> {
         let paths = self.paths(model);
-        let text = match std::fs::read_to_string(&paths.current) {
-            Ok(text) => text,
+        let bytes = match std::fs::read(&paths.current) {
+            Ok(bytes) => bytes,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Rotation::NothingToRotate {
                     current: paths.current,
                 });
             }
             Err(e) => return Err(e),
+        };
+        let text = match String::from_utf8(bytes) {
+            Ok(text) => text,
+            Err(e) => {
+                return Ok(Rotation::KeptUnparseable {
+                    current: paths.current,
+                    reason: format!("not valid UTF-8: {e}"),
+                });
+            }
         };
         if let Err(e) = Profile::from_json(&text) {
             return Ok(Rotation::KeptUnparseable {

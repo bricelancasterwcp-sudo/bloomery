@@ -62,6 +62,13 @@ fn set_mtime(path: &Path, t: SystemTime) {
         .expect("set mtime");
 }
 
+fn mtime(path: &Path) -> SystemTime {
+    std::fs::metadata(path)
+        .expect("metadata")
+        .modified()
+        .expect("mtime")
+}
+
 // ---------------------------------------------------------------------------
 // Naming: one rule, shared with POST
 // ---------------------------------------------------------------------------
@@ -214,6 +221,39 @@ fn an_unparseable_current_is_not_rotated_and_leaves_previous_untouched() {
     );
 }
 
+/// The same law against the corruption mode that actually happens. The test
+/// above writes `b"{ truncated json"`, which is valid UTF-8 and so only
+/// exercises the JSON parser; a torn write leaves bytes that do not decode at
+/// all (a NUL-filled block, a half-written multibyte sequence). Read through
+/// `read_to_string` that is `io::Error(InvalidData)` — an `Err` return the
+/// caller cannot tell apart from an unreadable disk, for precisely the
+/// failure `KeptUnparseable` exists to name.
+#[test]
+fn a_non_utf8_current_is_kept_unparseable_rather_than_an_io_error() {
+    let (_dir, _profiles, store) = store_in("rotate-non-utf8");
+    let p = store.paths("qwen");
+    std::fs::write(&p.previous, profile_doc("good-reference")).unwrap();
+    std::fs::write(&p.current, b"\xff\xfe not utf8").unwrap();
+
+    match store.rotate("qwen") {
+        Ok(Rotation::KeptUnparseable { current, reason }) => {
+            assert_eq!(current, p.current);
+            assert!(
+                reason.contains("UTF-8"),
+                "the refusal must name the decode failure, got {reason:?}"
+            );
+        }
+        other => panic!("expected Ok(KeptUnparseable), got {other:?}"),
+    }
+
+    assert_eq!(
+        std::fs::read_to_string(&p.previous).unwrap(),
+        profile_doc("good-reference"),
+        "previous must survive an undecodable current"
+    );
+    assert!(p.current.exists());
+}
+
 // ---------------------------------------------------------------------------
 // Blessing
 // ---------------------------------------------------------------------------
@@ -320,6 +360,70 @@ fn a_fifth_transient_drops_the_oldest_and_returns_its_path() {
         other.retained.exists(),
         "another model's transient is not qwen's to drop"
     );
+}
+
+/// The equal-mtime branch of the prune order, which the test above never
+/// reaches because it stamps strictly increasing mtimes — and which a real
+/// confirm loop hits routinely, since several files written inside one
+/// filesystem tick share a timestamp exactly. With no tiebreak the drop would
+/// be whatever order `read_dir` happened to hand back; this pins that ties
+/// resolve to the lexicographically-first name. Arbitrary (the name is a
+/// content hash) but *stable*, which is the property that makes a journaled
+/// drop reproducible.
+#[test]
+fn transients_stamped_in_one_tick_drop_the_lexicographically_first_name() {
+    let (dir, _profiles, store) = store_in("transient-tie");
+    // One instant, shared by all five. `rename` preserves the inode, so the
+    // stamp set on the source survives the move into the store — which is
+    // what makes the tie a real tie rather than five "now"s microseconds
+    // apart.
+    let stamp = SystemTime::now() - Duration::from_secs(3600);
+
+    let mut retained = Vec::new();
+    for i in 0..MAX_TRANSIENTS {
+        let src = dir.join(format!("tie-src-{i}.json"));
+        std::fs::write(&src, profile_doc(&format!("tie-{i}"))).unwrap();
+        set_mtime(&src, stamp);
+        let kept = store.retain_transient("qwen", &src).expect("retain");
+        assert!(kept.dropped.is_empty());
+        retained.push(kept.retained);
+    }
+
+    let src = dir.join(format!("tie-src-{MAX_TRANSIENTS}.json"));
+    std::fs::write(&src, profile_doc(&format!("tie-{MAX_TRANSIENTS}"))).unwrap();
+    set_mtime(&src, stamp);
+    let kept = store.retain_transient("qwen", &src).expect("retain");
+
+    let mut all = retained.clone();
+    all.push(kept.retained.clone());
+
+    // Every one of the five really did share the tick — otherwise this test
+    // would silently degrade into the mtime-ordered case above and stop
+    // pinning the tiebreak at all.
+    for p in all.iter().filter(|p| p.exists()) {
+        assert_eq!(mtime(p), stamp, "{} lost the shared stamp", p.display());
+    }
+
+    let expected = all
+        .iter()
+        .min_by_key(|p| p.file_name().expect("transient has a name").to_os_string())
+        .expect("five transients")
+        .clone();
+    assert_ne!(
+        expected, kept.retained,
+        "fixture precondition: the newly retained file must not be the one that drops, \
+         so this test says nothing about the retained-then-pruned case"
+    );
+
+    assert_eq!(
+        kept.dropped,
+        vec![expected.clone()],
+        "on an mtime tie the lexicographically-first name drops"
+    );
+    assert!(!expected.exists());
+    for p in all.iter().filter(|p| **p != expected) {
+        assert!(p.exists(), "{} must survive", p.display());
+    }
 }
 
 // ---------------------------------------------------------------------------
