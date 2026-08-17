@@ -148,6 +148,26 @@ pub enum Event {
         done_trust: bool,
         detail: String, // codec-selection provenance only; the lens lives in `envelope` above
     },
+    /// A model's current profile was named the drift-cumulative baseline
+    /// (drift-watch design §2). Emitted once per blessing, never inferred:
+    /// the provenance of every baseline is explicit, so a replay can always
+    /// say *who* decided this document is the reference.
+    ///
+    /// `provenance` is one of `"operator"` (an explicit operator action) or
+    /// `"auto-first-profile"` (the first successful POST for a model, which
+    /// blesses itself so the cumulative comparison has a reference at all).
+    /// Re-blessing appends another row rather than editing this one, so the
+    /// superseded baseline's identity stays in the record beside the new one.
+    ///
+    /// `sha` is the sha256 of the blessed document's **bytes**, not of its
+    /// path: the row's path claim is checkable with `sha256sum` against the
+    /// file it names (design §5).
+    Blessed {
+        model: String,
+        profile_path: String,
+        sha: String,
+        provenance: String,
+    },
 }
 
 /// `Event::CodecFixture::expect`'s serde default (G5 design doc §4): every
@@ -205,8 +225,16 @@ pub fn replay(path: &Path) -> std::io::Result<Vec<Event>> {
 }
 
 pub fn sha256_hex(s: &str) -> String {
+    sha256_hex_bytes(s.as_bytes())
+}
+
+/// The same digest over raw bytes, for callers hashing a file rather than a
+/// prompt (the drift watch's content-addressed profiles). One implementation,
+/// so a hex-formatting difference can never make the daemon's file digests
+/// and the journal's prompt digests disagree about what sha256 looks like.
+pub fn sha256_hex_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(s.as_bytes());
+    hasher.update(bytes);
     let digest = hasher.finalize();
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }

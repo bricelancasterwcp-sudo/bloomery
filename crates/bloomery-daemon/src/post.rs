@@ -367,7 +367,12 @@ fn probe_each<S: Substrate>(
     profiles_dir: &Path,
 ) -> Result<(), PagerError> {
     for model in models {
-        let out = profiles_dir.join(format!("{model}.json"));
+        // The file name comes from `drift::profile_file_name`, not from a
+        // `format!` here: the drift watch's retention layer reads this exact
+        // path back as "the current profile" every boot, and two independent
+        // spellings of one name is precisely how the two would come to
+        // disagree. Same bytes as before the extraction (`{model}.json`).
+        let out = profiles_dir.join(crate::drift::profile_file_name(model));
         match runner.probe(port, model, tier, &out) {
             Ok(profile) => with_pager(pager, |p| {
                 // `true`: this daemon measured itself, so the profile's

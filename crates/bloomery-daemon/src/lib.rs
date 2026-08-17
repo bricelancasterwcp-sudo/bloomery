@@ -4,6 +4,7 @@ mod api_task;
 mod api_v1;
 pub mod codec_probe;
 pub mod config;
+pub mod drift;
 pub mod http;
 #[cfg(feature = "llama")]
 pub mod llama_send;

@@ -164,6 +164,46 @@ fn codec_verdict_mixed_round_trips() {
     assert_eq!(replay(&path).unwrap(), vec![e1]);
 }
 
+/// The drift watch's baseline row (design §2/§5): a blessing is only as
+/// good as its provenance and its bytes, so both ride in the row. Asymmetric
+/// on every field so a copy-paste swap between `profile_path`, `sha`, and
+/// `provenance` flips a byte the full-`Event` `assert_eq!` catches.
+#[test]
+fn blessed_round_trips() {
+    let dir = std::env::temp_dir().join("bloomery-journal-drift");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("j-drift.jsonl");
+    let _ = std::fs::remove_file(&path);
+    let mut j = Journal::open(&path).unwrap();
+    let e1 = Event::Blessed {
+        model: "qwen3:8b".into(),
+        profile_path: "/var/lib/bloomery/profiles/qwen3:8b.baseline.json".into(),
+        sha: sha256_hex("the blessed bytes"),
+        provenance: "auto-first-profile".into(),
+    };
+    let e2 = Event::Blessed {
+        model: "qwen2.5-coder:7b-q8_0".into(),
+        profile_path: "/var/lib/bloomery/profiles/qwen2.5-coder:7b-q8_0.baseline.json".into(),
+        sha: sha256_hex("different bytes"),
+        provenance: "operator".into(),
+    };
+    j.append(&e1).unwrap();
+    j.append(&e2).unwrap();
+    assert_eq!(replay(&path).unwrap(), vec![e1, e2]);
+}
+
+/// The digest a `Blessed` row carries is of the profile's **bytes**, so a
+/// human with `sha256sum` can check the row's path claim against the file
+/// (design §5). Pins that the byte-taking helper and the str-taking one
+/// agree, since the daemon hashes bytes and every test expectation is
+/// written against the text.
+#[test]
+fn sha256_of_bytes_and_of_str_agree() {
+    assert_eq!(sha256_hex_bytes(b"abc"), sha256_hex("abc"));
+    assert_eq!(sha256_hex_bytes(b"abc").len(), 64);
+    assert_ne!(sha256_hex_bytes(b"abc"), sha256_hex_bytes(b"abd"));
+}
+
 #[test]
 fn committed_g2_journal_still_replays() {
     // Backward-compatibility pin: schema changes must never orphan the
