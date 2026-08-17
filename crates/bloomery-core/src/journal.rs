@@ -195,8 +195,10 @@ pub enum Event {
     /// three when exactly one comparison read drift, four when both did. A
     /// confirm that never produced a re-diff at all (its probe failed, or its
     /// document could not be retained) writes no `Drift` row — it journals a
-    /// `Degraded` naming the model and the comparison, and the first reading
-    /// stands.
+    /// `Degraded` instead, and the first reading stands. A probe failure's
+    /// `Degraded` names the model and the comparison; a retention failure's
+    /// names the staging document it could not retain, whose filename carries
+    /// the model but not the comparison.
     ///
     /// The row is built to be **re-runnable and verifiable**, and to contain
     /// no transcribed measurements:

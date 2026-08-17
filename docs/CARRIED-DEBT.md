@@ -199,15 +199,26 @@ recorded amendment):**
 - `without_probe_version` is line-oriented — a latent trap on compact JSON.
 - `InstrumentPrecheck` could derive `Eq`, and wants `Display` for Task 3's
   journal row.
+- The fixture helpers' doc generality is overstated: `with_probe_version` /
+  `with_schema_version` say "a v8 fixture's", but hardcode the v8 literal as
+  their search pattern (`profile_test.rs`).
 
 *Task 2 — `ProfileStore`:*
 
 - `retain_transient` can prune the file it just retained — theoretical today
   (rename preserves mtime, an incidental invariant, not an enforced one).
 - A partial prune drops the accumulated `dropped` record via `?`.
-- Orphan `.tmp` files are never swept, and neither is leftover confirm staging.
+- Orphan `.tmp` files (an atomic write whose rename never happened) are never
+  swept.
 - `rotate` / `retain_transient` return bare `io::Result` rather than
   `DriftError`'s own context argument.
+- Nothing type-enforces the provenance vocabulary — the journal field is a bare
+  `String`. The ledger's original "two-value set unenforced, want a pub const
+  pair" is **partly superseded**: the const pair shipped
+  (`PROVENANCE_AUTO_FIRST` / `PROVENANCE_OPERATOR`), and the two-value framing
+  itself was replaced by the prefix-family contract settled at 254ddb9, under
+  which `operator (replaced <sha>)` is a legitimate third spelling. What
+  remains open is only the unenforced-`String` half.
 - The mtime-tie test is coupled to `profile_doc`'s hash ordering — latent;
   comment it if the template changes.
 
@@ -219,6 +230,9 @@ recorded amendment):**
   shared local.
 - `compare`'s doc overclaims "before anything else could touch".
 - `NotComparable` literal repetition.
+- `diff_argv` indirection style: a `[&str; 6]` built from `&String` temporaries
+  and then mapped to owned `String`s, where a plain vec of owned `String`s
+  would say the same thing directly.
 
 *Task 4 — boot wiring and confirms:*
 
@@ -241,6 +255,9 @@ recorded amendment):**
   window; documented in the Task 6 evidence doc's operator notes.
 - An unreadable old baseline puts free text in the digest slot; a
   prefix-distinguishable shape would be better.
+- The bless handler's `let e = match … { Ok => return, Err(e) => e }` followed
+  by a second `match` departs the file's idiom (`api_native.rs`); extracting a
+  `map_bless_error` beside `map_error` would restore it.
 
 **Assay-side carry (flagged for the assay repo's own debt / v1.8 — not bloomery
 work):**
