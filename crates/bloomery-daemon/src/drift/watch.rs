@@ -89,6 +89,34 @@ pub enum DriftStatus {
     NotComparable,
 }
 
+impl DriftStatus {
+    /// The name this verdict takes in the journal — the same kebab-case
+    /// vocabulary [`GateOutcome::journal_outcome`] uses, extended by the three
+    /// words only the confirm stage can produce (`confirmed`, `transient`,
+    /// `unconfirmed: …`).
+    ///
+    /// Read by [`confirm_event`](super::confirm_event): a confirm's row spells
+    /// what was settled, not the raw gate outcome underneath it, so
+    /// `confirmed` cannot be mistaken for the `drift` reading that triggered
+    /// it and `transient` cannot be mistaken for a clean `within-noise` boot.
+    /// The context-carrying variants fold their context in, exactly as the
+    /// gate's own outcomes do — identity and prose, never a transcribed
+    /// measurement.
+    pub fn journal_outcome(&self) -> String {
+        match self {
+            DriftStatus::WithinNoise => "within-noise".to_string(),
+            DriftStatus::Confirmed { .. } => "confirmed".to_string(),
+            DriftStatus::Transient => "transient".to_string(),
+            DriftStatus::Unconfirmed { reason } => format!("unconfirmed: {reason}"),
+            DriftStatus::InstrumentChanged { reference, current } => {
+                format!("instrument-changed ({reference} -> {current})")
+            }
+            DriftStatus::Unmeasured { reason } => format!("unmeasured: {reason}"),
+            DriftStatus::NotComparable => "not-comparable".to_string(),
+        }
+    }
+}
+
 /// One model's pair of drift readings for this boot — spec §2's two
 /// comparisons, always both, each with its own verdict.
 ///
@@ -283,9 +311,23 @@ fn confirm<S: Substrate>(
     // different instrument would be a different measurement"), to a fresh
     // path. The parsed profile is deliberately dropped — see above.
     if let Err(e) = ctx.runner.probe(ctx.port, ctx.model, ctx.tier, &staging) {
-        return Ok(DriftStatus::Unconfirmed {
-            reason: e.to_string(),
-        });
+        // Spec §4: "a wedged confirm journals as infrastructure and the first
+        // reading stands as unconfirmed (named)". Journaled rather than left
+        // in `ModelStatus` alone, because this failure can cost the whole
+        // `assay.probe_timeout_secs` window and then vanish with the process —
+        // and a status field is not a record. There is no comparison to
+        // journal (no second document exists), so the row is a `Degraded`
+        // naming the model, the comparison and the probe's own words.
+        let reason = e.to_string();
+        crate::post::with_pager(pager, |p| {
+            p.journal_degraded(format!(
+                "drift: the confirm probe for {}'s {} comparison failed: {reason}; the first \
+                 reading stands as unconfirmed and is never upgraded",
+                ctx.model,
+                comparison.as_str()
+            ))
+        })?;
+        return Ok(DriftStatus::Unconfirmed { reason });
     }
     let retention = match ctx.store.retain_transient(ctx.model, &staging) {
         Ok(retention) => retention,
@@ -309,8 +351,7 @@ fn confirm<S: Substrate>(
         })?;
     }
     let again = ctx.gate.compare(reference, &retention.retained);
-    journal_reading(pager, ctx.model, comparison, &again)?;
-    Ok(match &again.outcome {
+    let settled = match &again.outcome {
         GateOutcome::Drift => DriftStatus::Confirmed {
             reference: reference_identity(&again),
         },
@@ -321,7 +362,15 @@ fn confirm<S: Substrate>(
         other => DriftStatus::Unconfirmed {
             reason: other.journal_outcome(),
         },
-    })
+    };
+    // The verdict is decided before the row is written, because the row spells
+    // the SETTLED verdict rather than the raw re-diff outcome — see
+    // `drift::confirm_event`. One row per confirm, as spec §4's "+1 row"
+    // allows; there is no third row.
+    crate::post::with_pager(pager, |p| {
+        p.journal_confirm(ctx.model, comparison, &again, &settled)
+    })?;
+    Ok(settled)
 }
 
 /// Blesses a model's first profile as its baseline and journals the

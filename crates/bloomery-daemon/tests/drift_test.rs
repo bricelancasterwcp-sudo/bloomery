@@ -92,6 +92,15 @@ fn mtime(path: &Path) -> SystemTime {
 /// `run_post` — a fake assay writing to whatever `--json` path it is handed,
 /// exactly as assay does — so this is a behavioural pin, not a restatement of
 /// the format string.
+///
+/// It is also the **only** test that reaches the drift watch through
+/// production `run_post` rather than the `run_post_with_gate` seam every
+/// orchestration test below uses, so it pins the delegation itself: a
+/// `run_post` that skipped the watch would still pass every scripted-gate test
+/// and fail here. Staying python-free costs nothing — this is a first boot,
+/// both references are absent, and design §3's precheck refuses an unmeasurable
+/// comparison *before* any subprocess exists, so the real `DriftGate` inside
+/// `run_post` never spawns.
 #[test]
 fn the_stores_current_path_is_the_file_post_actually_writes() {
     let (dir, profiles, store) = store_in("post-agreement");
@@ -134,6 +143,23 @@ fn the_stores_current_path_is_the_file_post_actually_writes() {
             Event::Post { model, profile_path: Some(p), .. }
                 if model == "qwen" && *p == claimed)),
         "expected a Post row naming {claimed}, got {events:?}"
+    );
+
+    // The drift watch really is wired into production `run_post`: this first
+    // boot blessed its own profile as the baseline, on disk and in the record.
+    let baseline = store.paths("qwen").baseline;
+    assert_eq!(
+        std::fs::read_to_string(&baseline)
+            .expect("the real run_post drives the drift watch, which blesses a first profile"),
+        profile_doc("qwen")
+    );
+    assert!(
+        events.iter().any(|e| matches!(e,
+            Event::Blessed { model, provenance, sha, .. }
+                if model == "qwen"
+                    && provenance == "auto-first-profile"
+                    && *sha == sha256_hex_bytes(profile_doc("qwen").as_bytes()))),
+        "expected a Blessed row from the real boot path, got {events:?}"
     );
 }
 
@@ -1363,10 +1389,11 @@ fn a_step_drift_that_reproduces_is_confirmed_after_exactly_one_re_probe() {
             .collect::<Vec<_>>(),
         vec![
             ("step", "drift"),
-            ("step", "drift"),
+            ("step", "confirmed"),
             ("cumulative", "within-noise")
         ],
-        "the first reading and its confirm each journal their own row: {rows:?}"
+        "the first reading journals what the gate said; its confirm journals the verdict that \
+         settled it — `confirmed`, never the raw `drift` word again: {rows:?}"
     );
     assert!(
         is_transient(&rows[1].2),
@@ -1415,13 +1442,20 @@ fn a_step_drift_that_does_not_reproduce_is_transient_and_its_document_is_kept() 
         std::fs::read_to_string(&kept[0]).unwrap(),
         profile_doc("qwen")
     );
+    let step_rows: Vec<(String, String, String)> = b
+        .drift_rows()
+        .into_iter()
+        .filter(|(c, _, _)| c == "step")
+        .collect();
     assert_eq!(
-        b.drift_rows()
-            .iter()
-            .filter(|(c, _, _)| c == "step")
-            .count(),
+        step_rows.len(),
         2,
         "both the reading and its confirm are journaled"
+    );
+    assert_eq!(
+        step_rows[1].1, "transient",
+        "the confirm's row spells the finding — a transient is NOT the `within-noise` a clean \
+         boot gets, and the two must never share a word: {step_rows:?}"
     );
 }
 
@@ -1460,6 +1494,21 @@ fn a_confirm_probe_that_fails_leaves_the_reading_unconfirmed_and_never_upgrades_
         1,
         "a confirm that never produced a document journals no second comparison"
     );
+    // …but it does not vanish either: the probe can burn the whole
+    // `probe_timeout_secs` window and die, and spec §4 says a confirm that
+    // could not be made journals as infrastructure. A status field is not a
+    // record.
+    assert!(
+        b.events().iter().any(|e| matches!(e,
+            Event::Degraded { reason }
+                if reason.contains("confirm probe")
+                    && reason.contains("qwen")
+                    && reason.contains("step")
+                    && reason.contains("assay exited 4"))),
+        "the failed confirm must leave a durable row naming the model, the comparison and the \
+         failure: {:?}",
+        b.events()
+    );
 }
 
 /// Spec §4's third outcome: the confirm's re-diff refusing to compare is
@@ -1490,6 +1539,15 @@ fn a_confirm_re_diff_that_refuses_is_unconfirmed_naming_the_refusal() {
         ),
         other => panic!("expected Unconfirmed for a re-diff that refused, got {other:?}"),
     }
+    let step_rows: Vec<(String, String, String)> = b
+        .drift_rows()
+        .into_iter()
+        .filter(|(c, _, _)| c == "step")
+        .collect();
+    assert_eq!(
+        step_rows[1].1, "unconfirmed: not-comparable",
+        "the confirm's row names both the verdict and what the re-diff answered: {step_rows:?}"
+    );
 }
 
 /// The pinned ordering (spec §2 + the controller's ruling): the first profile

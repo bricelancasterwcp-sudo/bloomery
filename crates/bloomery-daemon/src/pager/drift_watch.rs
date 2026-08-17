@@ -16,7 +16,7 @@
 use bloomery_substrate::Substrate;
 
 use super::{journal as jrnl, PagerError};
-use crate::drift::{drift_event, Comparison, GateReading, ModelDrift};
+use crate::drift::{confirm_event, drift_event, Comparison, DriftStatus, GateReading, ModelDrift};
 
 impl<S: Substrate> crate::pager::Pager<S> {
     /// Stores `model`'s pair of drift readings for this boot.
@@ -49,6 +49,30 @@ impl<S: Substrate> crate::pager::Pager<S> {
         reading: &GateReading,
     ) -> Result<(), PagerError> {
         jrnl::append(&mut self.journal, &drift_event(model, comparison, reading))
+    }
+
+    /// Journals a confirm's re-diff (design §4's second row for one
+    /// comparison).
+    ///
+    /// Separate from [`Pager::journal_drift`] because the two rows say
+    /// different things: a first reading's row carries the gate's raw outcome,
+    /// while a confirm's row carries the verdict that reading finally settled
+    /// on — `confirmed` / `transient` / `unconfirmed: …`. Same reading behind
+    /// both, so paths, digests and exit code still describe the comparison
+    /// that produced them.
+    ///
+    /// [`Pager::journal_drift`]: crate::pager::Pager::journal_drift
+    pub fn journal_confirm(
+        &mut self,
+        model: &str,
+        comparison: Comparison,
+        reading: &GateReading,
+        settled: &DriftStatus,
+    ) -> Result<(), PagerError> {
+        jrnl::append(
+            &mut self.journal,
+            &confirm_event(model, comparison, reading, settled),
+        )
     }
 
     /// Journals a blessing (design §2): which document became the

@@ -871,10 +871,45 @@ fn with_stderr(detail: String, stderr: &str) -> String {
 /// compared. Lives beside the gate rather than in the boot wiring so the call
 /// site there is one line.
 pub fn drift_event(model: &str, comparison: Comparison, reading: &GateReading) -> Event {
+    drift_row(
+        model,
+        comparison,
+        reading,
+        reading.outcome.journal_outcome(),
+    )
+}
+
+/// The journal row for a **confirm's re-diff** (spec §4).
+///
+/// Same reading, one different field: `outcome` spells the verdict the confirm
+/// SETTLED — `confirmed`, `transient`, `unconfirmed: …` — rather than the raw
+/// gate outcome behind it. Carrying the raw word would make a confirmed
+/// regression read `drift`, indistinguishable from the first reading that
+/// triggered the confirm, and would spell a *transient* — which spec §4 calls a
+/// finding in its own right — as `within-noise`, the same word a clean boot
+/// gets. The verdict is what a replay needs; the exit code beside it is still
+/// the re-diff's own.
+///
+/// Everything else stays the re-diff's: the paths, the digests and the exit
+/// code describe the comparison that settled the question, so `sha256sum` on
+/// the row's `current_path` still checks the row.
+pub fn confirm_event(
+    model: &str,
+    comparison: Comparison,
+    reading: &GateReading,
+    settled: &DriftStatus,
+) -> Event {
+    drift_row(model, comparison, reading, settled.journal_outcome())
+}
+
+/// One `Event::Drift`, with the outcome string chosen by the caller and every
+/// other field taken from the reading. Private so there is exactly one way to
+/// build each of the two row kinds.
+fn drift_row(model: &str, comparison: Comparison, reading: &GateReading, outcome: String) -> Event {
     Event::Drift {
         model: model.to_string(),
         comparison: comparison.as_str().to_string(),
-        outcome: reading.outcome.journal_outcome(),
+        outcome,
         reference_path: reading.reference_path.display().to_string(),
         current_path: reading.current_path.display().to_string(),
         exit_code: reading.exit_code,
