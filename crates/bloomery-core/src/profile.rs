@@ -80,6 +80,13 @@ struct CodecCellData {
 #[derive(Debug, Clone, Deserialize)]
 struct ProfileData {
     assay_profile_version: u32,
+    /// The version of the `assay` probe that wrote this document. Present in
+    /// every assay schema since v1, so it is **mandatory** here: no
+    /// `#[serde(default)]`, no `Option`. A document without it is a parse
+    /// error, because a defaulted instrument identity would let the drift
+    /// precheck (see [`instrument_precheck`]) call two different instruments
+    /// comparable.
+    probe_version: String,
     model: ModelInfo,
     #[serde(default)]
     ceiling: Option<CeilingInfo>,
@@ -136,6 +143,22 @@ impl Profile {
     /// Get the schema version of this profile.
     pub fn schema_version(&self) -> u32 {
         self.data.assay_profile_version
+    }
+
+    /// Get the version of the `assay` probe that wrote this profile.
+    ///
+    /// Returns `&str`, not `Option<&str>`: the field is mandatory at parse
+    /// time, so an existing `Profile` always knows which instrument measured
+    /// it.
+    pub fn probe_version(&self) -> &str {
+        &self.data.probe_version
+    }
+
+    /// This profile's instrument identity, `"<probe_version>/v<schema>"` —
+    /// the form [`InstrumentPrecheck::InstrumentChanged`] carries into the
+    /// journal.
+    fn instrument_id(&self) -> String {
+        format!("{}/v{}", self.probe_version(), self.schema_version())
     }
 
     /// Get the model name.
@@ -206,6 +229,50 @@ impl Profile {
             } else {
                 PatchCodec::SearchReplace
             }),
+        }
+    }
+}
+
+/// Whether two profiles were measured by the same instrument, and so may be
+/// compared at all.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InstrumentPrecheck {
+    /// Same `probe_version` and same `assay_profile_version`: a drift
+    /// comparison between these two documents measures the model.
+    Comparable,
+    /// The instrument moved between the two documents. Carries both sides'
+    /// identity in `"<probe_version>/v<schema>"` form (e.g. `"0.5.0/v4"`) so
+    /// the journal row can name them without re-reading either file.
+    InstrumentChanged {
+        /// The reference profile's instrument identity.
+        reference: String,
+        /// The current profile's instrument identity.
+        current: String,
+    },
+}
+
+/// Decide whether `reference` and `current` are comparable at all, before any
+/// drift gate runs (design §3, `docs/superpowers/specs/2026-08-17-drift-watch-design.md`).
+///
+/// `InstrumentChanged` iff the two disagree on `probe_version` **or**
+/// `assay_profile_version` — never pass, never fail, never a score. The
+/// rationale is measured, not theoretical: assay's 2026-08 campaign diffs
+/// showed 12 of 15 models "improving" because the ceiling cap changed between
+/// probe versions, not because the models did. Comparing across a changed
+/// instrument reports the instrument.
+///
+/// Pure: reads the two documents' own version fields and nothing else — no
+/// filesystem, no subprocess, no clock.
+pub fn instrument_precheck(reference: &Profile, current: &Profile) -> InstrumentPrecheck {
+    let same_probe = reference.probe_version() == current.probe_version();
+    let same_schema = reference.schema_version() == current.schema_version();
+
+    if same_probe && same_schema {
+        InstrumentPrecheck::Comparable
+    } else {
+        InstrumentPrecheck::InstrumentChanged {
+            reference: reference.instrument_id(),
+            current: current.instrument_id(),
         }
     }
 }

@@ -166,6 +166,7 @@ fn set_codec_gate_on_unknown_model_is_named() {
 
 const WF_WINS_PROFILE: &str = r#"{
   "assay_profile_version": 3,
+  "probe_version": "0.4.1",
   "model": {"name": "qwen"},
   "codecs": {
     "search_replace": {"small": {"lands": 0.5, "lands_applies": 0.6, "n": 20}},
@@ -208,6 +209,7 @@ fn model_codec_from_profile_separates_a_measured_selection_from_the_default() {
 
     const NO_CODECS_PROFILE: &str = r#"{
       "assay_profile_version": 3,
+      "probe_version": "0.4.1",
       "model": {"name": "qwen"}
     }"#;
     p.attach_profile(
