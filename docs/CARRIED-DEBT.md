@@ -103,6 +103,51 @@ above. Branch `feat/phase2bc-p4-codec-gate`.
    lived in the README's task-surface prose and in this sub-phase's own
    plan doc — recorded here retroactively, delivered on arrival.
 
+## Delivered in flywheel turn 2 (2026-08-16, honest-refusal branch)
+
+**Settled:** Gate G5 (refusal honesty, advisory, per-class floors) pinned
+and instrumented; frozen `codec-tasks-v2-mixed` gate set; two refusal
+template families; gate-aware rejection sampling in the factory (shared
+rule source with the contamination guard); `qwen3-14b-flywheel2` passed
+the full pre-registered battery (G4 20/20 non-provisional; G5 10/10
+patch + 10/10 refuse, both provisional at n=10) — first `done_trust`.
+
+**Deferred from this slice (final-review triage: all defer-sound):**
+
+- **First fast-follow:** `validate_refusal_task` lacks a structural
+  assertion that refusal goals end with the check-first instruction
+  (the patch-side validator has the `DONE_INSTRUCTION` analog). Today
+  every template routes through `goal_phrasing` which appends it by
+  construction; a turn-3 template could silently drop it.
+- Contamination guard screens only `target_contents` per task; a
+  missing-target task's *sibling* file (name/contents) is screened by
+  neither sampler nor CLI. Exposure nil today (sibling content never
+  enters a rendered pair); fast-follow: screen all `task.files`.
+- `codec_probe/mod.rs` dormancy doc overstates: G4 scoring is
+  unchanged, but `CodecFixture` journal rows now carry `expect` —
+  "byte-comparable" is true of scores, not journal bytes. Doc tighten.
+- `flywheel_tool.rs` `real_missing_target_read` interpolates a path
+  into grant JSON unescaped (Linux-only tooling today; fragile if
+  ported).
+- `pager.rs` at 808/800 — extract `ModelEntry` (mechanical).
+- gates.md G5 field ordering cosmetic; unlabeled illustrative Wilson
+  literals in gate tests; per-request tempdir churn in flywheel-tool;
+  dead `target_contents` field on missing-target requests (documented
+  wire convention); two py defect-absent gate fixtures share a code
+  shape (note for gate-set v2 — never amend the frozen, measured set);
+  `codec_probe_test.rs` over the test-file cap (pre-existing).
+- G5 at n=10/class: every pass provisional by construction; a decided
+  pass needs the gate grown to n≥16 per class (a future, separately
+  frozen set).
+
+**Process lessons:** `cargo build --release -p bloomery-daemon` without
+`--features vulkan` silently replaces the served binary with a
+featureless one (boots, refuses to load models — fail-closed caught it
+at smoke); always rebuild with the feature. Gate-screened generation
+(rejection sampling at draw time) beats post-hoc guard-and-regenerate:
+the 729-violation first attempt cost a full generation cycle the
+sampler now prevents by construction.
+
 ## Phase 2 work items (in recommended order)
 
 5. **NVMe-media KV image read is unmeasured** — every recorded
