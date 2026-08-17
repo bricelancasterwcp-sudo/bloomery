@@ -50,6 +50,16 @@ as `auto-blessed (first profile)` so the provenance of every baseline
 is explicit. Re-blessing replaces the baseline and journals the old
 identity beside the new.
 
+> **Footnote, 2026-08-17 (as-built).** The auto-blessing provenance
+> ships spelled **`auto-first-profile`**, not the `auto-blessed (first
+> profile)` prose above — settled at `254ddb9`, which made provenance a
+> *prefix family* (`auto-first-profile`, `operator`, `operator (replaced
+> <sha256>)`) rather than a two-string set. The paragraph's requirement
+> is unchanged and met: the first successful POST auto-blesses, and the
+> provenance of every baseline is explicit in the `Blessed` row.
+> Measured live in
+> `docs/superpowers/evidence/2026-08-17-drift-watch-live.md` (boot 1).
+
 ## 3. Instrument-changed honesty
 
 When the reference and current profiles disagree on `probe_version` or
@@ -110,6 +120,21 @@ dropped and journaled). Files are content-addressed in naming
 verifiable against bytes. POST's existing delete-before-probe rule
 stands: a stale file can never be read as this boot's measurement —
 rotation to "previous" happens on successful parse, before deletion.
+
+> **Footnote, 2026-08-17 (as-built).** Content-addressed naming ships
+> for **transients only** — `{model}.transient-{sha8}.json`. The three
+> named documents keep plain, role-derived names
+> (`{model}.json`, `{model}.previous.json`, `{model}.baseline.json`),
+> because their role, not their content, is what a reader looks them up
+> by, and a content-addressed current profile would change name every
+> boot. The stated purpose — *a journal row's path claim is verifiable
+> against bytes* — is fully met by a different mechanism: every `Drift`
+> row carries `reference_sha`/`current_sha` and every `Blessed` row
+> carries `sha`, all full-64-hex sha256 **of the bytes the daemon
+> actually read**, so `sha256sum <path from the row>` checks the claim
+> directly. Verified live against real rows in
+> `docs/superpowers/evidence/2026-08-17-drift-watch-live.md` (boot 1's
+> `Blessed` sha equals `sha256sum` of the file it names).
 
 ## 6. The assay pin upgrade
 

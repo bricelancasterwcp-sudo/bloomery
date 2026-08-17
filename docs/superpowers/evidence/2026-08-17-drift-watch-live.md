@@ -9,9 +9,16 @@ the only thing added on top. Suite green before and after: 45 suites,
 **507 passed, 0 failed** (`cargo test -p bloomery-core -p bloomery-daemon`,
 run at both ends).
 **Box/tier:** `enthusiast-16gb`, `emulated = false` — RTX 5080 16 GB,
-Vulkan, driver 595.84, CUDA 13.2. GPU **774 MiB / 16303 MiB used before
-the first boot; 776 MiB after the last**, with no bloomery process left
-on the card.
+Vulkan, driver 595.84, CUDA 13.2.
+**GPU, all three readings:** **774 MiB / 16303 MiB** before the first
+boot; **776 MiB** immediately after the last shutdown; **839 MiB** at
+the final check a few minutes later. The last reading is *higher than
+the first* and that is not bloomery: `nvidia-smi`'s process table at
+that moment listed only `ptyxis`, `lact` and a Chrome GPU process, and
+`pgrep -x bloomery-daemon` was empty. The card is shared with a live
+desktop (GNOME Shell, Xwayland, Firefox, Chrome), whose usage drifts by
+tens of MiB on its own; the bloomery-attributable delta at close is
+**zero**. Peak during a boot was ~14.4 GiB with the model resident.
 **Model:** `/home/brice/flywheel2/qwen3-14b-flywheel2-Q4_K_M.gguf` —
 bloomery's own flywheel2 merge, 8.38 GiB Q4_K_M, 40 layers, fully
 resident (`llama_prepare_model_devices: using device Vulkan0 (NVIDIA
@@ -109,10 +116,14 @@ was empty after the extraction). The extracted rev resolves to
 Nothing was wrapped in `timeout` (this box's `timeout` binary segfaults
 on multithreaded children).
 
-### The config, verbatim
+### The config — every value verbatim
 
-Not committed — it names local paths. Boot 3's differs only in
-`data_dir` (pointing at the scratch copy).
+Not committed — it names local paths. **Values are byte-exact; the
+on-disk file's comments are elided here** (a three-line header saying
+what the file is, and a four-line rationale above `probe_timeout_secs`
+— that rationale's content is the paragraph below the block). Boot 3's
+config differs only in `data_dir` (pointing at the scratch copy) and in
+its header comment, which says so.
 
 ```toml
 port = 8399
@@ -148,7 +159,15 @@ put through the daemon's own `/v1`: 111 `AgentCreated`, 109
 bound took ~95 s of single-threaded shader work — that is llama.cpp's,
 not bloomery's, and it happens before `serving on` prints.
 
-Every non-inference row of this boot, verbatim and untruncated:
+This boot's drift-relevant rows, verbatim and untruncated. This is a
+**selection, not the whole journal**: the omitted rows are the probe's
+own per-call traffic and its bookkeeping — `AgentCreated` ×111,
+`SchedulerDecision` ×109, `InferStarted` ×109, `InferCompleted` ×109,
+`AgentRemoved` ×111, `ModelLoaded` ×1, and `Refusal` ×2 (those two are
+quoted in full further down). Nothing drift-related is omitted: the
+counts above are the complete event census of
+`boot-1786999045.jsonl`, and every `Boot`/`Degraded`/`Post`/`Drift`/`Blessed`
+row it contains is below.
 
 ```json
 {"event":"Boot","version":"0.1.0"}
@@ -268,20 +287,26 @@ line-wrapping and the `{a,b}` brace-folding of adjacent codec cells are
 this document's, to keep it readable. Names and order are assay's.)
 
 What actually moved between the two documents (a structural diff of the
-JSON, outside assay):
+JSON, outside assay). **Six paths changed in total; all six are here** —
+the `_samples` pair is the single-element array each `_tps` scalar is
+derived from, so the two speed measurements account for four of the six
+lines:
 
 ```
-/provenance/started  :: '2026-08-17T20:39:24Z'  -> '2026-08-17T20:51:57Z'
-/provenance/finished :: '2026-08-17T20:49:06Z'  -> '2026-08-17T21:01:40Z'
-/speed/decode_tps    :: 50.14530573922124       -> 50.14145699767755
-/speed/prefill_tps   :: 2496.547889464197       -> 2491.8657415398375
+/provenance/started      :: '2026-08-17T20:39:24Z'   -> '2026-08-17T20:51:57Z'
+/provenance/finished     :: '2026-08-17T20:49:06Z'   -> '2026-08-17T21:01:40Z'
+/speed/decode_tps        :: 50.14530573922124        -> 50.14145699767755
+/speed/decode_samples    :: [50.14530573922124]      -> [50.14145699767755]
+/speed/prefill_tps       :: 2496.547889464197        -> 2491.8657415398375
+/speed/prefill_samples   :: [2496.547889464197]      -> [2491.8657415398375]
 ```
 
 Two consecutive boots of a fully-resident Q4 on an idle card reproduced
-every verdict, every ceiling value and every codec cell **exactly**;
-only the two speed samples moved, by 0.008 % and 0.19 %. That is a real
-measurement of this seam's noise floor on this box, and it is far tighter
-than the noise discipline the gate allows.
+every verdict, every ceiling value and every codec cell **exactly** —
+two timestamps and two speed numbers are the whole of what changed in
+the entire document. The speed numbers moved by 0.008 % and 0.19 %.
+That is a real measurement of this seam's noise floor on this box, and
+it is far tighter than the noise discipline the gate allows.
 
 ## Boot 3 — instrument-changed, on a scratch copy under the old pin
 
@@ -343,12 +368,29 @@ $ PYTHONPATH=/home/brice/workspace/assay/src python3 -m assay diff \
     <scratch>/boot3-data/profiles/qwen3-14b-flywheel2.json --gate
 no drift beyond noise
 within noise: ceiling.max_verified, ceiling.failure_mode, verdict.agent_speed,
-  [… 24 more names elided; the full line is the same shape as boot 2's above]
+  verdict.chat_speed, verdict.loop_discipline, verdict.loop_discipline.provisional,
+  verdict.patch_editing, verdict.patch_editing.provisional,
+  verdict.structured_extraction, verdict.structured_extraction.provisional,
+  codec.json_object.{tiny,small,medium}.lands,
+  codec.search_replace.{tiny,small,medium}.{lands,lands_applies},
+  codec.whole_file.{tiny,small,medium}.{lands,lands_applies},
+  speed.decode_tps, speed.prefill_tps
 dropped: verdict.long_context, verdict.long_output, verdict.tool_calling,
          codec.json_object.constrained.lands, codec.json_object.nested.lands,
          codec.json_object.tabular.lands
 exit=0
 ```
+
+(Complete — nothing elided. Same wrapping and brace-folding convention
+as boot 2's block above. This `within noise:` list is **27 names against
+boot 2's 34**, and the 7 that left are exactly: the five *real* dropped
+entries — `verdict.long_output`, `verdict.tool_calling`,
+`codec.json_object.{constrained,nested,tabular}.lands` — plus
+`verdict.long_output.provisional` and `verdict.tool_calling.provisional`.
+`verdict.long_context` appears in neither list's `within noise:` half,
+in this run or boot 2's, which is consistent with it being the reporting
+artifact of surprise 2 rather than a real drop. Seven names left the
+comparison and the exit code still says 0.)
 
 **Exit 0 — a clean pass — while five real measured families silently
 vanished.** Comparing the two documents' key sets directly confirms the
@@ -468,9 +510,16 @@ matches the shell that is running the search on this box.
 
 ## Committed artifacts
 
-This document. Nothing else is committed: the configs name local paths
-(reproduced verbatim above as text), the `data_dir`s live under
-`target/` and the session scratchpad, and the boot-3 tree is a
-deliberate throwaway copy. Every journal row this acceptance rests on is
-quoted above verbatim; every digest quoted is checkable with `sha256sum`
+This document, plus two dated as-built footnotes this run's findings
+earned in `docs/superpowers/specs/2026-08-17-drift-watch-design.md` (§2
+on the auto-bless provenance spelling, §5 on where content-addressing
+actually lands and how the path-claim guarantee is met instead). The
+spec's original text is left visible in both cases.
+
+Nothing else is committed: the configs name local paths (their values
+reproduced above as text), the `data_dir`s live under `target/` and the
+session scratchpad, and the boot-3 tree is a deliberate throwaway copy.
+Every journal row this acceptance rests on is quoted above verbatim, and
+every quoted block that is a *selection* of a larger artifact says so at
+the point of quoting; every digest quoted is checkable with `sha256sum`
 against the path in the same row.
