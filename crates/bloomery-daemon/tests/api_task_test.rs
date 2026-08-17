@@ -468,6 +468,7 @@ fn a_panicking_task_step_becomes_error_and_the_daemon_stays_healthy() {
 /// `Pager::model_patch_codec`'s selection (protocol §4).
 const WF_WINS_PROFILE: &str = r#"{
   "assay_profile_version": 3,
+  "probe_version": "0.4.1",
   "model": {"name": "qwen"},
   "codecs": {
     "search_replace": {"small": {"lands": 0.5, "lands_applies": 0.6, "n": 20}},

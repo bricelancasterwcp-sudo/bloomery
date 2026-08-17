@@ -11,6 +11,8 @@
 
 mod common;
 
+use std::path::{Path, PathBuf};
+
 use common::http;
 
 #[test]
@@ -535,6 +537,286 @@ fn an_agent_created_without_priority_or_budget_lands_on_the_pagers_defaults() {
         agent["budget_granted"], 5000,
         "configured default_budget_tokens carried"
     );
+    handle.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// The operator bless route (drift-watch design §2): "bless the current
+// profile of model M as baseline", journaled with the profile's identity.
+// ---------------------------------------------------------------------------
+
+/// A minimal but real assay profile document, the same shape `drift_test.rs`
+/// and `post_test.rs` use. `max_verified` is the knob that makes two documents
+/// genuinely different bytes while still describing the same model measured by
+/// the same instrument — which is what a baseline replacement actually meets.
+fn profile_doc(model: &str, max_verified: u32) -> String {
+    format!(
+        r#"{{"assay_profile_version":3,"probe_version":"0.4.1","model":{{"name":"{model}"}},"ceiling":{{"max_verified":{max_verified}}},"verdicts":{{}}}}"#
+    )
+}
+
+/// Builds and serves a `Pager<FakeSubstrate>` with `qwen` registered and —
+/// when `wire_profiles_dir` — the profiles directory `main.rs` wires from
+/// `config.data_dir/profiles`. Returns the scratch dir: the profiles directory
+/// is `dir/profiles` and the boot journal is `dir/j.jsonl`.
+///
+/// Built from the same public pieces `serve_panicking` uses rather than from
+/// `test_support::serve_fake`, which wires no profiles directory at all — and
+/// `wire_profiles_dir: false` is exactly that daemon, the one this route must
+/// refuse rather than serve by writing a baseline somewhere of its own
+/// choosing.
+fn serve_with_profiles(
+    wire_profiles_dir: bool,
+) -> (u16, bloomery_daemon::http::ServerHandle, PathBuf) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir =
+        std::env::temp_dir().join(format!("bloomery-bless-test-{}-{seq}", std::process::id()));
+    std::fs::create_dir_all(dir.join("profiles")).expect("scratch dir");
+
+    let journal = bloomery_core::journal::Journal::open(&dir.join("j.jsonl")).unwrap();
+    let images = bloomery_daemon::agents::ImageStore::new(&dir.join("img")).unwrap();
+    let mut pager = bloomery_daemon::pager::Pager::new(
+        bloomery_substrate::fake::FakeSubstrate::new(),
+        journal,
+        images,
+        Box::new(|| Some(1024 * 1024 * 1024)),
+    );
+    if wire_profiles_dir {
+        pager.set_profiles_dir(dir.join("profiles"));
+    }
+    let gguf = dir.join("qwen.gguf");
+    std::fs::write(&gguf, b"weights").unwrap();
+    let meta = bloomery_core::gguf::GgufMeta {
+        arch: "qwen2".into(),
+        layers: 28,
+        kv_heads: 4,
+        head_dim: 128,
+        training_ctx: 4096,
+        weights_bytes: 1000,
+    };
+    pager.register_model("qwen", &gguf, meta, None).unwrap();
+
+    let (port, mut handle) = bloomery_daemon::http::serve(pager, 0);
+    handle.set_scratch_dir(dir.clone());
+    (port, handle, dir)
+}
+
+/// Every `Blessed` row in the fixture's journal as
+/// `(model, profile_path, sha, provenance)`.
+fn blessed_rows(dir: &Path) -> Vec<(String, String, String, String)> {
+    bloomery_core::journal::replay(&dir.join("j.jsonl"))
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            bloomery_core::journal::Event::Blessed {
+                model,
+                profile_path,
+                sha,
+                provenance,
+            } => Some((
+                model.clone(),
+                profile_path.clone(),
+                sha.clone(),
+                provenance.clone(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+/// 200: the blessing copies this boot's profile to the baseline, answers with
+/// the identity of the bytes that landed there, and journals `operator` as the
+/// provenance — design §2's "the provenance of every baseline is explicit".
+#[test]
+fn blessing_a_current_profile_answers_its_identity_and_journals_the_operator() {
+    let (port, handle, dir) = serve_with_profiles(true);
+    let addr = format!("127.0.0.1:{port}");
+    let profiles = dir.join("profiles");
+    let doc = profile_doc("qwen", 2048);
+    std::fs::write(profiles.join("qwen.json"), &doc).unwrap();
+
+    let (st, body) = http(&addr, "POST", "/models/qwen/bless", "");
+    assert_eq!(st, 200, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let baseline = profiles.join("qwen.baseline.json");
+    assert_eq!(v["model"], "qwen");
+    assert_eq!(
+        v["sha"],
+        bloomery_core::journal::sha256_hex(&doc),
+        "the sha is of the blessed bytes, so `sha256sum` on the path checks it"
+    );
+    assert_eq!(v["path"], baseline.display().to_string());
+    assert_eq!(std::fs::read_to_string(&baseline).unwrap(), doc);
+    assert!(
+        profiles.join("qwen.json").exists(),
+        "blessing copies the current profile, it does not consume it"
+    );
+
+    let rows = blessed_rows(&dir);
+    assert_eq!(rows.len(), 1, "one blessing, one row: {rows:?}");
+    assert_eq!(rows[0].0, "qwen");
+    assert_eq!(rows[0].1, baseline.display().to_string());
+    assert_eq!(rows[0].2, bloomery_core::journal::sha256_hex(&doc));
+    assert_eq!(rows[0].3, "operator");
+    handle.shutdown();
+}
+
+/// Design §2: "Re-blessing replaces the baseline and journals the old identity
+/// beside the new." The replaced document's bytes are gone — overwritten by
+/// this blessing — so its digest in the row is all that is left of it, and it
+/// is what ties this row back to the earlier `Blessed` row that named the same
+/// digest.
+#[test]
+fn re_blessing_replaces_the_baseline_and_journals_the_replaced_identity() {
+    let (port, handle, dir) = serve_with_profiles(true);
+    let addr = format!("127.0.0.1:{port}");
+    let profiles = dir.join("profiles");
+    let old = profile_doc("qwen", 1024);
+    let new = profile_doc("qwen", 4096);
+    std::fs::write(profiles.join("qwen.baseline.json"), &old).unwrap();
+    std::fs::write(profiles.join("qwen.json"), &new).unwrap();
+
+    let (st, body) = http(&addr, "POST", "/models/qwen/bless", "");
+    assert_eq!(st, 200, "{body}");
+    assert_eq!(
+        std::fs::read_to_string(profiles.join("qwen.baseline.json")).unwrap(),
+        new,
+        "re-blessing replaces the baseline"
+    );
+
+    let rows = blessed_rows(&dir);
+    assert_eq!(rows.len(), 1, "one blessing, one row: {rows:?}");
+    assert_eq!(rows[0].2, bloomery_core::journal::sha256_hex(&new));
+    assert_eq!(
+        rows[0].3,
+        format!(
+            "operator (replaced {})",
+            bloomery_core::journal::sha256_hex(&old)
+        ),
+        "the identity the blessing overwrote is journaled beside the new one"
+    );
+    handle.shutdown();
+}
+
+/// 404: a name this daemon was never configured with. Same body shape as every
+/// other unknown-model refusal on this surface, and nothing is written — a
+/// route that filed a baseline for a model the pager does not serve would be
+/// inventing evidence about a model nobody measured.
+#[test]
+fn blessing_an_unknown_model_returns_404_and_files_nothing() {
+    let (port, handle, dir) = serve_with_profiles(true);
+    let addr = format!("127.0.0.1:{port}");
+
+    let (st, body) = http(&addr, "POST", "/models/does-not-exist/bless", "");
+    assert_eq!(st, 404, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"], "unknown_model");
+    assert_eq!(v["model"], "does-not-exist");
+    assert!(
+        blessed_rows(&dir).is_empty(),
+        "a refused blessing journals nothing"
+    );
+    assert!(!dir
+        .join("profiles")
+        .join("does-not-exist.baseline.json")
+        .exists());
+    handle.shutdown();
+}
+
+/// 409: there is no current profile to bless (POST never ran, or it failed for
+/// this model). Named and refused — never a silent no-op, and never a 200 that
+/// would tell an operator a baseline exists when nothing was written.
+#[test]
+fn blessing_with_no_current_profile_is_a_named_409_not_a_silent_no_op() {
+    let (port, handle, dir) = serve_with_profiles(true);
+    let addr = format!("127.0.0.1:{port}");
+    let profiles = dir.join("profiles");
+
+    let (st, body) = http(&addr, "POST", "/models/qwen/bless", "");
+    assert_eq!(st, 409, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"], "no_current_profile");
+    assert_eq!(v["model"], "qwen");
+    let detail = v["detail"].as_str().unwrap_or_default().to_string();
+    assert!(
+        detail.contains("nothing to bless")
+            && detail.contains(&profiles.join("qwen.json").display().to_string()),
+        "the refusal names the document it looked for: {detail}"
+    );
+    assert!(
+        !profiles.join("qwen.baseline.json").exists(),
+        "a failed blessing writes no baseline"
+    );
+    assert!(
+        blessed_rows(&dir).is_empty(),
+        "a refused blessing journals nothing"
+    );
+    handle.shutdown();
+}
+
+/// A daemon with no profiles directory wired refuses by name rather than
+/// blessing into whatever directory it happens to be running in. Unreachable
+/// through `main.rs` (which always wires one), which is exactly why it is
+/// pinned: the failure mode of a default here is a baseline nobody can find.
+#[test]
+fn blessing_without_a_configured_profiles_directory_is_a_named_500() {
+    let (port, handle, dir) = serve_with_profiles(false);
+    let addr = format!("127.0.0.1:{port}");
+    std::fs::write(
+        dir.join("profiles").join("qwen.json"),
+        profile_doc("qwen", 2048),
+    )
+    .unwrap();
+
+    let (st, body) = http(&addr, "POST", "/models/qwen/bless", "");
+    assert_eq!(st, 500, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"], "internal");
+    assert!(
+        v["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("profiles directory"),
+        "{body}"
+    );
+    assert!(
+        blessed_rows(&dir).is_empty(),
+        "a refused blessing journals nothing"
+    );
+    assert!(!dir.join("profiles").join("qwen.baseline.json").exists());
+    handle.shutdown();
+}
+
+/// The route table's `_ => 404` still catches everything the new arm does not:
+/// a neighbouring verb under `/models/{name}/` and the same path under the
+/// wrong method are `not_found`, not blessings.
+#[test]
+fn a_neighbouring_path_or_the_wrong_method_still_falls_through_to_not_found() {
+    let (port, handle, dir) = serve_with_profiles(true);
+    let addr = format!("127.0.0.1:{port}");
+    std::fs::write(
+        dir.join("profiles").join("qwen.json"),
+        profile_doc("qwen", 2048),
+    )
+    .unwrap();
+
+    for (method, path) in [
+        ("POST", "/models/qwen/blessing"),
+        ("GET", "/models/qwen/bless"),
+        ("POST", "/models/qwen/bless/again"),
+    ] {
+        let (st, body) = http(&addr, method, path, "");
+        assert_eq!(st, 404, "{method} {path}: {body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["error"], "not_found", "{method} {path}");
+    }
+    assert!(
+        blessed_rows(&dir).is_empty(),
+        "no near-miss request blessed anything"
+    );
+    assert!(!dir.join("profiles").join("qwen.baseline.json").exists());
     handle.shutdown();
 }
 

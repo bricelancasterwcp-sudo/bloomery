@@ -23,6 +23,7 @@
 //! exercised GPU-free against `FakeSubstrate`.
 
 mod codec_gate;
+mod drift_watch;
 mod error;
 mod journal;
 mod paging;
@@ -49,6 +50,7 @@ use journal as jrnl;
 use status::bound_by_str;
 
 pub use codec_gate::{CodecGateResult, RefusalGateResult};
+pub use drift_watch::BlessError;
 pub use error::PagerError;
 pub use status::{
     AgentInfo, AgentStatus, CodecGateStatus, ModelStatus, RefusalGateStatus, StatusReport,
@@ -145,6 +147,14 @@ struct ModelEntry {
     /// or `None` when never measured — the done-trust source `/status` reads.
     /// Advisory only (unlike `codec_gate`): nothing enforces against it.
     refusal_gate: Option<codec_gate::RefusalGateResult>,
+    /// This boot's pair of drift readings (`Pager::set_drift`), or `None` when
+    /// the drift watch never ran for this model — a boot where POST failed, or
+    /// one before the watch reached this model. Absent is not clean: the whole
+    /// point of the drift-watch's named outcomes is that a comparison nobody
+    /// made never renders as one that passed (drift-watch design §8). Never
+    /// read for enforcement: drift is observability, and `done_trust` stays the
+    /// sole property of the G4/G5 gates (design §7).
+    drift: Option<crate::drift::ModelDrift>,
     /// Per-model `n_gpu_layers` override + weights-VRAM ceiling (`pager::tuning`); both `None` -> default.
     n_gpu_layers_override: Option<u32>,
     weights_vram_bytes: Option<u64>,
@@ -214,6 +224,15 @@ pub struct Pager<S: Substrate> {
     /// run — see [`Pager::set_task_journal_path`]. Only read when
     /// `tasks_enabled` is true; an empty default is harmless otherwise.
     task_journal_path: PathBuf,
+    /// The profiles directory the drift watch files into
+    /// (`config.data_dir/profiles`) — see [`Pager::set_profiles_dir`].
+    /// `Option`, unlike [`task_journal_path`](Pager::task_journal_path)'s
+    /// empty-path default, because the one thing that reads it *writes* a file:
+    /// an unset default that resolved to a relative path would bless a baseline
+    /// into whatever directory the daemon happens to be running in, where no
+    /// later boot's comparison would ever look for it. `None` is refused by
+    /// name instead.
+    profiles_dir: Option<PathBuf>,
 }
 
 impl<S: Substrate> Pager<S> {
@@ -275,6 +294,7 @@ impl<S: Substrate> Pager<S> {
             tasks_enabled: false,
             exec_bounds: ExecBounds::default(),
             task_journal_path: PathBuf::new(),
+            profiles_dir: None,
         }
     }
 
@@ -476,6 +496,7 @@ impl<S: Substrate> Pager<S> {
                 unprofiled_logged: false,
                 codec_gate: None,
                 refusal_gate: None,
+                drift: None,
                 n_gpu_layers_override: None,
                 weights_vram_bytes: None,
                 envelope: EnvelopeLens::V1,

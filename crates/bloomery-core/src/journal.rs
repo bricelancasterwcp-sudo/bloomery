@@ -148,6 +148,107 @@ pub enum Event {
         done_trust: bool,
         detail: String, // codec-selection provenance only; the lens lives in `envelope` above
     },
+    /// A model's current profile was named the drift-cumulative baseline
+    /// (drift-watch design §2). Emitted once per blessing, never inferred:
+    /// the provenance of every baseline is explicit, so a replay can always
+    /// say *who* decided this document is the reference.
+    ///
+    /// `provenance` is a **family, not a closed set**, and a consumer reads it
+    /// by prefix:
+    ///
+    /// - exactly `"auto-first-profile"` — the first successful POST for a
+    ///   model, which blesses itself so the cumulative comparison has a
+    ///   reference at all. This daemon never auto-blesses over an existing
+    ///   baseline, so this spelling never carries a parenthetical.
+    /// - prefix `"operator"` — an explicit operator action. Bare `"operator"`
+    ///   when the model had no baseline; `"operator (replaced <sha256>)"` when
+    ///   this blessing overwrote one, where `<sha256>` is the superseded
+    ///   document's full digest — or, when those bytes existed but could not be
+    ///   read, a sentence saying so in place of the digest.
+    ///
+    /// **Re-blessing carries the superseded identity IN THIS ROW**, in the
+    /// parenthetical above. Rows are append-only and the old row is never
+    /// edited, but the old row cannot tell a replay that it *stopped* being the
+    /// baseline — only the replacing row knows that, and the digest it names is
+    /// what ties the two together (it equals the earlier row's `sha`). The
+    /// replaced document's bytes are gone the instant the blessing lands, so
+    /// this digest is all that survives of it.
+    ///
+    /// `sha` is the sha256 of the blessed document's **bytes**, not of its
+    /// path: the row's path claim is checkable with `sha256sum` against the
+    /// file it names (design §5).
+    Blessed {
+        model: String,
+        profile_path: String,
+        sha: String,
+        provenance: String,
+    },
+    /// One drift comparison, exactly as the gate ran it (drift-watch design
+    /// §4).
+    ///
+    /// **How many rows a boot writes is a family, not a fixed count.** A model
+    /// gets two *first-reading* rows per boot — `comparison` is `"step"`
+    /// (against last boot's profile) or `"cumulative"` (against the blessed
+    /// baseline) — plus **at most one confirm row per comparison that read
+    /// `"drift"`**, since a drift reading is the one outcome §4 says must be
+    /// re-tested before it means anything. So: two rows on an ordinary boot,
+    /// three when exactly one comparison read drift, four when both did. A
+    /// confirm that never produced a re-diff at all (its probe failed, or its
+    /// document could not be retained) writes no `Drift` row — it journals a
+    /// `Degraded` instead, and the first reading stands. A probe failure's
+    /// `Degraded` names the model and the comparison; a retention failure's
+    /// names the staging document it could not retain, whose filename carries
+    /// the model but not the comparison.
+    ///
+    /// The row is built to be **re-runnable and verifiable**, and to contain
+    /// no transcribed measurements:
+    ///
+    /// - `outcome` is a named verdict — never a score, and never a number
+    ///   copied out of either profile: a value that looks like a measurement,
+    ///   transcribed, is how transcription errors become evidence. Which
+    ///   vocabulary it draws on is what tells the two row kinds apart:
+    ///   - a **first-reading row** carries the gate's own verdict —
+    ///     `"within-noise"`, `"drift"`, `"not-comparable"`,
+    ///     `"instrument-changed (<ref> -> <cur>)"`, `"unmeasured: <why>"`,
+    ///     `"infra: <what>"`.
+    ///   - a **confirm row** carries the verdict that reading finally
+    ///     *settled* on, not the raw re-diff outcome underneath it —
+    ///     `"confirmed"`, `"transient"`, or
+    ///     `"unconfirmed: <named re-diff outcome>"`, where the text after the
+    ///     colon is itself one of the gate's spellings above. Carrying the raw
+    ///     word instead would make a confirmed regression read `"drift"`,
+    ///     indistinguishable from the first reading that triggered it, and
+    ///     would spell a *transient* — a finding in its own right — as
+    ///     `"within-noise"`, the same word a clean boot gets.
+    ///
+    ///   Like [`Event::Blessed::provenance`], this is read by **prefix**, not
+    ///   by equality against a closed set: `"unmeasured: "`, `"infra: "` and
+    ///   `"unconfirmed: "` all carry free prose after the colon, and
+    ///   `"instrument-changed"` carries both instrument identities in its
+    ///   parenthetical.
+    /// - `reference_path` / `current_path` name the two documents, so anyone
+    ///   can re-run the identical `assay diff` by hand. A confirm row names
+    ///   the same reference and the confirm's own retained document — the pair
+    ///   its re-diff actually compared, not the first reading's pair.
+    /// - `exit_code` is what `assay diff --gate` reported (on a confirm row,
+    ///   what the *re-diff* reported), `None` when no diff ran at all
+    ///   (precheck refused, a side was unmeasured, the spawn failed or the
+    ///   child was killed by a signal). `None`, not `-1` and not `0`: an
+    ///   absent code is not a zero one.
+    /// - `reference_sha` / `current_sha` are the sha256 of each file's
+    ///   **bytes**, taken when the gate read them — the same claim
+    ///   [`Event::Blessed::sha`] makes, so `sha256sum` on either path checks
+    ///   the row against the file. `None` when that side was never read.
+    Drift {
+        model: String,
+        comparison: String,
+        outcome: String,
+        reference_path: String,
+        current_path: String,
+        exit_code: Option<i32>,
+        reference_sha: Option<String>,
+        current_sha: Option<String>,
+    },
 }
 
 /// `Event::CodecFixture::expect`'s serde default (G5 design doc §4): every
@@ -205,8 +306,16 @@ pub fn replay(path: &Path) -> std::io::Result<Vec<Event>> {
 }
 
 pub fn sha256_hex(s: &str) -> String {
+    sha256_hex_bytes(s.as_bytes())
+}
+
+/// The same digest over raw bytes, for callers hashing a file rather than a
+/// prompt (the drift watch's content-addressed profiles). One implementation,
+/// so a hex-formatting difference can never make the daemon's file digests
+/// and the journal's prompt digests disagree about what sha256 looks like.
+pub fn sha256_hex_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(s.as_bytes());
+    hasher.update(bytes);
     let digest = hasher.finalize();
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }

@@ -56,6 +56,7 @@ const MUTATING_VERB_DEMOTED: &str = "verb unavailable: mutating verbs demoted (g
 /// `pager_codec_gate_test.rs` uses.
 const WF_WINS_PROFILE: &str = r#"{
   "assay_profile_version": 3,
+  "probe_version": "0.4.1",
   "model": {"name": "m"},
   "codecs": {
     "search_replace": {"small": {"lands": 0.5, "lands_applies": 0.6, "n": 20}},

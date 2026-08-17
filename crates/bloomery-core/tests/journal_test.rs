@@ -164,6 +164,88 @@ fn codec_verdict_mixed_round_trips() {
     assert_eq!(replay(&path).unwrap(), vec![e1]);
 }
 
+/// The drift watch's baseline row (design §2/§5): a blessing is only as
+/// good as its provenance and its bytes, so both ride in the row. Asymmetric
+/// on every field so a copy-paste swap between `profile_path`, `sha`, and
+/// `provenance` flips a byte the full-`Event` `assert_eq!` catches.
+#[test]
+fn blessed_round_trips() {
+    let dir = std::env::temp_dir().join("bloomery-journal-drift");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("j-drift.jsonl");
+    let _ = std::fs::remove_file(&path);
+    let mut j = Journal::open(&path).unwrap();
+    let e1 = Event::Blessed {
+        model: "qwen3:8b".into(),
+        profile_path: "/var/lib/bloomery/profiles/qwen3:8b.baseline.json".into(),
+        sha: sha256_hex("the blessed bytes"),
+        provenance: "auto-first-profile".into(),
+    };
+    let e2 = Event::Blessed {
+        model: "qwen2.5-coder:7b-q8_0".into(),
+        profile_path: "/var/lib/bloomery/profiles/qwen2.5-coder:7b-q8_0.baseline.json".into(),
+        sha: sha256_hex("different bytes"),
+        provenance: "operator".into(),
+    };
+    j.append(&e1).unwrap();
+    j.append(&e2).unwrap();
+    assert_eq!(replay(&path).unwrap(), vec![e1, e2]);
+}
+
+/// The drift watch's comparison row (design §4, plus the identity fields the
+/// controller ruled in): a row must be re-runnable (both paths, the exit code)
+/// *and* byte-verifiable (both digests), and its `None`s must survive the
+/// round trip as `None` — an absent digest that came back as `""`, or an
+/// absent exit code that came back as `0`, would each read as a measurement
+/// nobody took. Asymmetric on every field so a copy-paste swap between the
+/// reference and current sides flips a byte the full-`Event` `assert_eq!`
+/// catches.
+#[test]
+fn drift_round_trips() {
+    let dir = std::env::temp_dir().join("bloomery-journal-drift-gate");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("j-drift-gate.jsonl");
+    let _ = std::fs::remove_file(&path);
+    let mut j = Journal::open(&path).unwrap();
+    let ran = Event::Drift {
+        model: "qwen3:8b".into(),
+        comparison: "step".into(),
+        outcome: "drift".into(),
+        reference_path: "/var/lib/bloomery/profiles/qwen3:8b.previous.json".into(),
+        current_path: "/var/lib/bloomery/profiles/qwen3:8b.json".into(),
+        exit_code: Some(1),
+        reference_sha: Some(sha256_hex("last boot's bytes")),
+        current_sha: Some(sha256_hex("this boot's bytes")),
+    };
+    let never_ran = Event::Drift {
+        model: "qwen2.5-coder:7b-q8_0".into(),
+        comparison: "cumulative".into(),
+        outcome: "unmeasured: reference /var/lib/bloomery/profiles/\
+                  qwen2.5-coder:7b-q8_0.baseline.json: no such file"
+            .into(),
+        reference_path: "/var/lib/bloomery/profiles/qwen2.5-coder:7b-q8_0.baseline.json".into(),
+        current_path: "/var/lib/bloomery/profiles/qwen2.5-coder:7b-q8_0.json".into(),
+        exit_code: None,
+        reference_sha: None,
+        current_sha: Some(sha256_hex("the current bytes")),
+    };
+    j.append(&ran).unwrap();
+    j.append(&never_ran).unwrap();
+    assert_eq!(replay(&path).unwrap(), vec![ran, never_ran]);
+}
+
+/// The digest a `Blessed` row carries is of the profile's **bytes**, so a
+/// human with `sha256sum` can check the row's path claim against the file
+/// (design §5). Pins that the byte-taking helper and the str-taking one
+/// agree, since the daemon hashes bytes and every test expectation is
+/// written against the text.
+#[test]
+fn sha256_of_bytes_and_of_str_agree() {
+    assert_eq!(sha256_hex_bytes(b"abc"), sha256_hex("abc"));
+    assert_eq!(sha256_hex_bytes(b"abc").len(), 64);
+    assert_ne!(sha256_hex_bytes(b"abc"), sha256_hex_bytes(b"abd"));
+}
+
 #[test]
 fn committed_g2_journal_still_replays() {
     // Backward-compatibility pin: schema changes must never orphan the

@@ -156,6 +156,16 @@ fn run(config: Config, journal: Journal) -> ! {
     // docs for why a fresh `Journal` handle per task run is safe against
     // this one file specifically.
     pager.set_task_journal_path(config.data_dir.join("journal").join("tasks.jsonl"));
+    // The drift watch's filing cabinet (drift-watch design §5). Wired onto the
+    // pager because the operator bless route (`POST /models/{name}/bless`) runs
+    // on a request thread whose only handle on this daemon is the shared pager;
+    // the boot POST below is handed the very same path, so the two cannot come
+    // to disagree about where a model's profiles live. Set unconditionally —
+    // with `assay.enabled = false` nothing ever writes a current profile there,
+    // and the bless route answers that state by name rather than by pointing at
+    // a directory this daemon was never told about.
+    let profiles_dir = config.data_dir.join("profiles");
+    pager.set_profiles_dir(profiles_dir.clone());
 
     // Unprofiled on purpose: POST is the only source of a profile, and it
     // cannot run until this daemon is serving.
@@ -231,7 +241,6 @@ fn run(config: Config, journal: Journal) -> ! {
     );
 
     if config.assay.enabled {
-        let profiles_dir = config.data_dir.join("profiles");
         std::fs::create_dir_all(&profiles_dir)
             .unwrap_or_else(|e| fail(format!("failed to create profiles dir: {e}")));
         let models: Vec<String> = config.models.keys().cloned().collect();

@@ -16,7 +16,14 @@ use bloomery_substrate::contract::VerifiedReply;
 
 use super::PagerError;
 
-fn append(j: &mut Journal, e: &Event) -> Result<(), PagerError> {
+/// Appends one already-built event.
+///
+/// `pub(crate)` for exactly one caller: the drift watch's row is constructed
+/// by `drift::drift_event`, beside the gate that produced the reading, so that
+/// the row cannot describe a different pair of documents than the comparison
+/// read. Every other event in this module is built here, where the `Event`
+/// variant and its call site are one function apart.
+pub(crate) fn append(j: &mut Journal, e: &Event) -> Result<(), PagerError> {
     j.append(e)
         .map_err(|err| PagerError::Substrate(format!("journal append failed: {err}")))
 }
@@ -179,6 +186,27 @@ pub(crate) fn model_unloaded(j: &mut Journal, model: &str) -> Result<(), PagerEr
 
 pub(crate) fn degraded(j: &mut Journal, reason: String) -> Result<(), PagerError> {
     append(j, &Event::Degraded { reason })
+}
+
+/// One blessing (drift-watch design §2). `sha` is the digest of the blessed
+/// document's **bytes**, so the row's path claim is checkable with
+/// `sha256sum`; `provenance` names who decided, never inferred.
+pub(crate) fn blessed(
+    j: &mut Journal,
+    model: &str,
+    profile_path: &str,
+    sha: &str,
+    provenance: &str,
+) -> Result<(), PagerError> {
+    append(
+        j,
+        &Event::Blessed {
+            model: model.to_string(),
+            profile_path: profile_path.to_string(),
+            sha: sha.to_string(),
+            provenance: provenance.to_string(),
+        },
+    )
 }
 
 pub(crate) fn agent_removed(j: &mut Journal, id: &str, reason: &str) -> Result<(), PagerError> {

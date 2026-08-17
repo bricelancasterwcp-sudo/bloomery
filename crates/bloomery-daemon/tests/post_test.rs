@@ -39,7 +39,7 @@ fn probe_success_parses_written_profile() {
     let dir = std::env::temp_dir().join("bloomery-post-test");
     std::fs::create_dir_all(&dir).unwrap();
     let out = dir.join("qwen.json");
-    let profile_json = r#"{"assay_profile_version":3,"model":{"name":"qwen"},"verdicts":{}}"#;
+    let profile_json = r#"{"assay_profile_version":3,"probe_version":"0.4.1","model":{"name":"qwen"},"verdicts":{}}"#;
     let out_clone = out.clone();
     let runner = PostRunner::with_runner(Box::new(move |_py, _args| {
         std::fs::write(&out_clone, profile_json).unwrap(); // assay writes --json path
@@ -179,7 +179,7 @@ fn an_unsupported_schema_is_a_bad_profile() {
     let runner = PostRunner::with_runner(Box::new(move |_, _| {
         std::fs::write(
             &out_clone,
-            r#"{"assay_profile_version":1,"model":{"name":"m"}}"#,
+            r#"{"assay_profile_version":1,"probe_version":"0.1.0","model":{"name":"m"}}"#,
         )
         .unwrap();
         Ok(fake_output(0, "", ""))
@@ -211,7 +211,7 @@ fn meta() -> bloomery_core::gguf::GgufMeta {
 
 fn profile_with_ceiling(name: &str, max_verified: u32) -> Profile {
     Profile::from_json(&format!(
-        r#"{{"assay_profile_version":3,"model":{{"name":"{name}"}},
+        r#"{{"assay_profile_version":3,"probe_version":"0.4.1","model":{{"name":"{name}"}},
             "ceiling":{{"max_verified":{max_verified}}},"verdicts":{{}}}}"#
     ))
     .expect("fixture profile parses")
@@ -431,7 +431,7 @@ fn scripted_assay(succeed: &[&str]) -> PostRunner {
         std::fs::write(
             value_of("--json"),
             format!(
-                r#"{{"assay_profile_version":3,"model":{{"name":"{model}"}},
+                r#"{{"assay_profile_version":3,"probe_version":"0.4.1","model":{{"name":"{model}"}},
                      "ceiling":{{"max_verified":2048}},"verdicts":{{}}}}"#
             ),
         )
@@ -658,7 +658,7 @@ fn a_stale_json_document_is_not_attached_as_a_fresh_profile() {
     ));
     std::fs::write(
         &out,
-        r#"{"assay_profile_version":3,"model":{"name":"qwen"},
+        r#"{"assay_profile_version":3,"probe_version":"0.4.1","model":{"name":"qwen"},
             "ceiling":{"max_verified":99999},"verdicts":{}}"#,
     )
     .unwrap();
