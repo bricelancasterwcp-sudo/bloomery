@@ -35,8 +35,10 @@ use std::sync::Mutex;
 
 use bloomery_substrate::Substrate;
 
-use super::fixtures::shipped_fixture_set;
-use super::{run_codec_probe, ProbeAborted};
+use super::fixtures::{
+    shipped_fixture_set, shipped_fixture_set_v2_mixed, V2_MIXED_PLACEHOLDER_SET_NAME,
+};
+use super::{run_codec_probe, run_refusal_probe, ProbeAborted};
 use crate::pager::{Pager, PagerError};
 
 /// The decision table's first line, as a pure boolean: the probe runs only
@@ -128,4 +130,93 @@ fn journal_degraded<S: Substrate>(
         )
     })?;
     guard.journal_degraded(reason)
+}
+
+// ---------------------------------------------------------------------------
+// G5 (refusal honesty) boot wiring — same decision table shape as G4 above,
+// per-model opt-in (`config.g5_probe`) layered on top, run strictly after
+// G4 at boot (protocol §1: "the same probe path G4 uses ... AFTER the G4
+// probe completes"). `main.rs` computes `g5_models` (every configured model
+// with `g5_probe = true`, per `ModelSpec::g5_probe`) the same way it
+// already computes G4's `models` list, and calls this only when
+// `should_run_codec_probe` (the SAME decision table G4 uses) says the
+// serving window and task surface are both up.
+// ---------------------------------------------------------------------------
+
+/// Journaled once, beside [`POST_DISABLED_CODEC_SKIP_REASON`], when
+/// `tasks_enabled` is true, `assay.enabled` is false, AND at least one
+/// model has `g5_probe = true`: G5 needs the same serving window POST does
+/// (protocol §1: "the same probe path G4 uses"), so an opted-in model stays
+/// unmeasured for `done_trust` too. Gated on "at least one model opted in"
+/// (unlike the unconditional G4 line) because G5 is per-model opt-in — a
+/// daemon with no `g5_probe` model configured at all should never suggest
+/// an operator asked for G5.
+pub const G5_POST_DISABLED_SKIP_REASON: &str =
+    "G5 refusal probe skipped: POST disabled; opted-in models unmeasured — done_trust stays \
+     unmeasured";
+
+/// Journaled once when the embedded G5 mixed set is still the Task-2
+/// placeholder (Task 4 lands the real, frozen 20-fixture
+/// `codec-tasks-v2-mixed` set) — a placeholder must never take a
+/// measurement, so every opted-in model is skipped rather than scored
+/// against fixtures that are not the real instrument yet.
+pub fn g5_placeholder_skip_reason(set_name: &str) -> String {
+    format!(
+        "G5 refusal probe skipped: fixture set {set_name} is a Task-2 placeholder (the real \
+         codec-tasks-v2-mixed set has not landed yet); no model measured — done_trust stays \
+         unmeasured"
+    )
+}
+
+/// Journaled per model on a [`ProbeAborted`] from the G5 (refusal) probe —
+/// same shape as [`probe_aborted_reason`], named separately so a journal
+/// reader can tell a G4 abort (which leaves `mutating_verbs` refused) from
+/// a G5 one (which only leaves `done_trust` unmeasured — G5 is advisory)
+/// without parsing free text.
+pub fn g5_probe_aborted_reason(model: &str, reason: &str) -> String {
+    format!("G5 refusal probe aborted for {model}: {reason}; done_trust unmeasured")
+}
+
+/// Runs the G5 (refusal-honesty) probe for every model in `g5_models`
+/// (already filtered by the caller to `g5_probe = true` —
+/// `crate::config::ModelSpec::g5_probe`), against the embedded mixed set.
+///
+/// The fixture set is parsed exactly once, before any model runs — same
+/// reasoning as [`run_boot_codec_probe`]'s own G4 parse. A still-placeholder
+/// set ([`V2_MIXED_PLACEHOLDER_SET_NAME`]) or an unparseable one is a
+/// build-time/authoring concern, not a per-model measurement, so it is
+/// journaled once and every opted-in model is skipped entirely — never
+/// scored against fixtures that are not the real instrument.
+///
+/// G5 is advisory (design doc §3): unlike [`run_boot_codec_probe`], an
+/// abort here never touches `mutating_verbs` — it only leaves `done_trust`
+/// unmeasured for that model. An empty `g5_models` is a silent no-op (no
+/// journal line): no model opted in, so there is nothing to skip or run.
+pub fn run_boot_g5_probe<S: Substrate + Send + 'static>(
+    pager: &Mutex<Pager<S>>,
+    g5_models: &[String],
+    scratch_dir: &Path,
+) -> Result<(), PagerError> {
+    if g5_models.is_empty() {
+        return Ok(());
+    }
+    let set = match shipped_fixture_set_v2_mixed() {
+        Ok(set) => set,
+        Err(e) => return journal_degraded(pager, fixture_set_unparseable_reason(&e)),
+    };
+    if set.set == V2_MIXED_PLACEHOLDER_SET_NAME {
+        return journal_degraded(pager, g5_placeholder_skip_reason(&set.set));
+    }
+    // A distinct scratch subtree from G4's: the two engines' fixture NAMES
+    // are never guaranteed disjoint (different fixture sets, authored
+    // independently), and `materialize`'s directory is keyed by fixture
+    // name alone under the model's dir — nesting under `g5/` keeps a G5
+    // fixture from ever colliding with a same-named G4 one.
+    let g5_scratch = scratch_dir.join("g5");
+    for model in g5_models {
+        if let Err(ProbeAborted { reason }) = run_refusal_probe(pager, model, &set, &g5_scratch) {
+            journal_degraded(pager, g5_probe_aborted_reason(model, &reason))?;
+        }
+    }
+    Ok(())
 }

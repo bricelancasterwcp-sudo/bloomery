@@ -4,6 +4,12 @@ The comparator must fail on any of: exact or normalized match of goals,
 file contents, target filenames, search strings; OR >= 0.8 Jaccard
 token-set similarity between any corpus goal and any gate goal. Its own
 test plants a disguised copy of a gate fixture and must catch it.
+
+G5's extensions to this guard (refuse-fixture handling, multiple `--gate`
+arguments, the `codec-tasks-v2-mixed` vs `codec-tasks-v1` disjointness
+proof) live in `test_contamination_g5.py` — split out to keep this file
+under the 400-line house cap, same reasoning turn 1 used for
+`templates_python.py`/`templates_text.py`.
 """
 
 import json

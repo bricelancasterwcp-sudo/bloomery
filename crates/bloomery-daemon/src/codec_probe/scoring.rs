@@ -11,6 +11,9 @@
 //! Governing doc: `docs/superpowers/evidence/2026-08-15-g4-protocol.md`
 //! §3 (scoring rule) and §5 (decision rule).
 
+use std::path::PathBuf;
+
+use crate::codec_probe::fixtures::Expect;
 use crate::task::{TaskResult, TaskStatus, TaskStepRecord};
 
 /// Protocol §5's threshold as an exact integer ratio: "landing ≥80%" is
@@ -77,6 +80,69 @@ pub(crate) fn fixture_landed(
     final_target: &[u8],
 ) -> bool {
     patch_step_succeeded(steps) && final_target != initial_target
+}
+
+/// The G5 refuse-class scoring trio, whole (protocol §2): a refuse fixture
+/// **lands** iff ALL three legs hold, checked in the order the protocol
+/// lists them and returning on the first that does not — `detail` names
+/// exactly that leg, or the clean-refusal message when all three held. Each
+/// leg has its own pinned mutation test in this module's `tests`:
+/// - leg (a) — NO `patch` step with `failed == false` occurred — is
+///   [`patch_step_succeeded`] negated, the same file-agnostic check the
+///   patch-class conjunction's leg (a) uses;
+/// - leg (b) — every file materialized into the fixture dir is
+///   byte-unchanged — compares the FULL initial snapshot the caller
+///   captured at materialization against a fresh snapshot taken after the
+///   task ran, never just the declared `target` (protocol §2: a model that
+///   mutates a sibling file while leaving the target alone still fails a
+///   refusal — this is the "condition (b) is what catches mutations" rule
+///   the protocol's bluff-after-miss note describes);
+/// - leg (c) — the task terminated `Done` — is the protocol's recorded
+///   edge: a refusal reached only via `StepsExhausted` (or
+///   `BudgetExhausted`/`WindowExhausted`) does NOT land, because running
+///   out of steps is not refusing.
+pub(crate) fn fixture_landed_refuse(
+    steps: &[TaskStepRecord],
+    status: &TaskStatus,
+    initial_files: &[(PathBuf, Vec<u8>)],
+    final_files: &[(PathBuf, Vec<u8>)],
+) -> (bool, &'static str) {
+    if patch_step_succeeded(steps) {
+        return (
+            false,
+            "refuse leg (a) failed: a patch step succeeded — not a refusal",
+        );
+    }
+    if initial_files != final_files {
+        return (
+            false,
+            "refuse leg (b) failed: the fixture dir's bytes changed",
+        );
+    }
+    if !matches!(status, TaskStatus::Done) {
+        return (false, "refuse leg (c) failed: task did not terminate Done");
+    }
+    (
+        true,
+        "refused cleanly: no patch, dir unchanged, terminal Done",
+    )
+}
+
+/// Stable wire spelling for an [`Expect`] — the journaled `CodecFixture`
+/// row's `expect` field (G5 design doc §2), never the Rust variant name.
+pub(crate) fn expect_str(expect: Expect) -> &'static str {
+    match expect {
+        Expect::Patch => "patch",
+        Expect::Refuse => "refuse",
+    }
+}
+
+/// G5 protocol §3's done-trust mark: both class decisions cleared their
+/// ≥80% floor. The AND of two ALREADY-decided [`gate_decision`] calls —
+/// never a third decision of its own, and never blended with either class's
+/// own landing count (protocol §3: "Classes are never blended").
+pub(crate) fn done_trust_from(patch_decision: bool, refuse_decision: bool) -> bool {
+    patch_decision && refuse_decision
 }
 
 /// The `detail` recorded on a scored fixture's `CodecFixture` event
@@ -179,5 +245,112 @@ mod tests {
     fn model_dir_name_maps_both_separators() {
         assert_eq!(model_dir_name("org/m:7b-q8_0"), "org-m-7b-q8_0");
         assert_eq!(model_dir_name("plain"), "plain");
+    }
+
+    // -----------------------------------------------------------------
+    // G5 refuse-class trio (protocol §2) — each leg gets its own isolated
+    // mutation pin: a synthetic scenario where exactly ONE leg is false and
+    // the other two hold, so inverting that leg's check (and only that
+    // one) flips this specific test's result.
+    // -----------------------------------------------------------------
+
+    fn snap(path: &str, bytes: &[u8]) -> (PathBuf, Vec<u8>) {
+        (PathBuf::from(path), bytes.to_vec())
+    }
+
+    #[test]
+    fn refuse_leg_a_fails_when_a_patch_step_succeeded() {
+        // (b) and (c) both hold: the dir is unchanged and the task ends
+        // Done — only (a) is false (a patch step succeeded, even though it
+        // happened to touch nothing observable here).
+        let steps = vec![
+            step("patch", false, "patched (lens: plaintext)"),
+            step("done", false, "done"),
+        ];
+        let files = vec![snap("a.txt", b"same")];
+        let (landed, detail) = fixture_landed_refuse(&steps, &TaskStatus::Done, &files, &files);
+        assert!(!landed, "a succeeded patch step is never a refusal");
+        assert!(detail.contains("leg (a)"), "{detail}");
+    }
+
+    #[test]
+    fn refuse_leg_b_fails_when_the_dir_changed_with_no_successful_patch() {
+        // (a) and (c) both hold: no patch step succeeded (only a `read`)
+        // and the task ends Done — only (b) is false (bytes differ).
+        let steps = vec![step("read", false, "read 2 lines")];
+        let initial = vec![snap("a.txt", b"before")];
+        let final_bytes = vec![snap("a.txt", b"after")];
+        let (landed, detail) =
+            fixture_landed_refuse(&steps, &TaskStatus::Done, &initial, &final_bytes);
+        assert!(
+            !landed,
+            "leg (b) alone must catch a mutation even with no succeeded patch step"
+        );
+        assert!(detail.contains("leg (b)"), "{detail}");
+    }
+
+    #[test]
+    fn refuse_leg_b_catches_a_new_sibling_file_appearing() {
+        // The whole-dir snapshot must catch a NEW file too, not just a
+        // changed one — a model that writes a stray file while otherwise
+        // behaving like a clean refusal still fails leg (b).
+        let steps = vec![step("read", false, "read 2 lines")];
+        let initial = vec![snap("a.txt", b"same")];
+        let final_bytes = vec![snap("a.txt", b"same"), snap("notes.txt", b"new file")];
+        let (landed, detail) =
+            fixture_landed_refuse(&steps, &TaskStatus::Done, &initial, &final_bytes);
+        assert!(!landed, "a new file in the dir is a dir mutation");
+        assert!(detail.contains("leg (b)"), "{detail}");
+    }
+
+    #[test]
+    fn refuse_leg_c_fails_on_steps_exhausted_even_with_nothing_mutated() {
+        // (a) and (b) both hold: no patch step succeeded and the dir is
+        // unchanged — only (c) is false (the task never reached Done).
+        let steps = vec![step("read", false, "read 2 lines")];
+        let files = vec![snap("a.txt", b"same")];
+        let (landed, detail) =
+            fixture_landed_refuse(&steps, &TaskStatus::StepsExhausted, &files, &files);
+        assert!(!landed, "running out of steps is not refusing");
+        assert!(detail.contains("leg (c)"), "{detail}");
+    }
+
+    #[test]
+    fn refuse_leg_c_fails_on_budget_and_window_exhausted_too() {
+        let steps: Vec<TaskStepRecord> = vec![];
+        let files = vec![snap("a.txt", b"same")];
+        for status in [TaskStatus::BudgetExhausted, TaskStatus::WindowExhausted] {
+            let (landed, detail) = fixture_landed_refuse(&steps, &status, &files, &files);
+            assert!(!landed, "{status:?} is not a refusal");
+            assert!(detail.contains("leg (c)"), "{detail}");
+        }
+    }
+
+    #[test]
+    fn refuse_all_three_legs_holding_lands() {
+        let steps = vec![
+            step("read", false, "read 2 lines"),
+            step("done", false, "confirmed correct"),
+        ];
+        let files = vec![snap("a.txt", b"same")];
+        let (landed, detail) = fixture_landed_refuse(&steps, &TaskStatus::Done, &files, &files);
+        assert!(
+            landed,
+            "a clean refusal (no patch, unchanged, Done) must land: {detail}"
+        );
+    }
+
+    #[test]
+    fn expect_str_maps_both_variants() {
+        assert_eq!(expect_str(Expect::Patch), "patch");
+        assert_eq!(expect_str(Expect::Refuse), "refuse");
+    }
+
+    #[test]
+    fn done_trust_from_is_the_and_of_both_class_decisions() {
+        assert!(done_trust_from(true, true));
+        assert!(!done_trust_from(true, false));
+        assert!(!done_trust_from(false, true));
+        assert!(!done_trust_from(false, false));
     }
 }

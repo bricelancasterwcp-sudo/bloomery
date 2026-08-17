@@ -210,11 +210,14 @@ pub(crate) fn post(
     )
 }
 
-/// One G4 fixture run outcome (protocol §2/§3, `codec_gate::CodecGateResult`'s
-/// per-fixture evidence). `codec` is already the wire spelling
-/// (`"search_replace"`/`"whole_file"`) — callers convert once via
-/// `codec_gate::patch_codec_str` rather than this module knowing about
-/// [`bloomery_core::action::PatchCodec`].
+/// One G4/G5 fixture run outcome (protocol §2/§3,
+/// `codec_gate::CodecGateResult`'s per-fixture evidence). `codec` is already
+/// the wire spelling (`"search_replace"`/`"whole_file"`) — callers convert
+/// once via `codec_gate::patch_codec_str` rather than this module knowing
+/// about [`bloomery_core::action::PatchCodec`]. `expect` is the fixture's
+/// class wire spelling (`"patch"`/`"refuse"`, G5 design doc §2) — every
+/// caller before G5 passed `"patch"` implicitly by being the only class that
+/// existed; now it is explicit at every call site.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn codec_fixture(
     j: &mut Journal,
@@ -225,6 +228,7 @@ pub(crate) fn codec_fixture(
     landed: bool,
     steps: u32,
     detail: &str,
+    expect: &str,
 ) -> Result<(), PagerError> {
     append(
         j,
@@ -236,6 +240,7 @@ pub(crate) fn codec_fixture(
             landed,
             steps,
             detail: detail.to_string(),
+            expect: expect.to_string(),
         },
     )
 }
@@ -266,6 +271,50 @@ pub(crate) fn codec_verdict(
             interval95: [interval95.0, interval95.1],
             provisional,
             mutating_verbs,
+            detail: detail.to_string(),
+        },
+    )
+}
+
+/// The per-model G5 mixed-set verdict (design doc §2/§4), emitted exactly
+/// once per completed mixed-set probe — same "never for an aborted one"
+/// rule as [`codec_verdict`], and never emitted for the same probe that
+/// also emits [`codec_verdict`] (a set is either all-`patch`, classic G4
+/// path, or mixed, G5 path — never both).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn codec_verdict_mixed(
+    j: &mut Journal,
+    model: &str,
+    fixture_set: &str,
+    codec: &str,
+    envelope: &str,
+    patch_landed: u32,
+    patch_n: u32,
+    patch_interval95: (f64, f64),
+    patch_provisional: bool,
+    refuse_landed: u32,
+    refuse_n: u32,
+    refuse_interval95: (f64, f64),
+    refuse_provisional: bool,
+    done_trust: bool,
+    detail: &str,
+) -> Result<(), PagerError> {
+    append(
+        j,
+        &Event::CodecVerdictMixed {
+            model: model.to_string(),
+            fixture_set: fixture_set.to_string(),
+            codec: codec.to_string(),
+            envelope: envelope.to_string(),
+            patch_landed,
+            patch_n,
+            patch_interval95: [patch_interval95.0, patch_interval95.1],
+            patch_provisional,
+            refuse_landed,
+            refuse_n,
+            refuse_interval95: [refuse_interval95.0, refuse_interval95.1],
+            refuse_provisional,
+            done_trust,
             detail: detail.to_string(),
         },
     )

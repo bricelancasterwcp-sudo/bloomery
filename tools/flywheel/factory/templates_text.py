@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import random
 
+from tools.flywheel.factory import goal_phrasing
 from tools.flywheel.factory.task import DONE_INSTRUCTION, Task
 from tools.flywheel.factory.wordlists import (
     CONFIG_KEY_BASES,
@@ -46,10 +47,15 @@ def _family_config_value_mismatch(rng: random.Random) -> Task:
 
     search = f"{key} = {wrong_val}"
     replace = f"{key} = {correct_val}"
-    goal = (
-        f"{target}'s {key} is set to {wrong_val}, but operations requires it to be at least "
-        f"{correct_val} -- staying below that threshold causes failures under load. Change the "
-        f"{key} line in {target} to {correct_val}. {DONE_INSTRUCTION}"
+    goal = goal_phrasing.patch_skeletons(
+        rng,
+        target,
+        subject=key,
+        problem=f"is set to {wrong_val}, but operations requires it to be at least {correct_val}",
+        evidence="staying below that threshold causes failures under load",
+        fix_target=f"the {key} line in {target}",
+        fix_goal=f"it reads {correct_val}",
+        instruction=DONE_INSTRUCTION,
     )
     summary = f"Changed {key} in {target} from {wrong_val} to {correct_val}."
     return Task("txt_config_value_mismatch", "plaintext", target, {target: contents}, goal, search, replace, summary)
@@ -91,10 +97,18 @@ def _family_port_host_mismatch(rng: random.Random) -> Task:
     )
     search = mismatched_line
     replace = fixed_line
-    goal = (
-        f"{target}'s {key} says {wrong_display}, but health_check_target at the bottom of the "
-        f"file uses {correct_display} -- the health check never reaches the service. Change "
-        f"the {key} line in {target} to {correct_display}. {DONE_INSTRUCTION}"
+    goal = goal_phrasing.patch_skeletons(
+        rng,
+        target,
+        subject=key,
+        problem=f"says {wrong_display}",
+        evidence=(
+            f"health_check_target at the bottom of the file uses {correct_display} -- the health "
+            f"check never reaches the service"
+        ),
+        fix_target=f"the {key} line in {target}",
+        fix_goal=f"it reads {correct_display}",
+        instruction=DONE_INSTRUCTION,
     )
     summary = f"Changed {key} in {target} from {wrong_display} to {correct_display}."
     return Task("txt_port_host_mismatch", "plaintext", target, {target: contents}, goal, search, replace, summary)
@@ -124,12 +138,21 @@ def _family_version_date_string(rng: random.Random) -> Task:
     )
     search = f"## {version_dup} - {month} {day2}"
     replace = f"## {version_correct} - {month} {day2}"
-    goal = (
-        f"Two entries in {target} share the heading {version_dup}, but only the first change "
-        f"({feature_a}) actually belongs to that version -- the second batch of work "
-        f"({feature_b} fix) was tagged and shipped afterward as {version_correct}, so its "
-        f"heading is stuck on the old number. Retitle the second heading in {target} as "
-        f"{version_correct}. {DONE_INSTRUCTION}"
+    goal = goal_phrasing.patch_skeletons(
+        rng,
+        target,
+        subject="two release-note headings",
+        problem=(
+            f"share the heading {version_dup}, but only the {month} {day1} change ({feature_a}) "
+            f"actually belongs to that version"
+        ),
+        evidence=(
+            f"the {month} {day2} batch of work ({feature_b} fix) was tagged and shipped afterward as "
+            f"{version_correct}, so its heading is stuck on the old number"
+        ),
+        fix_target=f"the second heading in {target}",
+        fix_goal=f"it reads {version_correct}",
+        instruction=DONE_INSTRUCTION,
     )
     summary = f"Retitled the second heading in {target} as {version_correct}."
     return Task("txt_version_date_string", "plaintext", target, {target: contents}, goal, search, replace, summary)
@@ -156,11 +179,15 @@ def _family_wrong_name_in_prose(rng: random.Random) -> Task:
     )
     search = f"Resolved by: {wrong_person}"
     replace = f"Resolved by: {correct_person}"
-    goal = (
-        f"{target} credits {wrong_person} as the engineer who resolved the {noun} incident, but "
-        f"the on-call log shows {correct_person} actually closed it out -- the postmortem has "
-        f"the wrong name attached. Update the resolver's name in {target} to {correct_person}. "
-        f"{DONE_INSTRUCTION}"
+    goal = goal_phrasing.patch_skeletons(
+        rng,
+        target,
+        subject="the postmortem",
+        problem=f"credits {wrong_person} as the engineer who resolved the {noun} incident",
+        evidence=f"the on-call log shows {correct_person} actually closed it out",
+        fix_target=f"the resolver's name in {target}",
+        fix_goal=f"it reads {correct_person}",
+        instruction=DONE_INSTRUCTION,
     )
     summary = f"Corrected the resolver name in {target} to {correct_person}."
     return Task("txt_wrong_name_in_prose", "plaintext", target, {target: contents}, goal, search, replace, summary)
@@ -186,10 +213,15 @@ def _family_wrong_url_path_in_docs(rng: random.Random) -> Task:
     )
     search = f"    https://{domain_base}.{tld}{wrong_path}"
     replace = f"    https://{domain_base}.{tld}{correct_path}"
-    goal = (
-        f"{target} points readers to {wrong_path} for troubleshooting, but the actual "
-        f"troubleshooting page lives at {correct_path} -- the linked URL in {target} 404s. Fix "
-        f"the troubleshooting URL in {target} to use {correct_path}. {DONE_INSTRUCTION}"
+    goal = goal_phrasing.patch_skeletons(
+        rng,
+        target,
+        subject="the troubleshooting link",
+        problem=f"points readers to {wrong_path}",
+        evidence=f"the actual troubleshooting page lives at {correct_path} -- the linked URL in {target} 404s",
+        fix_target=f"the troubleshooting URL in {target}",
+        fix_goal=f"it uses {correct_path}",
+        instruction=DONE_INSTRUCTION,
     )
     summary = f"Fixed the troubleshooting URL path in {target} to {correct_path}."
     return Task("txt_wrong_url_path_in_docs", "plaintext", target, {target: contents}, goal, search, replace, summary)

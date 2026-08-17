@@ -157,6 +157,15 @@ pub enum ModelSpec {
         /// verifies against the model's actual runtime KV footprint.
         #[serde(default)]
         kv_per_token_bytes: Option<u64>,
+        /// Opts this model into the G5 refusal-honesty probe
+        /// (`docs/superpowers/evidence/2026-08-16-g5-protocol.md` §1: "Each
+        /// configured (model, envelope) pair, opt-in via `g5_probe = true`
+        /// ... absent = false"). Explicit operator choice, never inferred —
+        /// same shape as `think_preseed`/`envelope`: omitting the key (or
+        /// using the bare-path shape) is `false`, and G5 does not run for
+        /// that model at all.
+        #[serde(default)]
+        g5_probe: bool,
     },
 }
 
@@ -276,6 +285,19 @@ impl ModelSpec {
             Self::Tuned {
                 kv_per_token_bytes, ..
             } => *kv_per_token_bytes,
+        }
+    }
+
+    /// Whether this model opts into the G5 refusal-honesty probe
+    /// (`docs/superpowers/evidence/2026-08-16-g5-protocol.md` §1).
+    ///
+    /// The `Path` variant returns `false` (no tuning configured), matching
+    /// every other bare-path tuning accessor's default — G5 is opt-in, so
+    /// the bare-path shape (which cannot express any opt-in) never runs it.
+    pub fn g5_probe(&self) -> bool {
+        match self {
+            Self::Path(_) => false,
+            Self::Tuned { g5_probe, .. } => *g5_probe,
         }
     }
 }

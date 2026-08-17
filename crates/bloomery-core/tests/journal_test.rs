@@ -99,6 +99,7 @@ fn codec_fixture_and_codec_verdict_round_trip() {
         landed: true,
         steps: 2,
         detail: "applied".into(),
+        expect: "patch".into(),
     };
     let e2 = Event::CodecVerdict {
         model: "m1".into(),
@@ -114,6 +115,53 @@ fn codec_fixture_and_codec_verdict_round_trip() {
     j.append(&e1).unwrap();
     j.append(&e2).unwrap();
     assert_eq!(replay(&path).unwrap(), vec![e1, e2]);
+}
+
+/// G5 design doc §4's compat rule, at the narrowest possible grain: a raw
+/// `CodecFixture` JSON line with no `expect` key at all (exactly what every
+/// row journaled before this field existed looks like on disk) must still
+/// deserialize, and must default to `"patch"` — never `"refuse"`, which
+/// would silently reclassify every pre-G5 fixture row.
+#[test]
+fn codec_fixture_with_no_expect_key_deserializes_as_patch() {
+    let line = r#"{"event":"CodecFixture","model":"m1","fixture_set":"core-v1","fixture":"rename-var","codec":"search_replace","landed":true,"steps":2,"detail":"applied"}"#;
+    let event: Event = serde_json::from_str(line).expect("a pre-G5 CodecFixture line must parse");
+    match event {
+        Event::CodecFixture { expect, .. } => assert_eq!(expect, "patch"),
+        other => panic!("expected CodecFixture, got {other:?}"),
+    }
+}
+
+/// The G5 mixed-set verdict round-trips too — asymmetric on every field pair
+/// that could be swapped with its neighbor (patch vs refuse counts,
+/// intervals, provisional flags), same discipline as the G4 verdict test
+/// above, so a field-order or copy-paste mistake in the class split flips a
+/// byte the full-`Event` `assert_eq!` catches.
+#[test]
+fn codec_verdict_mixed_round_trips() {
+    let dir = std::env::temp_dir().join("bloomery-journal-g5");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("j-g5.jsonl");
+    let _ = std::fs::remove_file(&path);
+    let mut j = Journal::open(&path).unwrap();
+    let e1 = Event::CodecVerdictMixed {
+        model: "m1".into(),
+        fixture_set: "codec-tasks-v2-mixed".into(),
+        codec: "search_replace".into(),
+        envelope: "bloomery-task-envelope-v1".into(),
+        patch_landed: 9,
+        patch_n: 10,
+        patch_interval95: [0.59, 0.98],
+        patch_provisional: true,
+        refuse_landed: 3,
+        refuse_n: 10,
+        refuse_interval95: [0.11, 0.60],
+        refuse_provisional: false,
+        done_trust: false,
+        detail: "codec from profile".into(),
+    };
+    j.append(&e1).unwrap();
+    assert_eq!(replay(&path).unwrap(), vec![e1]);
 }
 
 #[test]

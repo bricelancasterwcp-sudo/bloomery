@@ -35,14 +35,36 @@
 //! — `cargo build -p bloomery-daemon --bin flywheel-tool` succeeds with no
 //! features enabled, which is the whole point (the factory box need not be
 //! the same box the model serves from).
+//!
+//! **Turn 2 (flywheel task-3 brief,
+//! `docs/superpowers/specs/2026-08-16-flywheel2-honest-refusal-design.md`
+//! §4-§5) adds refusal trajectories**, additively: a `trajectory` request's
+//! `"expect"` field selects `"patch"` (the default, absent case — every
+//! turn-1 request byte-identical to today) or `"refuse"`. A refuse request
+//! renders exactly 2 pairs (`read`, `done`) instead of patch mode's 3, and
+//! carries no `search`/`replace`/`summary` — its `done` completion comes
+//! from `refusal_reason` instead. Two refusal families, both still built
+//! entirely from real daemon internals, never a reimplementation:
+//! - **defect-absent** (the goal's claimed defect is false; `target`
+//!   exists): pair 2's transcript reuses the same real-target-contents
+//!   technique pair 2 already used in patch mode.
+//! - **missing-target** (`"target_missing": true`; `target` does not
+//!   exist): pair 2's transcript is built from a REAL [`exec_read`] call
+//!   against a throwaway scratch directory that does not contain `target`
+//!   — the exact `NotFound` wording is OS/errno-sourced text this binary
+//!   discovers by actually calling the real executor, never hand-formats
+//!   (see [`real_missing_target_read`]).
 
 use std::io::{BufRead, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bloomery_core::action::lens::{land, Landing, LandingLens, PlainText};
 use bloomery_core::action::{PatchBody, PatchCodec};
+use bloomery_core::grant::Grant;
 use bloomery_daemon::config::EnvelopeLens;
 use bloomery_daemon::task::lens_py::PythonLens;
 use bloomery_daemon::task::task_loop::{render_task_prompt, transcript_entry};
+use bloomery_daemon::task::{exec_read, ExecBounds};
 
 /// One request line's `"cmd"` discriminator. Only `trajectory` exists
 /// today (task-1 brief: "the only one the factory needs") — declared as a
@@ -55,7 +77,32 @@ enum Request {
     Trajectory(TrajectoryRequest),
 }
 
-/// The `trajectory` request body — task-1 brief's wire format, verbatim.
+/// The `trajectory` request's expected-outcome class — task-3 brief / G5
+/// design doc §2's wire spelling (`"patch"` / `"refuse"`), restated here
+/// (rather than imported from `codec_probe::fixtures::Expect`) because that
+/// module pulls in the daemon's probe machinery — well outside what a
+/// GPU-free, single-file trajectory renderer needs — the same "duplicate
+/// the tiny enum, not the machinery" call this file already makes for
+/// `EnvelopeLens` in [`parse_envelope`]. `#[default] Patch`: every request
+/// that omits `"expect"` (every turn-1 request) reproduces today's shape
+/// byte-for-byte.
+#[derive(serde::Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+enum TrajectoryExpect {
+    #[default]
+    Patch,
+    Refuse,
+}
+
+/// The `trajectory` request body — task-1 brief's wire format, extended
+/// additively by the task-3 brief: `search`/`replace`/`summary` are now
+/// `Option` (required iff `expect == Patch`, checked in [`require`] rather
+/// than by serde, so a factory bug names the missing field); `expect`
+/// (default `Patch`), `refusal_reason` (required iff `expect == Refuse`),
+/// and `target_missing` (refuse's missing-target family flag) are new.
+/// `target_contents` stays a required `String` in both refuse families —
+/// the real target's content for defect-absent, and (by convention) `""`
+/// for missing-target, where it is never read.
 #[derive(serde::Deserialize)]
 struct TrajectoryRequest {
     goal: String,
@@ -63,9 +110,18 @@ struct TrajectoryRequest {
     envelope: String,
     target: String,
     target_contents: String,
-    search: String,
-    replace: String,
-    summary: String,
+    #[serde(default)]
+    search: Option<String>,
+    #[serde(default)]
+    replace: Option<String>,
+    #[serde(default)]
+    summary: Option<String>,
+    #[serde(default)]
+    expect: TrajectoryExpect,
+    #[serde(default)]
+    refusal_reason: Option<String>,
+    #[serde(default)]
+    target_missing: bool,
 }
 
 /// One (prompt, completion) SFT pair.
@@ -75,10 +131,18 @@ struct Pair {
     completion: String,
 }
 
-/// The `trajectory` response body — task-1 brief's wire format, verbatim.
-/// `patched_contents`/`landing_detail` are mutually exclusive with each
-/// other (one is always `None`), so both are omitted from the JSON when
-/// absent rather than serialized as `null`.
+/// The `trajectory` response body — task-1 brief's wire format, extended
+/// additively by the task-3 brief. `patched_contents`/`landing_detail`
+/// remain mutually exclusive with each other (one is always `None`), so
+/// both are omitted from the JSON when absent rather than serialized as
+/// `null` — a patch-mode response never gains `verified` either, for the
+/// same reason, which is what keeps `expect` absent byte-identical to
+/// turn 1. `verified` is `Some("refusal")` for both refuse families and
+/// `None` for patch: `landed` is unconditionally `true` for a refuse
+/// response (no landing check applies — nothing was ever patched), so a
+/// factory reading `landed` alone cannot tell a refusal from a vacuous
+/// success; `verified` is the field that lets it assert it exercised the
+/// right path.
 #[derive(serde::Serialize)]
 struct TrajectoryResponse {
     pairs: Vec<Pair>,
@@ -87,7 +151,12 @@ struct TrajectoryResponse {
     patched_contents: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     landing_detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verified: Option<String>,
 }
+
+/// The `verified` marker value for both refuse families (task-3 brief).
+const VERIFIED_REFUSAL: &str = "refusal";
 
 /// A malformed request line, or a request this binary cannot honor (an
 /// unrecognized `patch_codec`/`envelope` value). Reported as its own JSON
@@ -183,9 +252,38 @@ fn done_completion(summary: &str) -> String {
     format!("<action verb=\"done\">\n{summary}\n</action>")
 }
 
-/// Handles one `trajectory` request end to end: renders the three prompts
-/// via the real [`render_task_prompt`]/[`transcript_entry`], and
-/// land-verifies the reference patch via the real [`land`]. Pair
+/// Reads a request field required for `expect = "{expect_name}"`,
+/// returning a named parse error (not a silent `None` a downstream branch
+/// discovers) when the factory omitted it for that mode — the same
+/// "unrecognized/missing input is a named error, never silently ignored"
+/// posture [`parse_patch_codec`]/[`parse_envelope`] already use.
+fn require<'a>(
+    field: &'a Option<String>,
+    name: &str,
+    expect_name: &str,
+) -> Result<&'a str, String> {
+    field.as_deref().ok_or_else(|| {
+        format!("trajectory request with expect=\"{expect_name}\" requires \"{name}\"")
+    })
+}
+
+/// Dispatches on `req.expect` (task-3 brief). `patch_codec`/`envelope` are
+/// parsed once, up front, since both modes render prompts through the same
+/// [`render_task_prompt`] and need them regardless of `expect`.
+fn handle_trajectory(req: &TrajectoryRequest) -> Result<TrajectoryResponse, String> {
+    let codec = parse_patch_codec(&req.patch_codec)?;
+    let envelope = parse_envelope(&req.envelope)?;
+
+    match req.expect {
+        TrajectoryExpect::Patch => handle_patch_trajectory(req, codec, envelope),
+        TrajectoryExpect::Refuse => handle_refuse_trajectory(req, codec, envelope),
+    }
+}
+
+/// Handles a patch-mode (`expect` absent or `"patch"`) `trajectory`
+/// request end to end — task-1 brief, unchanged behavior: renders the
+/// three prompts via the real [`render_task_prompt`]/[`transcript_entry`],
+/// and land-verifies the reference patch via the real [`land`]. Pair
 /// construction is pinned by the task-1 brief:
 ///
 /// - Pair 1's prompt = `render_task_prompt(goal, codec, envelope, "")`.
@@ -203,9 +301,14 @@ fn done_completion(summary: &str) -> String {
 /// `landed: false`, and `landing_detail` — the factory's contract (task-1
 /// brief) is that this is always a fatal factory bug, never data to train
 /// on.
-fn handle_trajectory(req: &TrajectoryRequest) -> Result<TrajectoryResponse, String> {
-    let codec = parse_patch_codec(&req.patch_codec)?;
-    let envelope = parse_envelope(&req.envelope)?;
+fn handle_patch_trajectory(
+    req: &TrajectoryRequest,
+    codec: PatchCodec,
+    envelope: EnvelopeLens,
+) -> Result<TrajectoryResponse, String> {
+    let search = require(&req.search, "search", "patch")?;
+    let replace = require(&req.replace, "replace", "patch")?;
+    let summary = require(&req.summary, "summary", "patch")?;
 
     let prompt1 = render_task_prompt(&req.goal, codec, envelope, "");
     let completion1 = read_completion(&req.target);
@@ -213,7 +316,7 @@ fn handle_trajectory(req: &TrajectoryRequest) -> Result<TrajectoryResponse, Stri
     let read_outcome = format!("read {} bytes", req.target_contents.len());
     let transcript_after_read = transcript_entry(1, "read", &read_outcome, &req.target_contents);
     let prompt2 = render_task_prompt(&req.goal, codec, envelope, &transcript_after_read);
-    let completion2 = patch_completion(&req.target, &req.search, &req.replace);
+    let completion2 = patch_completion(&req.target, search, replace);
 
     let pairs_1_2 = || {
         vec![
@@ -229,8 +332,8 @@ fn handle_trajectory(req: &TrajectoryRequest) -> Result<TrajectoryResponse, Stri
     };
 
     let body = PatchBody::SearchReplace {
-        search: req.search.clone(),
-        replace: req.replace.clone(),
+        search: search.to_string(),
+        replace: replace.to_string(),
     };
     let lens = lens_for(&req.target);
     let landing = land(&req.target_contents, &body, lens.as_ref());
@@ -243,6 +346,7 @@ fn handle_trajectory(req: &TrajectoryRequest) -> Result<TrajectoryResponse, Stri
                 landed: false,
                 patched_contents: None,
                 landing_detail: Some(describe_landing_failure(other)),
+                verified: None,
             });
         }
     };
@@ -253,7 +357,7 @@ fn handle_trajectory(req: &TrajectoryRequest) -> Result<TrajectoryResponse, Stri
         transcript_entry(2, "patch", &patch_outcome, &new_contents)
     );
     let prompt3 = render_task_prompt(&req.goal, codec, envelope, &transcript_after_patch);
-    let completion3 = done_completion(&req.summary);
+    let completion3 = done_completion(summary);
 
     let mut pairs = pairs_1_2();
     pairs.push(Pair {
@@ -266,7 +370,116 @@ fn handle_trajectory(req: &TrajectoryRequest) -> Result<TrajectoryResponse, Stri
         landed: true,
         patched_contents: Some(new_contents),
         landing_detail: None,
+        verified: None,
     })
+}
+
+/// Handles a refuse-mode (`expect = "refuse"`) `trajectory` request
+/// end to end (task-3 brief, G5 design doc §5): exactly 2 pairs (`read`,
+/// `done`), never a `patch` — `search`/`replace` are absent from the
+/// request and no [`land`] call ever happens. Both refusal families share
+/// pair 1 (the model attempts the same `read` a repair trajectory would)
+/// and completion 2 (`done_completion(refusal_reason)`); they differ only
+/// in how pair 2's transcript is built:
+///
+/// - **defect-absent** (`target_missing == false`, the default): `target`
+///   exists, so pair 2's transcript reuses patch-mode pair 2's exact
+///   technique — `transcript_entry(1, "read", "read {n} bytes",
+///   target_contents)` — real content the request already carries.
+/// - **missing-target** (`target_missing == true`): `target` does not
+///   exist, so pair 2's transcript is built from [`real_missing_target_read`],
+///   which calls the REAL [`exec_read`] against a throwaway scratch dir
+///   that lacks `target` — never a hand-formatted "not found" string.
+///
+/// `landed: true` unconditionally (self-consistency only — no landing
+/// check applies to a trajectory that never patches anything) and
+/// `verified: Some(VERIFIED_REFUSAL)`, so a factory reading the response
+/// can assert it exercised the refuse path rather than reading a vacuous
+/// `landed: true` as a patch success.
+fn handle_refuse_trajectory(
+    req: &TrajectoryRequest,
+    codec: PatchCodec,
+    envelope: EnvelopeLens,
+) -> Result<TrajectoryResponse, String> {
+    let refusal_reason = require(&req.refusal_reason, "refusal_reason", "refuse")?;
+
+    let prompt1 = render_task_prompt(&req.goal, codec, envelope, "");
+    let completion1 = read_completion(&req.target);
+
+    let (read_outcome, read_content) = if req.target_missing {
+        real_missing_target_read(&req.target)?
+    } else {
+        (
+            format!("read {} bytes", req.target_contents.len()),
+            req.target_contents.clone(),
+        )
+    };
+    let transcript_after_read = transcript_entry(1, "read", &read_outcome, &read_content);
+    let prompt2 = render_task_prompt(&req.goal, codec, envelope, &transcript_after_read);
+    let completion2 = done_completion(refusal_reason);
+
+    Ok(TrajectoryResponse {
+        pairs: vec![
+            Pair {
+                prompt: prompt1,
+                completion: completion1,
+            },
+            Pair {
+                prompt: prompt2,
+                completion: completion2,
+            },
+        ],
+        landed: true,
+        patched_contents: None,
+        landing_detail: None,
+        verified: Some(VERIFIED_REFUSAL.to_string()),
+    })
+}
+
+/// Runs the REAL [`exec_read`] against a fresh, empty scratch directory
+/// that does not contain `target`, returning its `(outcome, content)` —
+/// both texts a genuine `failed: true` [`bloomery_daemon::task::Observation`]
+/// carries (`exec.rs`'s `failed()` helper: outcome and content are the same
+/// string for every failure path in that module). This is this module's
+/// whole design applied to the missing-target family (see the top-of-file
+/// doc comment): the exact `NotFound` wording is OS/errno-sourced text —
+/// e.g. `io::Error`'s `Display` plus its `ErrorKind` Debug — that must be
+/// discovered by actually opening a missing file through the real
+/// executor, never hand-transcribed into a format string here.
+///
+/// The scratch directory is unrelated to whatever fixture directory the
+/// factory's own missing-target task uses: the wire request carries only
+/// `target`'s name, never a whole directory listing, so this function
+/// always builds and tears down its own throwaway directory per call —
+/// harmless, since `exec_read`'s `NotFound` message text does not depend
+/// on the specific path bytes (see `tests/flywheel_tool_test.rs`'s
+/// missing-target anti-drift pin, which proves this independently against
+/// a real `run_task`).
+fn real_missing_target_read(target: &str) -> Result<(String, String), String> {
+    static SCRATCH_COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = SCRATCH_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "flywheel-tool-missing-target-{}-{n}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("failed to create the missing-target scratch dir: {e}"))?;
+    let grant = Grant::from_json(&format!(
+        r#"{{"read_roots":["{d}"],"write_roots":[],"commands":[]}}"#,
+        d = dir.display()
+    ))
+    .map_err(|e| format!("failed to build the missing-target scratch grant: {e}"))?;
+
+    let observation = exec_read(&grant, &dir, target, None, &ExecBounds::default());
+    let _ = std::fs::remove_dir_all(&dir);
+
+    if !observation.failed {
+        return Err(format!(
+            "target_missing=true but {target:?} was readable inside a fresh, empty scratch \
+             dir — this is a factory bug (the target must not already exist), not a tool bug"
+        ));
+    }
+    Ok((observation.outcome, observation.content))
 }
 
 /// One JSON request per line on stdin, one JSON response per line on
