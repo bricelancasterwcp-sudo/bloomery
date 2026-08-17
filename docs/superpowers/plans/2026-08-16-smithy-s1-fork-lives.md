@@ -1,5 +1,7 @@
 # smithy S1 — "The Fork Lives" Implementation Plan
 
+**Status: S1 ACCEPTED 2026-08-17 — smithy-comp d4befb8c daily-driveable.** Brice logged into the Smithy GDM session and passed the full Task 6 checklist (desktop up, terminal, hotkey help, browser, audio/network/keyboard, clean logout back to intact GNOME).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Fork niri into `smithy-comp`, boot it as a selectable daily Wayland session on this box with zero agent features, and establish the upstream-tracking discipline (thin delta, rebase cadence).
