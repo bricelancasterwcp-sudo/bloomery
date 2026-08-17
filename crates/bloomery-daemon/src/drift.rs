@@ -494,12 +494,16 @@ pub enum GateOutcome {
         /// The current document's instrument identity.
         current: String,
     },
-    /// One of the two documents could not be read as a profile — absent
-    /// (first boot ever, a baseline nobody blessed, a boot where POST failed),
-    /// unreadable, or not parseable. Named with the reason, and never a pass:
-    /// this is the silent-pass bug the whole gate exists to refuse.
+    /// There was nothing here to measure. Either one of the two documents
+    /// could not be read as a profile — absent (first boot ever, a baseline
+    /// nobody blessed, a boot where POST failed), unreadable, or not
+    /// parseable — or the two describe **different models**, which makes any
+    /// comparison between them a statement about neither. Named with the
+    /// reason, and never a pass: this is the silent-pass bug the whole gate
+    /// exists to refuse.
     Unmeasured {
-        /// Which side failed and why, path included.
+        /// Which side failed and why, path included; for a crossed pair, both
+        /// paths and both model names.
         reason: String,
     },
     /// The comparison could not be run: the subprocess would not start, was
@@ -686,19 +690,35 @@ impl DriftGate {
     /// only if that comparison can mean anything.
     ///
     /// **The order is the contract.** Both documents are read and parsed
-    /// first, then design §3's instrument precheck runs, and only a
-    /// `Comparable` verdict reaches the subprocess:
+    /// first, then three refusals run in a fixed order, and only what survives
+    /// all three reaches the subprocess:
     ///
     /// 1. A side that is absent or unparseable is
     ///    [`GateOutcome::Unmeasured`] — named, never a pass. First boot ever
     ///    has no previous profile and an unblessed model has no baseline, so
     ///    this is the *normal* path on a fresh install, which is exactly why
     ///    it must not be reachable by any code path that returns "fine".
-    /// 2. A changed instrument is [`GateOutcome::InstrumentChanged`]. Measured
+    /// 2. Two documents describing **different models** are
+    ///    [`GateOutcome::Unmeasured`] too, naming both. This is
+    ///    `post::PostRunner::probe`'s rule applied to the pair rather than to
+    ///    one document ("attaching it would credit one model with another's
+    ///    measurements"): a crossed pair — a mis-set model key, a hand-copied
+    ///    baseline, a path built from the wrong name — would otherwise diff
+    ///    cleanly and be journaled under *this* model's name, which is a
+    ///    verdict about a model nobody measured.
+    /// 3. A changed instrument is [`GateOutcome::InstrumentChanged`]. Measured
     ///    motivation, not theory: assay's 2026-08 campaign diffs showed 12 of
     ///    15 models "improving" because the ceiling cap moved between probe
     ///    versions. Running the diff anyway would report the instrument and
     ///    call it the model.
+    ///
+    /// **Identity before instrument** (2 before 3): asking whether two
+    /// documents were measured by the same instrument only means something
+    /// once they are about the same thing. On a crossed pair the instrument
+    /// answer is noise either way — `Comparable` would wave a crossed pair
+    /// through to the diff, and `InstrumentChanged` would send the operator
+    /// to re-bless a baseline when the real fault is that the two documents
+    /// are about different models.
     ///
     /// Reading first is also what makes the digests honest: they are of the
     /// bytes this comparison actually consumed, taken before anything else
@@ -735,6 +755,22 @@ impl DriftGate {
                 }
                 (Ok(r), Ok(c)) => (r, c),
             };
+
+        if reference_profile.model_name() != current_profile.model_name() {
+            return reading(
+                GateOutcome::Unmeasured {
+                    reason: format!(
+                        "crossed documents: reference {} describes model {}, \
+                         current {} describes model {}",
+                        reference.display(),
+                        reference_profile.model_name(),
+                        current.display(),
+                        current_profile.model_name(),
+                    ),
+                },
+                None,
+            );
+        }
 
         if let InstrumentPrecheck::InstrumentChanged { reference, current } =
             instrument_precheck(reference_profile, current_profile)

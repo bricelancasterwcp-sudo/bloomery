@@ -435,11 +435,20 @@ fn transients_stamped_in_one_tick_drop_the_lexicographically_first_name() {
 // The gate — spec §3 (instrument precheck) and §4 (diff subprocess)
 // ---------------------------------------------------------------------------
 
-/// Real committed assay documents. The v8 pair shares an instrument
-/// (`0.9.0`, schema 8) and describes two different models; the v4 document is
-/// the pre-upgrade instrument (`0.5.0`, schema 4) the first post-upgrade boot
-/// will actually meet.
+/// Real committed assay documents; provenance for all four is tabulated in
+/// `profile_v8_fixture_test.rs`, which also pins the identity claims made
+/// here.
+///
+/// - `V8_QWEN15B` / `V8_QWEN15B_DRYRUN` — **one model, one instrument, two
+///   documents** (the 2026-08 campaign row and the dry-run row it superseded,
+///   measured ~26 minutes apart). This is what a drift comparison actually
+///   compares, so it is what the happy paths below use.
+/// - `V8_QWEN3_8B` — same instrument, a **different model**: a crossed pair,
+///   used only to pin the refusal.
+/// - `V4_QWEN3_8B` — same model as `V8_QWEN3_8B`, the pre-upgrade instrument
+///   (`0.5.0` / schema 4) the first post-upgrade boot will actually meet.
 const V8_QWEN15B: &str = include_str!("fixtures/profile-v8-qwen15b.json");
+const V8_QWEN15B_DRYRUN: &str = include_str!("fixtures/profile-v8-qwen15b-dryrun.json");
 const V8_QWEN3_8B: &str = include_str!("fixtures/profile-v8-qwen3-8b.json");
 const V4_QWEN3_8B: &str = include_str!("fixtures/profile-v4-qwen3-8b.json");
 
@@ -521,7 +530,7 @@ fn diff_argv_is_the_documented_invocation() {
 /// A comparable pair really does spawn that invocation — and exactly once.
 #[test]
 fn a_comparable_pair_spawns_exactly_the_documented_diff() {
-    let (r, c) = pair("gate-argv", Some(V8_QWEN15B), Some(V8_QWEN3_8B));
+    let (r, c) = pair("gate-argv", Some(V8_QWEN15B), Some(V8_QWEN15B_DRYRUN));
     let (gate, calls) = gate_answering(exited(0));
 
     let reading = gate.compare(&r, &c);
@@ -537,7 +546,7 @@ fn a_comparable_pair_spawns_exactly_the_documented_diff() {
 
 #[test]
 fn exit_zero_is_within_noise() {
-    let (r, c) = pair("gate-exit0", Some(V8_QWEN15B), Some(V8_QWEN3_8B));
+    let (r, c) = pair("gate-exit0", Some(V8_QWEN15B), Some(V8_QWEN15B_DRYRUN));
     let (gate, _calls) = gate_answering(exited(0));
 
     let reading = gate.compare(&r, &c);
@@ -548,7 +557,7 @@ fn exit_zero_is_within_noise() {
 
 #[test]
 fn exit_one_is_drift() {
-    let (r, c) = pair("gate-exit1", Some(V8_QWEN15B), Some(V8_QWEN3_8B));
+    let (r, c) = pair("gate-exit1", Some(V8_QWEN15B), Some(V8_QWEN15B_DRYRUN));
     let (gate, _calls) = gate_answering(exited(1));
 
     let reading = gate.compare(&r, &c);
@@ -566,7 +575,7 @@ fn exit_one_is_drift() {
 /// gate exists to refuse starts by folding a refusal into `WithinNoise`.
 #[test]
 fn exit_two_is_not_comparable_and_never_a_pass() {
-    let (r, c) = pair("gate-exit2", Some(V8_QWEN15B), Some(V8_QWEN3_8B));
+    let (r, c) = pair("gate-exit2", Some(V8_QWEN15B), Some(V8_QWEN15B_DRYRUN));
     let (gate, _calls) = gate_answering(exited(2));
 
     let reading = gate.compare(&r, &c);
@@ -580,7 +589,7 @@ fn exit_two_is_not_comparable_and_never_a_pass() {
 /// reading. The code is still recorded: it exists, so `None` would be a lie.
 #[test]
 fn an_undocumented_exit_code_is_infrastructure_not_a_verdict() {
-    let (r, c) = pair("gate-exit7", Some(V8_QWEN15B), Some(V8_QWEN3_8B));
+    let (r, c) = pair("gate-exit7", Some(V8_QWEN15B), Some(V8_QWEN15B_DRYRUN));
     let (gate, _calls) = gate_answering(exited(7));
 
     let reading = gate.compare(&r, &c);
@@ -599,7 +608,7 @@ fn an_undocumented_exit_code_is_infrastructure_not_a_verdict() {
 /// `None` is what actually happened (None-vs-zero, applied to exit status).
 #[test]
 fn a_signal_killed_diff_is_infra_with_no_exit_code() {
-    let (r, c) = pair("gate-signal", Some(V8_QWEN15B), Some(V8_QWEN3_8B));
+    let (r, c) = pair("gate-signal", Some(V8_QWEN15B), Some(V8_QWEN15B_DRYRUN));
     let (gate, _calls) = gate_answering(signalled(9));
 
     let reading = gate.compare(&r, &c);
@@ -616,7 +625,7 @@ fn a_signal_killed_diff_is_infra_with_no_exit_code() {
 
 #[test]
 fn a_spawn_failure_is_infra_naming_the_command() {
-    let (r, c) = pair("gate-spawn-fail", Some(V8_QWEN15B), Some(V8_QWEN3_8B));
+    let (r, c) = pair("gate-spawn-fail", Some(V8_QWEN15B), Some(V8_QWEN15B_DRYRUN));
     let gate = DriftGate::with_runner(Box::new(|_program, _args| {
         Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -642,6 +651,42 @@ fn a_spawn_failure_is_infra_naming_the_command() {
     assert_eq!(reading.exit_code, None);
     // Both documents were read before the spawn was attempted, so both
     // digests are known even though the diff never ran.
+    assert_eq!(reading.reference_sha, sha_of(&r));
+    assert_eq!(reading.current_sha, sha_of(&c));
+}
+
+/// Two documents about different models measure nothing in common, so there
+/// is no comparison to run — the same rule `post::PostRunner::probe` already
+/// applies to a single document ("attaching it would credit one model with
+/// another's measurements"), applied to the pair. Without this the crossed
+/// pair diffs cleanly and `drift_event` stamps the caller's model name over
+/// another model's document: a verdict about a model nobody measured.
+///
+/// Checked *before* the instrument precheck: on a crossed pair the instrument
+/// answer is noise either way (these two happen to share an instrument, so it
+/// would read `Comparable` and spawn).
+#[test]
+fn a_crossed_pair_of_models_is_unmeasured_and_never_spawns() {
+    let (r, c) = pair("gate-crossed", Some(V8_QWEN3_8B), Some(V8_QWEN15B));
+    let (gate, calls) = gate_answering(exited(0));
+
+    let reading = gate.compare(&r, &c);
+
+    match &reading.outcome {
+        GateOutcome::Unmeasured { reason } => assert!(
+            reason.contains("qwen3:8b") && reason.contains("qwen2.5-coder:1.5b-instruct-q8_0"),
+            "both models must be named so the operator can see which pair crossed: {reason:?}"
+        ),
+        other => panic!("expected Unmeasured for a crossed pair, got {other:?}"),
+    }
+    assert!(
+        calls.borrow().is_empty(),
+        "a crossed pair must never reach the diff, got {:?}",
+        calls.borrow()
+    );
+    assert_eq!(reading.exit_code, None);
+    // Both documents were read, so both digests stand — the row stays
+    // verifiable even though no comparison was made.
     assert_eq!(reading.reference_sha, sha_of(&r));
     assert_eq!(reading.current_sha, sha_of(&c));
 }
@@ -758,7 +803,7 @@ fn an_absent_current_is_unmeasured_too() {
 /// at comparison time — so `sha256sum` on the path in the row checks the row.
 #[test]
 fn the_digests_are_of_the_files_bytes_so_the_row_is_checkable() {
-    let (r, c) = pair("gate-sha", Some(V8_QWEN15B), Some(V8_QWEN3_8B));
+    let (r, c) = pair("gate-sha", Some(V8_QWEN15B), Some(V8_QWEN15B_DRYRUN));
     let (gate, _calls) = gate_answering(exited(0));
 
     let reading = gate.compare(&r, &c);
@@ -785,7 +830,7 @@ fn the_digests_are_of_the_files_bytes_so_the_row_is_checkable() {
 /// so cannot exercise it) against a child that outlives its cap.
 #[test]
 fn a_wedged_diff_is_infra_not_a_verdict() {
-    let (r, c) = pair("gate-wedged", Some(V8_QWEN15B), Some(V8_QWEN3_8B));
+    let (r, c) = pair("gate-wedged", Some(V8_QWEN15B), Some(V8_QWEN15B_DRYRUN));
     let gate = DriftGate::with_runner(Box::new(|_program, _args| {
         bloomery_daemon::post::run_bounded_for_test(
             "/bin/sh",
@@ -854,7 +899,7 @@ qwen = "/models/qwen.gguf"
 /// describe a different read than the comparison did.
 #[test]
 fn a_drift_row_carries_the_readings_paths_digests_and_exit_code() {
-    let (r, c) = pair("gate-row", Some(V8_QWEN15B), Some(V8_QWEN3_8B));
+    let (r, c) = pair("gate-row", Some(V8_QWEN15B), Some(V8_QWEN15B_DRYRUN));
     let (gate, _calls) = gate_answering(exited(1));
     let reading = gate.compare(&r, &c);
 

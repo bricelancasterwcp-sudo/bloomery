@@ -4,12 +4,20 @@
 //! old-schema reference beside a new one must read as `instrument-changed`
 //! (spec §3) rather than as a score.
 //!
-//! All three fixtures are REAL assay artifacts, copied **byte-verbatim**
+//! All four fixtures are REAL assay artifacts, copied **byte-verbatim**
 //! (sha256 checked against source) out of the assay repo, never hand-edited:
 //!
 //! - `fixtures/profile-v8-qwen15b.json` <-
 //!   `docs/superpowers/evidence/tier-enthusiast-2026-08/qwen2.5-coder-1.5b-instruct-q8_0.json`
 //!   (2026-08 campaign, probe 0.9.0 / schema 8, model `qwen2.5-coder:1.5b-instruct-q8_0`)
+//! - `fixtures/profile-v8-qwen15b-dryrun.json` <- the **superseded** row at
+//!   that same path, assay commit `d9b9792`
+//!   (`git -C …/assay show d9b9792:docs/superpowers/evidence/tier-enthusiast-2026-08/qwen2.5-coder-1.5b-instruct-q8_0.json`;
+//!   read-only — the assay repo is not touched). SAME model and SAME
+//!   instrument as the row above, measured ~26 minutes earlier in the
+//!   campaign's dry run, so its geometry, speed, parallel and provenance
+//!   blocks genuinely differ. This is the pair a drift comparison actually
+//!   meets: one model, one instrument, two documents.
 //! - `fixtures/profile-v8-qwen3-8b.json` <-
 //!   `docs/superpowers/evidence/tier-enthusiast-2026-08/qwen3-8b.json`
 //!   (SAME campaign run, probe 0.9.0 / schema 8, model `qwen3:8b`)
@@ -25,8 +33,30 @@ use bloomery_core::action::PatchCodec;
 use bloomery_core::profile::{instrument_precheck, InstrumentPrecheck, Profile, Verdict};
 
 const V8_QWEN15B: &str = include_str!("fixtures/profile-v8-qwen15b.json");
+const V8_QWEN15B_DRYRUN: &str = include_str!("fixtures/profile-v8-qwen15b-dryrun.json");
 const V8_QWEN3_8B: &str = include_str!("fixtures/profile-v8-qwen3-8b.json");
 const V4_QWEN3_8B: &str = include_str!("fixtures/profile-v4-qwen3-8b.json");
+
+/// The premise the drift gate's happy-path tests rest on, pinned where the
+/// fixtures are documented rather than assumed where they are used: the
+/// campaign row and the dry-run row it superseded are **one model measured
+/// twice by one instrument** — which is what a real drift comparison compares,
+/// and what a pair of *different* models (`qwen15b` vs `qwen3-8b`) is not.
+#[test]
+fn the_dryrun_and_campaign_rows_are_one_model_one_instrument_two_documents() {
+    let dryrun = Profile::from_json(V8_QWEN15B_DRYRUN).expect("real v8 profile parses");
+    let campaign = Profile::from_json(V8_QWEN15B).expect("real v8 profile parses");
+
+    assert_eq!(dryrun.model_name(), campaign.model_name());
+    assert_eq!(
+        instrument_precheck(&dryrun, &campaign),
+        InstrumentPrecheck::Comparable
+    );
+    assert_ne!(
+        V8_QWEN15B_DRYRUN, V8_QWEN15B,
+        "two identical documents would make every gate test vacuous"
+    );
+}
 
 /// Every accessor the daemon reads off a POST profile, exercised against the
 /// bytes assay 0.9.0 actually wrote.
