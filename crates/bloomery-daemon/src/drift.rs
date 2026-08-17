@@ -42,7 +42,7 @@
 mod watch;
 
 pub(crate) use watch::{rotate_for_boot, watch_model};
-pub use watch::{DriftStatus, ModelDrift, PROVENANCE_AUTO_FIRST};
+pub use watch::{DriftStatus, ModelDrift, PROVENANCE_AUTO_FIRST, PROVENANCE_OPERATOR};
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -409,6 +409,50 @@ impl ProfileStore {
             dropped.push(path);
         }
         Ok(dropped)
+    }
+}
+
+/// The provenance an operator's blessing of `model` should be journaled with,
+/// **computed before [`ProfileStore::bless`] runs** — spec §2's "re-blessing
+/// replaces the baseline and journals the old identity beside the new".
+///
+/// `"operator"` when this model has no baseline yet; `"operator (replaced
+/// <sha256>)"` when one is about to be overwritten.
+///
+/// **Why the provenance string and not a new field.**
+/// [`Event::Blessed`] has no
+/// old-identity field, and adding one would migrate the core journal schema for
+/// a fact that appears in a minority of rows. The alternatives were worse: a
+/// second `Blessed` row for the old document would claim that document *became*
+/// the baseline (it stopped being one), and a `Degraded` row would file a
+/// routine operator action under the daemon's "something went wrong" channel.
+/// Provenance is already the field that answers "who decided, and on what
+/// grounds"; "on the grounds that it supersedes <digest>" is that same answer.
+///
+/// **Why the full digest, not the [`SHA_PREFIX_LEN`] prefix.** The replaced
+/// bytes are gone the instant the blessing lands, so nothing can ever be
+/// re-hashed to check a prefix against; the digest's only job is to match the
+/// full `sha` of the earlier [`Event::Blessed`] row that put that document
+/// there, exactly. A prefix would make that an inference instead of a match.
+///
+/// A baseline whose bytes exist but cannot be read says so, rather than
+/// reporting the same `"operator"` a model with no baseline at all gets — the
+/// distinction between "nothing was replaced" and "something was replaced and
+/// this daemon cannot say what" is the whole point of naming it.
+pub fn operator_provenance(store: &ProfileStore, model: &str) -> String {
+    match replaced_identity(&store.paths(model).baseline) {
+        None => PROVENANCE_OPERATOR.to_string(),
+        Some(identity) => format!("{PROVENANCE_OPERATOR} (replaced {identity})"),
+    }
+}
+
+/// The identity of the baseline document at `path` as it stands right now:
+/// `None` when there is none to replace, `Some` digest when there is.
+fn replaced_identity(baseline: &Path) -> Option<String> {
+    match std::fs::read(baseline) {
+        Ok(bytes) => Some(sha256_hex_bytes(&bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => Some(format!("a baseline that could not be read: {e}")),
     }
 }
 

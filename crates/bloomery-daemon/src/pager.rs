@@ -50,6 +50,7 @@ use journal as jrnl;
 use status::bound_by_str;
 
 pub use codec_gate::{CodecGateResult, RefusalGateResult};
+pub use drift_watch::BlessError;
 pub use error::PagerError;
 pub use status::{
     AgentInfo, AgentStatus, CodecGateStatus, ModelStatus, RefusalGateStatus, StatusReport,
@@ -223,6 +224,15 @@ pub struct Pager<S: Substrate> {
     /// run — see [`Pager::set_task_journal_path`]. Only read when
     /// `tasks_enabled` is true; an empty default is harmless otherwise.
     task_journal_path: PathBuf,
+    /// The profiles directory the drift watch files into
+    /// (`config.data_dir/profiles`) — see [`Pager::set_profiles_dir`].
+    /// `Option`, unlike [`task_journal_path`](Pager::task_journal_path)'s
+    /// empty-path default, because the one thing that reads it *writes* a file:
+    /// an unset default that resolved to a relative path would bless a baseline
+    /// into whatever directory the daemon happens to be running in, where no
+    /// later boot's comparison would ever look for it. `None` is refused by
+    /// name instead.
+    profiles_dir: Option<PathBuf>,
 }
 
 impl<S: Substrate> Pager<S> {
@@ -284,6 +294,7 @@ impl<S: Substrate> Pager<S> {
             tasks_enabled: false,
             exec_bounds: ExecBounds::default(),
             task_journal_path: PathBuf::new(),
+            profiles_dir: None,
         }
     }
 

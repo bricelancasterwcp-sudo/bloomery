@@ -132,9 +132,17 @@ pub struct ModelDrift {
 }
 
 /// The provenance [`bloomery_core::journal::Event::Blessed`] carries when the
-/// daemon blessed a model's first profile itself (spec §2). The operator's own
-/// blessings carry `"operator"`; these two strings are the whole set.
+/// daemon blessed a model's first profile itself (spec §2) — the only blessing
+/// this daemon ever decides on its own, and only when no baseline exists.
 pub const PROVENANCE_AUTO_FIRST: &str = "auto-first-profile";
+
+/// The provenance an operator's own blessing carries (spec §2's explicit
+/// operator action, `POST /models/{name}/bless`).
+///
+/// A *replacing* blessing extends this rather than replacing it — see
+/// [`operator_provenance`](crate::drift::operator_provenance), the one place
+/// that spelling is built.
+pub const PROVENANCE_OPERATOR: &str = "operator";
 
 /// Rotates `model`'s current profile into `previous`, before POST probes it.
 ///
