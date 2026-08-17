@@ -184,24 +184,55 @@ pub enum Event {
         provenance: String,
     },
     /// One drift comparison, exactly as the gate ran it (drift-watch design
-    /// §4). Two rows per model per boot: `comparison` is `"step"` (against
-    /// last boot's profile) or `"cumulative"` (against the blessed baseline).
+    /// §4).
+    ///
+    /// **How many rows a boot writes is a family, not a fixed count.** A model
+    /// gets two *first-reading* rows per boot — `comparison` is `"step"`
+    /// (against last boot's profile) or `"cumulative"` (against the blessed
+    /// baseline) — plus **at most one confirm row per comparison that read
+    /// `"drift"`**, since a drift reading is the one outcome §4 says must be
+    /// re-tested before it means anything. So: two rows on an ordinary boot,
+    /// three when exactly one comparison read drift, four when both did. A
+    /// confirm that never produced a re-diff at all (its probe failed, or its
+    /// document could not be retained) writes no `Drift` row — it journals a
+    /// `Degraded` naming the model and the comparison, and the first reading
+    /// stands.
     ///
     /// The row is built to be **re-runnable and verifiable**, and to contain
     /// no transcribed measurements:
     ///
-    /// - `outcome` is the gate's named verdict — `"within-noise"`, `"drift"`,
-    ///   `"not-comparable"`, `"instrument-changed (<ref> -> <cur>)"`,
-    ///   `"unmeasured: <why>"`, `"infra: <what>"`. Never a score, and never a
-    ///   number copied out of either profile: a value that looks like a
-    ///   measurement, transcribed, is how transcription errors become
-    ///   evidence.
+    /// - `outcome` is a named verdict — never a score, and never a number
+    ///   copied out of either profile: a value that looks like a measurement,
+    ///   transcribed, is how transcription errors become evidence. Which
+    ///   vocabulary it draws on is what tells the two row kinds apart:
+    ///   - a **first-reading row** carries the gate's own verdict —
+    ///     `"within-noise"`, `"drift"`, `"not-comparable"`,
+    ///     `"instrument-changed (<ref> -> <cur>)"`, `"unmeasured: <why>"`,
+    ///     `"infra: <what>"`.
+    ///   - a **confirm row** carries the verdict that reading finally
+    ///     *settled* on, not the raw re-diff outcome underneath it —
+    ///     `"confirmed"`, `"transient"`, or
+    ///     `"unconfirmed: <named re-diff outcome>"`, where the text after the
+    ///     colon is itself one of the gate's spellings above. Carrying the raw
+    ///     word instead would make a confirmed regression read `"drift"`,
+    ///     indistinguishable from the first reading that triggered it, and
+    ///     would spell a *transient* — a finding in its own right — as
+    ///     `"within-noise"`, the same word a clean boot gets.
+    ///
+    ///   Like [`Event::Blessed::provenance`], this is read by **prefix**, not
+    ///   by equality against a closed set: `"unmeasured: "`, `"infra: "` and
+    ///   `"unconfirmed: "` all carry free prose after the colon, and
+    ///   `"instrument-changed"` carries both instrument identities in its
+    ///   parenthetical.
     /// - `reference_path` / `current_path` name the two documents, so anyone
-    ///   can re-run the identical `assay diff` by hand.
-    /// - `exit_code` is what `assay diff --gate` reported, `None` when no diff
-    ///   ran at all (precheck refused, a side was unmeasured, the spawn failed
-    ///   or the child was killed by a signal). `None`, not `-1` and not `0`:
-    ///   an absent code is not a zero one.
+    ///   can re-run the identical `assay diff` by hand. A confirm row names
+    ///   the same reference and the confirm's own retained document — the pair
+    ///   its re-diff actually compared, not the first reading's pair.
+    /// - `exit_code` is what `assay diff --gate` reported (on a confirm row,
+    ///   what the *re-diff* reported), `None` when no diff ran at all
+    ///   (precheck refused, a side was unmeasured, the spawn failed or the
+    ///   child was killed by a signal). `None`, not `-1` and not `0`: an
+    ///   absent code is not a zero one.
     /// - `reference_sha` / `current_sha` are the sha256 of each file's
     ///   **bytes**, taken when the gate read them — the same claim
     ///   [`Event::Blessed::sha`] makes, so `sha256sum` on either path checks
