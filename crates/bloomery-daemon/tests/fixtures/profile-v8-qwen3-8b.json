@@ -1,0 +1,435 @@
+{
+  "assay_profile_version": 8,
+  "probe_version": "0.9.0",
+  "endpoint": {
+    "kind": "ollama",
+    "base_url": "http://127.0.0.1:11434",
+    "autodetected": true
+  },
+  "model": {
+    "name": "qwen3:8b",
+    "quant": "Q4_K_M",
+    "weights_bytes": 5225388164,
+    "training_ctx": 40960
+  },
+  "geometry": {
+    "kv_kib_per_token": 144,
+    "vram_free_mib": 10012,
+    "usable_window": 40960,
+    "limited_by": "training_ctx",
+    "source": "api_show",
+    "expert_count": null,
+    "expert_used_count": null
+  },
+  "ceiling": {
+    "max_verified": 32768,
+    "first_failure": null,
+    "failure_mode": "none_up_to_cap",
+    "counts_available": true,
+    "evidence": [
+      {
+        "est_tokens": 1024,
+        "seed": 0,
+        "signal": "ok",
+        "detail": "tokens_in=992 stop_reason=length"
+      },
+      {
+        "est_tokens": 1024,
+        "seed": 1,
+        "signal": "ok",
+        "detail": "tokens_in=1006 stop_reason=length"
+      },
+      {
+        "est_tokens": 2048,
+        "seed": 0,
+        "signal": "ok",
+        "detail": "tokens_in=1948 stop_reason=length"
+      },
+      {
+        "est_tokens": 2048,
+        "seed": 1,
+        "signal": "ok",
+        "detail": "tokens_in=1944 stop_reason=length"
+      },
+      {
+        "est_tokens": 4096,
+        "seed": 0,
+        "signal": "ok",
+        "detail": "tokens_in=3866 stop_reason=length"
+      },
+      {
+        "est_tokens": 4096,
+        "seed": 1,
+        "signal": "ok",
+        "detail": "tokens_in=3880 stop_reason=length"
+      },
+      {
+        "est_tokens": 8192,
+        "seed": 0,
+        "signal": "ok",
+        "detail": "tokens_in=7658 stop_reason=length"
+      },
+      {
+        "est_tokens": 8192,
+        "seed": 1,
+        "signal": "ok",
+        "detail": "tokens_in=7712 stop_reason=length"
+      },
+      {
+        "est_tokens": 16384,
+        "seed": 0,
+        "signal": "ok",
+        "detail": "tokens_in=15306 stop_reason=length"
+      },
+      {
+        "est_tokens": 16384,
+        "seed": 1,
+        "signal": "ok",
+        "detail": "tokens_in=15341 stop_reason=stop"
+      },
+      {
+        "est_tokens": 32768,
+        "seed": 0,
+        "signal": "ok",
+        "detail": "tokens_in=30660 stop_reason=length"
+      },
+      {
+        "est_tokens": 32768,
+        "seed": 1,
+        "signal": "ok",
+        "detail": "tokens_in=30615 stop_reason=length"
+      }
+    ]
+  },
+  "ceiling_shapes": [
+    {
+      "shape": 2048,
+      "max_verified": 1664,
+      "failure_mode": "ok_to_shape"
+    },
+    {
+      "shape": 4096,
+      "max_verified": 3712,
+      "failure_mode": "ok_to_shape"
+    },
+    {
+      "shape": 8192,
+      "max_verified": 7808,
+      "failure_mode": "ok_to_shape"
+    }
+  ],
+  "envelope": {
+    "fidelity": 1.0,
+    "n": 30,
+    "failures": {
+      "prose": 0,
+      "shape": 0,
+      "refusal": 0
+    }
+  },
+  "codecs": {
+    "search_replace": {
+      "tiny": {
+        "lands": 0.7714285714285715,
+        "lands_applies": 1.0,
+        "n": 35
+      },
+      "small": {
+        "lands": 0.6,
+        "lands_applies": 0.8,
+        "n": 35
+      },
+      "medium": {
+        "lands": 0.2,
+        "lands_applies": 0.2,
+        "n": 10
+      }
+    },
+    "whole_file": {
+      "tiny": {
+        "lands": 0.8857142857142857,
+        "lands_applies": 1.0,
+        "n": 35
+      },
+      "small": {
+        "lands": 0.2,
+        "lands_applies": 1.0,
+        "n": 35
+      },
+      "medium": {
+        "lands": 0.2,
+        "lands_applies": 1.0,
+        "n": 35
+      }
+    },
+    "json_object": {
+      "tiny": {
+        "lands": 1.0,
+        "lands_applies": 1.0,
+        "n": 35
+      },
+      "small": {
+        "lands": 1.0,
+        "lands_applies": 1.0,
+        "n": 35
+      },
+      "medium": {
+        "lands": 1.0,
+        "lands_applies": 1.0,
+        "n": 35
+      },
+      "nested": {
+        "lands": 1.0,
+        "lands_applies": 1.0,
+        "n": 35
+      },
+      "tabular": {
+        "lands": 1.0,
+        "lands_applies": 1.0,
+        "n": 35
+      },
+      "constrained": {
+        "lands": 1.0,
+        "lands_applies": 1.0,
+        "n": 35
+      }
+    }
+  },
+  "speed": {
+    "decode_tps": 111.27318861631353,
+    "prefill_tps": 6831.80044593088,
+    "evidence": "server_timings",
+    "n_decode": 3,
+    "n_prefill": 1,
+    "decode_samples": [
+      111.37679116503605,
+      111.17383940591479,
+      111.26893527798978
+    ],
+    "prefill_samples": [
+      6831.80044593088
+    ]
+  },
+  "loop": {
+    "action_fidelity": 1.0,
+    "patch_rate": 0.0,
+    "finish_rate": 0.0,
+    "repeat_rate": 0.0,
+    "anchor_violations": 0,
+    "n_runs": 5,
+    "n_turns": 25,
+    "recovery_rate": 1.0,
+    "doom_loop_rate": 0.0,
+    "n_error_runs": 5
+  },
+  "long_output": {
+    "rungs": [
+      {
+        "target_tokens": 512,
+        "generated_tokens": 380,
+        "distinct_ratio": 0.9913793103448276,
+        "zlib_ratio": 0.47320754716981134,
+        "degenerate": false
+      },
+      {
+        "target_tokens": 1024,
+        "generated_tokens": 352,
+        "distinct_ratio": 0.9954545454545455,
+        "zlib_ratio": 0.49924357034795763,
+        "degenerate": false
+      },
+      {
+        "target_tokens": 2048,
+        "generated_tokens": 415,
+        "distinct_ratio": 1.0,
+        "zlib_ratio": 0.5020126509488212,
+        "degenerate": false
+      },
+      {
+        "target_tokens": 4096,
+        "generated_tokens": 414,
+        "distinct_ratio": 0.9836065573770492,
+        "zlib_ratio": 0.45850914205344584,
+        "degenerate": false
+      }
+    ],
+    "skipped": []
+  },
+  "tools": {
+    "supported": true,
+    "call_rate": 1.0,
+    "right_tool_rate": 1.0,
+    "args_valid_rate": 1.0,
+    "result_use_rate": 0.65,
+    "composite": 1.0,
+    "n_tasks": 20,
+    "n_turns": 40,
+    "n_truncated": 0,
+    "n_stop_unreported": 0,
+    "stopping_rule": "wilson95-looks-5-10-20"
+  },
+  "parallel": {
+    "rows": [
+      {
+        "k": 2,
+        "per_lane_decode_tps": 111.23981031852244,
+        "total_throughput_tps": 222.4796206370449,
+        "degradation_ratio": 0.9997000328811806,
+        "mode": "parallel",
+        "n_lanes_ok": 2,
+        "lane_errors": [],
+        "evidence": "server_timings"
+      },
+      {
+        "k": 4,
+        "per_lane_decode_tps": 111.63037896145806,
+        "total_throughput_tps": 446.52151584583225,
+        "degradation_ratio": 1.0032100306424774,
+        "mode": "parallel",
+        "n_lanes_ok": 4,
+        "lane_errors": [],
+        "evidence": "server_timings"
+      }
+    ],
+    "baseline_decode_tps": 111.27318861631353,
+    "tolerance_s": 0.25,
+    "tolerance_provenance": "chosen-2026-08-17",
+    "skipped": []
+  },
+  "verdicts": {
+    "structured_extraction": {
+      "verdict": "ready",
+      "provisional": false,
+      "interval95": [
+        0.901,
+        1.0
+      ],
+      "lens": {
+        "landing": "json_valid_required_keys",
+        "presentation": "default-v1",
+        "stopping_rule": "wilson95-looks-5-10-20-35",
+        "n_used": 35,
+        "temperature": 0.2,
+        "fixtures": "codec-fixtures-v3"
+      }
+    },
+    "patch_editing": {
+      "verdict": "ready",
+      "provisional": false,
+      "interval95": [
+        0.901,
+        1.0
+      ],
+      "lens": {
+        "landing": "applies_and_parses(python)",
+        "presentation": "default-v1",
+        "stopping_rule": "wilson95-looks-5-10-20-35",
+        "n_used": 35,
+        "temperature": 0.2,
+        "fixtures": "codec-fixtures-v3"
+      }
+    },
+    "long_context": {
+      "verdict": "ready",
+      "lens": {
+        "evidence": "counts+canary"
+      }
+    },
+    "loop_discipline": {
+      "verdict": "risky",
+      "provisional": true,
+      "interval95": [
+        0.867,
+        1.0
+      ],
+      "lens": {
+        "instrument": "scripted-loop-v2",
+        "fixtures": "codec-fixtures-v3",
+        "temperature": 0.2,
+        "n_error_runs": 5
+      }
+    },
+    "chat_speed": {
+      "verdict": "ready",
+      "lens": {
+        "metric": "decode_tps",
+        "floor_ready": 8.0,
+        "floor_risky": 4.0,
+        "evidence": "server_timings"
+      }
+    },
+    "agent_speed": {
+      "verdict": "ready",
+      "lens": {
+        "metric": "prefill_tps",
+        "floor_ready": 200.0,
+        "floor_risky": 80.0,
+        "evidence": "server_timings"
+      }
+    },
+    "long_output": {
+      "verdict": "ready",
+      "provisional": false,
+      "lens": {
+        "metrics": "distinct4gram+zlib",
+        "distinct_floor": 0.3,
+        "zlib_floor": 0.2557,
+        "thresholds": "derived-2026-08-15 (zlib only; distinct still assumed)",
+        "task": "enumeration-v1",
+        "temperature": 0.2,
+        "rungs_scored": 4,
+        "deepest_scored_tokens": 4096
+      }
+    },
+    "tool_calling": {
+      "verdict": "ready",
+      "provisional": true,
+      "interval95": [
+        0.839,
+        1.0
+      ],
+      "lens": {
+        "instrument": "scripted-tools-v2",
+        "toolset": "toolset-v1",
+        "stopping_rule": "wilson95-looks-5-10-20",
+        "n_used": 20,
+        "temperature": 0.2,
+        "call_rate": 1.0,
+        "right_tool_rate": 1.0,
+        "args_valid_rate": 1.0,
+        "result_use_rate": 0.65,
+        "n_truncated": 0,
+        "n_stop_unreported": 0
+      }
+    }
+  },
+  "provenance": {
+    "started": "2026-08-17T13:52:37Z",
+    "finished": "2026-08-17T13:59:06Z",
+    "mode": "full",
+    "tier": "enthusiast-16gb",
+    "emulated": false,
+    "presentation": "default-v1",
+    "fixture_set": "codec-fixtures-v3",
+    "temperature": 0.2,
+    "thinking": "disabled",
+    "seeds": [
+      0,
+      1
+    ],
+    "budget": {
+      "max_calls": 610,
+      "max_prompt_tokens": 1000000
+    },
+    "spent": {
+      "calls": 527,
+      "prompt_tokens": 222058
+    },
+    "calibration": {
+      "chars_per_token": 6.153256704980843,
+      "counts_available": true,
+      "deterministic": true
+    },
+    "dropped": []
+  }
+}
