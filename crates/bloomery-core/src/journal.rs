@@ -153,11 +153,26 @@ pub enum Event {
     /// the provenance of every baseline is explicit, so a replay can always
     /// say *who* decided this document is the reference.
     ///
-    /// `provenance` is one of `"operator"` (an explicit operator action) or
-    /// `"auto-first-profile"` (the first successful POST for a model, which
-    /// blesses itself so the cumulative comparison has a reference at all).
-    /// Re-blessing appends another row rather than editing this one, so the
-    /// superseded baseline's identity stays in the record beside the new one.
+    /// `provenance` is a **family, not a closed set**, and a consumer reads it
+    /// by prefix:
+    ///
+    /// - exactly `"auto-first-profile"` — the first successful POST for a
+    ///   model, which blesses itself so the cumulative comparison has a
+    ///   reference at all. This daemon never auto-blesses over an existing
+    ///   baseline, so this spelling never carries a parenthetical.
+    /// - prefix `"operator"` — an explicit operator action. Bare `"operator"`
+    ///   when the model had no baseline; `"operator (replaced <sha256>)"` when
+    ///   this blessing overwrote one, where `<sha256>` is the superseded
+    ///   document's full digest — or, when those bytes existed but could not be
+    ///   read, a sentence saying so in place of the digest.
+    ///
+    /// **Re-blessing carries the superseded identity IN THIS ROW**, in the
+    /// parenthetical above. Rows are append-only and the old row is never
+    /// edited, but the old row cannot tell a replay that it *stopped* being the
+    /// baseline — only the replacing row knows that, and the digest it names is
+    /// what ties the two together (it equals the earlier row's `sha`). The
+    /// replaced document's bytes are gone the instant the blessing lands, so
+    /// this digest is all that survives of it.
     ///
     /// `sha` is the sha256 of the blessed document's **bytes**, not of its
     /// path: the row's path claim is checkable with `sha256sum` against the

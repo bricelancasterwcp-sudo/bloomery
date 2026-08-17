@@ -202,10 +202,22 @@ impl<S: Substrate> crate::pager::Pager<S> {
     /// Journals a blessing (design §2): which document became the
     /// drift-cumulative baseline, its digest, and who decided.
     ///
-    /// `provenance` is `"operator"` or
-    /// [`PROVENANCE_AUTO_FIRST`](crate::drift::PROVENANCE_AUTO_FIRST) — the
-    /// provenance of every baseline is explicit, so a replay can always say
-    /// who decided this document is the reference.
+    /// `provenance` is a **family, not a closed set** — a consumer prefix-matches
+    /// it (the wire contract lives on
+    /// [`Event::Blessed`](bloomery_core::journal::Event::Blessed)):
+    ///
+    /// - exactly [`PROVENANCE_AUTO_FIRST`](crate::drift::PROVENANCE_AUTO_FIRST),
+    ///   from the boot watch's first-profile blessing, which never runs over an
+    ///   existing baseline;
+    /// - prefix [`PROVENANCE_OPERATOR`](crate::drift::PROVENANCE_OPERATOR), from
+    ///   [`Pager::bless_baseline`](crate::pager::Pager::bless_baseline) — bare
+    ///   when nothing was replaced, `"operator (replaced <sha256>)"` when this
+    ///   blessing overwrote a baseline (see
+    ///   [`operator_provenance`], the one place that string is built).
+    ///
+    /// Either way the provenance of every baseline is explicit, so a replay can
+    /// always say who decided this document is the reference — and, when one was
+    /// superseded, which document it displaced.
     pub fn journal_blessed(
         &mut self,
         model: &str,
