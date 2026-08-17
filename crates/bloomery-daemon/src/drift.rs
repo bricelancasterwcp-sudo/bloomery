@@ -27,15 +27,24 @@
 //! for the same reason — the prefix is a naming device, the full digest is
 //! the claim.
 //!
-//! This module files documents and nothing else. It runs no gate, spawns no
-//! subprocess, reads no clock beyond file mtimes, and writes no journal rows:
-//! every method hands its outcome back as a named value for the caller to
-//! journal (design deliverables 3 and 4 own the comparisons and the wiring).
+//! Beside the filing cabinet sits the **gate** ([`DriftGate`], design §3-§4):
+//! one comparison of a reference profile against a current one, run as
+//! `assay diff --gate` and reported as a named [`GateOutcome`]. It reads both
+//! documents *before* it spawns anything, so an unmeasurable comparison and a
+//! changed instrument are refusals rather than subprocess results.
+//!
+//! Neither half writes a journal row: every method hands its outcome back as
+//! a named value ([`Rotation`], [`Blessing`], [`Retention`], [`GateReading`])
+//! for the caller to journal — design deliverable 4 owns the boot wiring and
+//! the confirm-then-alarm loop.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-use bloomery_core::journal::sha256_hex_bytes;
-use bloomery_core::profile::Profile;
+use bloomery_core::journal::{sha256_hex_bytes, Event};
+use bloomery_core::profile::{instrument_precheck, InstrumentPrecheck, Profile};
+
+use crate::post::CommandRunner;
 
 /// Every profile document is JSON, whatever role it plays.
 const PROFILE_EXT: &str = "json";
@@ -407,5 +416,407 @@ fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
             std::fs::remove_file(from)
         }
         Err(e) => Err(e),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The gate — design §3 (instrument precheck) and §4 (the diff subprocess)
+// ---------------------------------------------------------------------------
+
+/// Wall-clock cap on one `assay diff --gate` subprocess, in seconds.
+///
+/// **Deliberately not `AssayConfig::probe_timeout_secs`.** That cap bounds a
+/// *probe*, which drives a model through many generations and legitimately
+/// takes minutes — an operator serving a slow, partially-offloaded model
+/// raises it into the tens of minutes (see `post::PostRunner::new`). `assay
+/// diff` does none of that: it reads two JSON documents and does arithmetic
+/// over them. No model, no GPU, no network. Inheriting the probe's cap would
+/// mean that raising the probe timeout for a slow model silently also gave a
+/// wedged diff half an hour to hold up the boot.
+///
+/// 60 s is two orders of magnitude above what the work costs and far below
+/// any interval a boot can afford to lose, so it can only ever fire on a
+/// genuinely wedged child — which is then named
+/// [`GateOutcome::Infra`], never a verdict. Not operator-configurable,
+/// because there is no measured workload that would need it to move.
+pub const DIFF_TIMEOUT_SECS: u64 = 60;
+
+/// [`DIFF_TIMEOUT_SECS`] as a `Duration`, so the seconds are spelled once.
+const DIFF_TIMEOUT: Duration = Duration::from_secs(DIFF_TIMEOUT_SECS);
+
+/// Which of design §2's two comparisons a reading belongs to. Both run every
+/// boot and each journals its own row: step alone leaks the ratchet,
+/// cumulative alone goes stale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Comparison {
+    /// This boot's profile against the previous boot's.
+    Step,
+    /// This boot's profile against the blessed baseline.
+    Cumulative,
+}
+
+impl Comparison {
+    /// The name this comparison takes in the journal.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Comparison::Step => "step",
+            Comparison::Cumulative => "cumulative",
+        }
+    }
+}
+
+/// What one comparison decided. Every case is named; there is no default and
+/// no bare boolean, because the failure this family exists to refuse is a
+/// comparison that could not be made being recorded as one that passed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GateOutcome {
+    /// `assay diff --gate` exited 0: the two documents differ by no more than
+    /// assay's own noise discipline allows.
+    WithinNoise,
+    /// Exited 1: drift beyond noise. A *reading*, not an alarm — design §4's
+    /// confirm-then-alarm rule means the caller re-probes before this becomes
+    /// a finding (deliverable 4).
+    Drift,
+    /// Exited 2: diff itself refused to compare the two (e.g. one-sided tier
+    /// marking). Infrastructure-shaped, but diff's own documented answer, so
+    /// it keeps its code.
+    NotComparable {
+        /// The exit code diff reported — 2 today; carried rather than assumed
+        /// so the row records what actually happened.
+        exit: i32,
+    },
+    /// Design §3: the two documents were measured by different instruments,
+    /// so no comparison between them measures the model. Both identities in
+    /// `"<probe_version>/v<schema>"` form. The diff is never spawned.
+    InstrumentChanged {
+        /// The reference document's instrument identity.
+        reference: String,
+        /// The current document's instrument identity.
+        current: String,
+    },
+    /// One of the two documents could not be read as a profile — absent
+    /// (first boot ever, a baseline nobody blessed, a boot where POST failed),
+    /// unreadable, or not parseable. Named with the reason, and never a pass:
+    /// this is the silent-pass bug the whole gate exists to refuse.
+    Unmeasured {
+        /// Which side failed and why, path included.
+        reason: String,
+    },
+    /// The comparison could not be run: the subprocess would not start, was
+    /// killed (by the timeout or by a signal), or answered with an exit code
+    /// assay does not document. Not a verdict in either direction.
+    Infra {
+        /// What went wrong, in the failing layer's own words.
+        detail: String,
+    },
+}
+
+impl GateOutcome {
+    /// The `outcome` string this verdict takes in
+    /// [`Event::Drift`](bloomery_core::journal::Event::Drift).
+    ///
+    /// The variants that carry context fold it in here rather than getting
+    /// their own journal fields: an instrument-changed row is useless without
+    /// both identities, and an unmeasured row is useless without the reason.
+    /// All of it is identity or prose — never a number transcribed out of a
+    /// profile.
+    pub fn journal_outcome(&self) -> String {
+        match self {
+            GateOutcome::WithinNoise => "within-noise".to_string(),
+            GateOutcome::Drift => "drift".to_string(),
+            GateOutcome::NotComparable { .. } => "not-comparable".to_string(),
+            GateOutcome::InstrumentChanged { reference, current } => {
+                format!("instrument-changed ({reference} -> {current})")
+            }
+            GateOutcome::Unmeasured { reason } => format!("unmeasured: {reason}"),
+            GateOutcome::Infra { detail } => format!("infra: {detail}"),
+        }
+    }
+}
+
+/// Everything one comparison learned: the verdict, the exit code behind it,
+/// and the identity of the exact bytes it compared.
+///
+/// The paths and digests ride here rather than being re-derived by the caller
+/// on the way to the journal. Re-reading the files to hash them would make the
+/// row's digest describe a *second* read — so a row could name bytes the gate
+/// never compared, which is precisely the claim the digest exists to rule out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GateReading {
+    /// The named verdict.
+    pub outcome: GateOutcome,
+    /// What `assay diff --gate` exited with, or `None` when no diff ran (or
+    /// ran and was killed by a signal, which leaves no code at all).
+    pub exit_code: Option<i32>,
+    /// The reference document this comparison was asked about.
+    pub reference_path: PathBuf,
+    /// The current document this comparison was asked about.
+    pub current_path: PathBuf,
+    /// sha256 of the reference's **bytes**, full 64-hex, taken when the gate
+    /// read them. `None` when that file was never read.
+    pub reference_sha: Option<String>,
+    /// sha256 of the current document's **bytes**. `None` when it was never
+    /// read.
+    pub current_sha: Option<String>,
+}
+
+/// The documented invocation, in one place:
+///
+/// ```text
+/// {python} -m assay diff {reference} {current} --gate
+/// ```
+///
+/// Split out so the argument list is a value tests inspect rather than a side
+/// effect of spawning (the same treatment `post::argv` gets). `--gate` is what
+/// makes assay answer in exit codes — design §4's contract is the exit code
+/// and the documents, never diff's prose output, which this daemon does not
+/// read at all.
+pub fn diff_argv(reference: &Path, current: &Path) -> Vec<String> {
+    [
+        "-m",
+        "assay",
+        "diff",
+        &reference.display().to_string(),
+        &current.display().to_string(),
+        "--gate",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect()
+}
+
+/// One profile document as the gate read it: the digest of whatever bytes were
+/// there, and either the parsed profile or why it is not one.
+struct ProfileRead {
+    /// sha256 of the file's bytes. `None` only when the file could not be read
+    /// at all — bytes that exist but do not parse still have a digest, and an
+    /// operator chasing an unparseable document wants exactly that digest.
+    sha: Option<String>,
+    profile: Result<Profile, String>,
+}
+
+/// Reads one document, hashing the bytes on the way through. Never an `Err`:
+/// every failure is a reason string the caller turns into
+/// [`GateOutcome::Unmeasured`], because "there is no reference yet" is the
+/// normal first-boot case, not an error condition.
+fn read_profile(path: &Path) -> ProfileRead {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return ProfileRead {
+                sha: None,
+                profile: Err(format!("{}: no such file", path.display())),
+            };
+        }
+        Err(e) => {
+            return ProfileRead {
+                sha: None,
+                profile: Err(format!("{}: {e}", path.display())),
+            };
+        }
+    };
+    let sha = Some(sha256_hex_bytes(&bytes));
+    // Decoded here rather than via `read_to_string` for the same reason
+    // `ProfileStore::rotate` does it: a torn write leaves bytes that are not
+    // valid UTF-8, and that must read as "this is not a profile", not as an
+    // unreadable disk.
+    let text = match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(e) => {
+            return ProfileRead {
+                sha,
+                profile: Err(format!("{}: not valid UTF-8: {e}", path.display())),
+            };
+        }
+    };
+    let profile = Profile::from_json(&text).map_err(|e| format!("{}: {e}", path.display()));
+    ProfileRead { sha, profile }
+}
+
+/// Runs design §4's comparison: `assay diff --gate` over two profile
+/// documents, behind design §3's instrument precheck.
+///
+/// Mirrors [`crate::post::PostRunner`]'s shape — an injected
+/// [`CommandRunner`], an inspectable argv, a bounded spawn — because the two
+/// solve the same problem: this daemon's verdicts must be testable without
+/// python, without assay and without a GPU, and the exact invocation must be
+/// a value rather than a side effect.
+pub struct DriftGate {
+    python: String,
+    run: CommandRunner,
+    timeout: Duration,
+}
+
+impl DriftGate {
+    /// A gate that really spawns `{python} -m assay diff ...`, bounded by
+    /// [`DIFF_TIMEOUT_SECS`].
+    ///
+    /// `python` comes from `config.assay.python`, the same interpreter POST
+    /// probes with: a diff run under a different assay install than the probe
+    /// would be comparing documents with a tool that did not write them.
+    pub fn new(python: String) -> DriftGate {
+        DriftGate {
+            python,
+            run: Box::new(|program: &str, args: &[String]| {
+                crate::post::run_bounded(program, args, DIFF_TIMEOUT)
+            }),
+            timeout: DIFF_TIMEOUT,
+        }
+    }
+
+    /// A gate with the command execution injected — every outcome, including
+    /// the ones that must never spawn, testable with no assay installed.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_runner(f: CommandRunner) -> DriftGate {
+        DriftGate {
+            // The same spelling `config.assay.python` defaults to, imported
+            // rather than retyped so the two cannot drift.
+            python: crate::config::default_python(),
+            run: f,
+            timeout: DIFF_TIMEOUT,
+        }
+    }
+
+    /// The cap this gate's subprocess runs under.
+    pub fn timeout(&self) -> Duration {
+        self.timeout
+    }
+
+    /// Compares `reference` against `current`, spawning `assay diff --gate`
+    /// only if that comparison can mean anything.
+    ///
+    /// **The order is the contract.** Both documents are read and parsed
+    /// first, then design §3's instrument precheck runs, and only a
+    /// `Comparable` verdict reaches the subprocess:
+    ///
+    /// 1. A side that is absent or unparseable is
+    ///    [`GateOutcome::Unmeasured`] — named, never a pass. First boot ever
+    ///    has no previous profile and an unblessed model has no baseline, so
+    ///    this is the *normal* path on a fresh install, which is exactly why
+    ///    it must not be reachable by any code path that returns "fine".
+    /// 2. A changed instrument is [`GateOutcome::InstrumentChanged`]. Measured
+    ///    motivation, not theory: assay's 2026-08 campaign diffs showed 12 of
+    ///    15 models "improving" because the ceiling cap moved between probe
+    ///    versions. Running the diff anyway would report the instrument and
+    ///    call it the model.
+    ///
+    /// Reading first is also what makes the digests honest: they are of the
+    /// bytes this comparison actually consumed, taken before anything else
+    /// could touch the files.
+    pub fn compare(&self, reference: &Path, current: &Path) -> GateReading {
+        let reference_read = read_profile(reference);
+        let current_read = read_profile(current);
+        let reading = |outcome: GateOutcome, exit_code: Option<i32>| GateReading {
+            outcome,
+            exit_code,
+            reference_path: reference.to_path_buf(),
+            current_path: current.to_path_buf(),
+            reference_sha: reference_read.sha.clone(),
+            current_sha: current_read.sha.clone(),
+        };
+
+        let (reference_profile, current_profile) =
+            match (&reference_read.profile, &current_read.profile) {
+                (Err(why), _) => {
+                    return reading(
+                        GateOutcome::Unmeasured {
+                            reason: format!("reference {why}"),
+                        },
+                        None,
+                    )
+                }
+                (_, Err(why)) => {
+                    return reading(
+                        GateOutcome::Unmeasured {
+                            reason: format!("current {why}"),
+                        },
+                        None,
+                    )
+                }
+                (Ok(r), Ok(c)) => (r, c),
+            };
+
+        if let InstrumentPrecheck::InstrumentChanged { reference, current } =
+            instrument_precheck(reference_profile, current_profile)
+        {
+            return reading(GateOutcome::InstrumentChanged { reference, current }, None);
+        }
+
+        let args = diff_argv(reference, current);
+        let output = match (self.run)(&self.python, &args) {
+            Ok(output) => output,
+            Err(e) => {
+                return reading(
+                    GateOutcome::Infra {
+                        detail: format!("could not run {} {}: {e}", self.python, args.join(" ")),
+                    },
+                    None,
+                )
+            }
+        };
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        // assay documents exactly 0, 1 and 2 for `diff --gate`. Any other code
+        // is a tool this daemon does not understand — treating it as a verdict
+        // (in either direction) would be inventing one.
+        match output.status.code() {
+            Some(0) => reading(GateOutcome::WithinNoise, Some(0)),
+            Some(1) => reading(GateOutcome::Drift, Some(1)),
+            Some(2) => reading(GateOutcome::NotComparable { exit: 2 }, Some(2)),
+            Some(n) => reading(
+                GateOutcome::Infra {
+                    detail: with_stderr(
+                        format!(
+                            "undocumented exit {n} from `assay diff --gate` \
+                             (0, 1 and 2 are the documented codes)"
+                        ),
+                        &stderr,
+                    ),
+                },
+                Some(n),
+            ),
+            // No code at all: the child was killed by a signal. `-1` would
+            // look like a code; `None` is what happened.
+            None => reading(
+                GateOutcome::Infra {
+                    detail: with_stderr(
+                        "`assay diff --gate` was killed by a signal, leaving no exit code"
+                            .to_string(),
+                        &stderr,
+                    ),
+                },
+                None,
+            ),
+        }
+    }
+}
+
+/// Appends assay's own stderr to an infrastructure detail when there is any.
+/// Its words, verbatim, for the operator — never parsed, and never consulted
+/// for a verdict.
+fn with_stderr(detail: String, stderr: &str) -> String {
+    if stderr.is_empty() {
+        detail
+    } else {
+        format!("{detail}: {stderr}")
+    }
+}
+
+/// The journal row for one comparison
+/// ([`Event::Drift`](bloomery_core::journal::Event::Drift)).
+///
+/// Every field comes from the `reading` itself — including the two paths — so
+/// the row cannot describe a different pair of documents than the gate
+/// compared. Lives beside the gate rather than in the boot wiring so the call
+/// site there is one line.
+pub fn drift_event(model: &str, comparison: Comparison, reading: &GateReading) -> Event {
+    Event::Drift {
+        model: model.to_string(),
+        comparison: comparison.as_str().to_string(),
+        outcome: reading.outcome.journal_outcome(),
+        reference_path: reading.reference_path.display().to_string(),
+        current_path: reading.current_path.display().to_string(),
+        exit_code: reading.exit_code,
+        reference_sha: reading.reference_sha.clone(),
+        current_sha: reading.current_sha.clone(),
     }
 }

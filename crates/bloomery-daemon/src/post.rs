@@ -230,6 +230,13 @@ impl PostRunner {
 /// [`PostRunner::new`]'s `probe_timeout` parameter for the operator-configured
 /// cap that bounds it.
 ///
+/// `pub(crate)` because the drift gate (`crate::drift::DriftGate`) spawns
+/// `assay diff` under the same discipline with its own, much tighter cap
+/// (`drift::DIFF_TIMEOUT_SECS`). One implementation rather than two: the
+/// kill-then-reap ordering below is the kind of detail a second copy gets
+/// subtly wrong, and both callers run assay — which is why the timeout error
+/// names assay rather than the program.
+///
 /// Three deliberate choices in the plumbing:
 ///
 /// - **stdin is `/dev/null`.** A child that reads stdin gets EOF instead of
@@ -242,7 +249,11 @@ impl PostRunner {
 ///   child writing >64 KiB of stderr would block on a full pipe — bounded,
 ///   not unbounded: the timeout fires and kills it, which is exactly the
 ///   named failure path.
-fn run_bounded(program: &str, args: &[String], timeout: Duration) -> std::io::Result<Output> {
+pub(crate) fn run_bounded(
+    program: &str,
+    args: &[String],
+    timeout: Duration,
+) -> std::io::Result<Output> {
     let mut child = Command::new(program)
         .args(args)
         .stdin(Stdio::null())
@@ -270,7 +281,7 @@ fn run_bounded(program: &str, args: &[String], timeout: Duration) -> std::io::Re
             let _ = child.wait();
             return Err(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
-                format!("assay probe timed out after {}s", timeout.as_secs()),
+                format!("assay timed out after {}s", timeout.as_secs()),
             ));
         }
         std::thread::sleep(PROBE_POLL_INTERVAL);
@@ -282,7 +293,9 @@ fn run_bounded(program: &str, args: &[String], timeout: Duration) -> std::io::Re
 /// The injectable [`CommandRunner`] replaces the whole subprocess, so it
 /// cannot exercise the spawn layer's timeout; this is the seam that lets a
 /// test drive the real one against a real child without waiting out the
-/// shipped default (600 s, `config::AssayConfig::probe_timeout_secs`).
+/// shipped default (600 s, `config::AssayConfig::probe_timeout_secs`). Used by
+/// the drift gate's tests as well, for the same reason and against the same
+/// spawn layer.
 #[cfg(any(test, feature = "test-support"))]
 pub fn run_bounded_for_test(
     program: &str,

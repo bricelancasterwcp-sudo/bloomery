@@ -168,6 +168,39 @@ pub enum Event {
         sha: String,
         provenance: String,
     },
+    /// One drift comparison, exactly as the gate ran it (drift-watch design
+    /// §4). Two rows per model per boot: `comparison` is `"step"` (against
+    /// last boot's profile) or `"cumulative"` (against the blessed baseline).
+    ///
+    /// The row is built to be **re-runnable and verifiable**, and to contain
+    /// no transcribed measurements:
+    ///
+    /// - `outcome` is the gate's named verdict — `"within-noise"`, `"drift"`,
+    ///   `"not-comparable"`, `"instrument-changed (<ref> -> <cur>)"`,
+    ///   `"unmeasured: <why>"`, `"infra: <what>"`. Never a score, and never a
+    ///   number copied out of either profile: a value that looks like a
+    ///   measurement, transcribed, is how transcription errors become
+    ///   evidence.
+    /// - `reference_path` / `current_path` name the two documents, so anyone
+    ///   can re-run the identical `assay diff` by hand.
+    /// - `exit_code` is what `assay diff --gate` reported, `None` when no diff
+    ///   ran at all (precheck refused, a side was unmeasured, the spawn failed
+    ///   or the child was killed by a signal). `None`, not `-1` and not `0`:
+    ///   an absent code is not a zero one.
+    /// - `reference_sha` / `current_sha` are the sha256 of each file's
+    ///   **bytes**, taken when the gate read them — the same claim
+    ///   [`Event::Blessed::sha`] makes, so `sha256sum` on either path checks
+    ///   the row against the file. `None` when that side was never read.
+    Drift {
+        model: String,
+        comparison: String,
+        outcome: String,
+        reference_path: String,
+        current_path: String,
+        exit_code: Option<i32>,
+        reference_sha: Option<String>,
+        current_sha: Option<String>,
+    },
 }
 
 /// `Event::CodecFixture::expect`'s serde default (G5 design doc §4): every
