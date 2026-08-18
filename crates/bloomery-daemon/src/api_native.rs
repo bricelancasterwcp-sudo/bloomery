@@ -59,6 +59,7 @@ pub(crate) fn dispatch<S: Substrate>(
         ("POST", ["agents", id, "resume"]) => resume(pager, id),
         ("POST", ["models", name, "unload"]) => unload(pager, name),
         ("POST", ["models", name, "bless"]) => bless(pager, name),
+        ("POST", ["models", name, "unblock"]) => unblock(pager, name),
         ("GET", ["status"]) => status(pager),
         _ => (404, Some(json!({"error": "not_found"}))),
     }
@@ -260,6 +261,51 @@ fn bless<S: Substrate>(pager: &Mutex<Pager<S>>, name: &str) -> ApiResult {
     }
 }
 
+/// `POST /models/{name}/unblock` — clear this boot's admission block
+/// (verdict-gated-admission design §4).
+///
+/// | outcome | status | body |
+/// |---|---|---|
+/// | cleared | 200 | `{model, cleared: {reference}}` |
+/// | no such model | 404 | the surface's one `unknown_model` shape |
+/// | no block to clear | 409 | `{error: "no_admission_block", model, detail}` |
+///
+/// **The 409 is the load-bearing one**, for the same reason bless's is:
+/// answering 200 where nothing was blocking would tell an operator they
+/// had cleared something when nothing was written.
+///
+/// This does NOT re-baseline. `bless` accepts a new normal for the next
+/// boot; this admits the model now, with the reading left exactly as
+/// measured. Neither implies the other.
+fn unblock<S: Substrate>(pager: &Mutex<Pager<S>>, name: &str) -> ApiResult {
+    let mut p = match lock_pager(pager) {
+        Ok(p) => p,
+        Err(poisoned) => return poisoned,
+    };
+    match p.clear_admission_block(name) {
+        Ok(Some(block)) => (
+            200,
+            Some(json!({
+                "model": name,
+                "cleared": {"reference": block.reference},
+            })),
+        ),
+        Ok(None) => (
+            409,
+            Some(json!({
+                "error": "no_admission_block",
+                "model": name,
+                "detail": format!(
+                    "model {name} has no standing admission block to clear"
+                ),
+            })),
+        ),
+        // Answered through the shared table rather than a second spelling of
+        // `{"error":"unknown_model"}` — one shape for one fact.
+        Err(e) => map_error(&e),
+    }
+}
+
 fn status<S: Substrate>(pager: &Mutex<Pager<S>>) -> ApiResult {
     let p = match lock_pager(pager) {
         Ok(p) => p,
@@ -277,6 +323,7 @@ fn status<S: Substrate>(pager: &Mutex<Pager<S>>) -> ApiResult {
 /// |---|---|---|
 /// | `UnknownModel` / `UnknownAgent` | 404 | `{error, model\|agent}` |
 /// | `Unprofiled` | 422 | `{error, model}` |
+/// | `DriftBlocked` | 422 | `{error, model, reference}` |
 /// | `Refused` | 409 | `{error, needed, free, reclaimable}` |
 /// | `PromptTooLarge` | 413 | `{error, needed_tokens, window_tokens}` |
 /// | `Budget` | 402 | `{error, remaining, requested}` |
@@ -287,6 +334,10 @@ fn map_error(e: &PagerError) -> ApiResult {
         PagerError::UnknownModel(model) => (404, json!({"error": "unknown_model", "model": model})),
         PagerError::UnknownAgent(agent) => (404, json!({"error": "unknown_agent", "agent": agent})),
         PagerError::Unprofiled(model) => (422, json!({"error": "unprofiled", "model": model})),
+        PagerError::DriftBlocked { model, reference } => (
+            422,
+            json!({"error": "drift_blocked", "model": model, "reference": reference}),
+        ),
         PagerError::Refused {
             needed,
             free,

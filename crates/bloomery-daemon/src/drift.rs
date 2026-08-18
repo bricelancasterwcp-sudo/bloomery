@@ -42,7 +42,10 @@
 mod watch;
 
 pub(crate) use watch::{rotate_for_boot, watch_model};
-pub use watch::{DriftStatus, ModelDrift, PROVENANCE_AUTO_FIRST, PROVENANCE_OPERATOR};
+pub use watch::{
+    AdmissionBlock, DriftStatus, ModelDrift, PROVENANCE_AUTO_FIRST, PROVENANCE_DRIFT_WATCH,
+    PROVENANCE_OPERATOR,
+};
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

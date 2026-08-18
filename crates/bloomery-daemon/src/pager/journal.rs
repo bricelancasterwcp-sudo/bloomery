@@ -209,6 +209,29 @@ pub(crate) fn blessed(
     )
 }
 
+/// One admission-block row (verdict-gated-admission design §4/§7): the
+/// drift watch setting a block on a newly confirmed cumulative regression,
+/// or an operator clearing one via `POST /models/{name}/unblock`.
+/// `reference` is the blessed baseline's identity that refused, the same
+/// string on both the block's row and the clear's.
+pub(crate) fn admission(
+    j: &mut Journal,
+    model: &str,
+    action: &str,
+    reference: &str,
+    provenance: &str,
+) -> Result<(), PagerError> {
+    append(
+        j,
+        &Event::Admission {
+            model: model.to_string(),
+            action: action.to_string(),
+            reference: reference.to_string(),
+            provenance: provenance.to_string(),
+        },
+    )
+}
+
 pub(crate) fn agent_removed(j: &mut Journal, id: &str, reason: &str) -> Result<(), PagerError> {
     append(
         j,

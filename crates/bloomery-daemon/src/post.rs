@@ -447,8 +447,9 @@ fn probe_each<S: Substrate>(
                 // Strictly after the admission bookkeeping above, and only on
                 // a successful probe: with no current document there is
                 // nothing to compare, and `ModelStatus.drift` stays absent
-                // rather than reading clean. Drift never touches admission
-                // (design §7) — it observes, and this call's failures are
+                // rather than reading clean. The watch's cumulative reading is
+                // what derives the admission block (verdict-gated-admission
+                // design §2/§3) — this call site's own failures remain
                 // journal failures only (law 7).
                 crate::drift::watch_model(pager, runner, gate, &store, model, port, tier)?;
             }

@@ -139,8 +139,15 @@ pub struct ModelStatus {
     /// one before POST reached it. **Absent is not clean**, the same
     /// None-honesty [`ModelStatus::done_trust`] has: a comparison nobody made
     /// must never render as one that passed. Says nothing about `done_trust`
-    /// and nothing about admission — design §7 keeps the two questions apart.
+    /// — design §7 keeps that question apart — but this reading is exactly
+    /// what [`ModelStatus::admission_block`] below is derived from
+    /// (verdict-gated-admission design §2/§3).
     pub drift: Option<ModelDrift>,
+    /// What is currently holding this model out of new admission, or
+    /// `None` when nothing is. Rendered beside `drift` because the two
+    /// say different things: `drift` is what was measured, this is
+    /// whether it is being enforced.
+    pub admission_block: Option<crate::drift::AdmissionBlock>,
 }
 
 /// One model's stored G4 gate, as `/status` renders it (protocol §5).
@@ -258,6 +265,7 @@ impl<S: bloomery_substrate::Substrate> crate::pager::Pager<S> {
                     refuse_provisional: g.refuse_provisional,
                 }),
                 drift: m.drift.clone(),
+                admission_block: m.admission_block.clone(),
             })
             .collect();
         models.sort_by(|x, y| x.name.cmp(&y.name));

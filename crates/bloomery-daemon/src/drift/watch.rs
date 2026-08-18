@@ -131,6 +131,23 @@ pub struct ModelDrift {
     pub cumulative: DriftStatus,
 }
 
+/// Why this model is currently refused new admission, and by which
+/// reference (design §3).
+///
+/// This is a POLICY derived from a reading, never the reading itself.
+/// [`ModelDrift`] is written once when the watch settles it and is never
+/// rewritten; this block may be cleared by an operator
+/// (`POST /models/{name}/unblock`) without any measurement changing. The
+/// two are separate fields for exactly that reason, the same way design
+/// §7 keeps `done_trust` and `drift` apart.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct AdmissionBlock {
+    /// The blessed baseline's identity — the same `reference` string
+    /// [`DriftStatus::Confirmed`] carried, so the 422 can name what
+    /// refused without re-deriving it.
+    pub reference: String,
+}
+
 /// The provenance [`bloomery_core::journal::Event::Blessed`] carries when the
 /// daemon blessed a model's first profile itself (spec §2) — the only blessing
 /// this daemon ever decides on its own, and only when no baseline exists.
@@ -143,6 +160,13 @@ pub const PROVENANCE_AUTO_FIRST: &str = "auto-first-profile";
 /// [`operator_provenance`](crate::drift::operator_provenance), the one place
 /// that spelling is built.
 pub const PROVENANCE_OPERATOR: &str = "operator";
+
+/// The provenance an `Event::Admission` "blocked" row carries when the drift
+/// watch itself set the block, i.e. every such row `Pager::set_drift`
+/// journals — as opposed to `PROVENANCE_OPERATOR`, which, on an `Admission`
+/// row, only ever names a "cleared" row (`POST /models/{name}/unblock`,
+/// verdict-gated-admission design §4/§7).
+pub const PROVENANCE_DRIFT_WATCH: &str = "drift-watch";
 
 /// Rotates `model`'s current profile into `previous`, before POST probes it.
 ///

@@ -77,8 +77,9 @@ semantic store, appliance boot) is not built. See
   and attaches the resulting capability profile, so admission can be gated on a
   measured verdict rather than a promise.
 * **Two HTTP surfaces.** A native API (`/agents`, `/agents/{id}/infer`,
-  `/suspend`, `/resume`, `/models/{m}/unload`, `/status`) and an
-  OpenAI-compatible shim (`GET /v1/models`, `POST /v1/chat/completions`).
+  `/suspend`, `/resume`, `/models/{m}/unload`, `/models/{m}/bless`,
+  `/models/{m}/unblock`, `/status`) and an OpenAI-compatible shim
+  (`GET /v1/models`, `POST /v1/chat/completions`).
 * **A journal you can replay.** Every boot writes `boot-<ts>.jsonl`; every
   admission, decision, paging op, refusal and degradation is a line in it. The
   G2 numbers above are computed from nothing else — see

@@ -517,6 +517,18 @@ fn map_error(e: &PagerError, bound_by: Option<&str>) -> (u16, Value) {
                 Some("model"),
             ),
         ),
+        PagerError::DriftBlocked { model, reference } => (
+            422,
+            error_envelope(
+                "invalid_request_error",
+                "model_drift_blocked",
+                format!(
+                    "model '{model}' is held out: its capability profile drifted \
+                     from blessed baseline '{reference}' and the change reproduced"
+                ),
+                Some("model"),
+            ),
+        ),
         PagerError::Refused {
             needed,
             free,

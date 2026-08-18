@@ -76,6 +76,97 @@ fn oversized_prompt_400_has_the_full_openai_error_envelope() {
     assert!(msg.contains("refusing rather than truncating"), "{msg}");
 }
 
+/// 422: a model with a standing drift block refuses new agent creation on
+/// this surface too — a `PagerError` mapped on one surface and not the
+/// other is a 500 waiting for whichever client hits the unmapped path. The
+/// sentence names the baseline that refused, so an operator reading an
+/// OpenAI-shaped error still learns which one it was.
+#[test]
+fn chat_completion_on_a_drift_blocked_model_returns_422() {
+    let pager = pager_with_drift_blocked_qwen();
+    let (st, body) = bloomery_daemon::test_support::dispatch_v1_fake(
+        &pager,
+        "POST",
+        "/v1/chat/completions",
+        r#"{"model":"qwen","messages":[{"role":"user","content":"hi"}],"max_tokens":16}"#,
+        None,
+    );
+    assert_eq!(st, 422, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"]["type"], "invalid_request_error");
+    assert_eq!(v["error"]["code"], "model_drift_blocked");
+    assert_eq!(v["error"]["param"], "model");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("base42"), "{msg}");
+}
+
+/// Builds a bare `Mutex<Pager<FakeSubstrate>>` (no socket) with one
+/// `qwen`-like model registered, profiled (so admission reaches the
+/// drift-block clause rather than stopping at `Unprofiled`), and its
+/// cumulative drift reading set to a `Confirmed` regression against
+/// baseline `"base42"`. Mirrors `pager_with_missing_stats_reply` and
+/// `api_native_test.rs::serve_drift_blocked_qwen`.
+fn pager_with_drift_blocked_qwen(
+) -> std::sync::Mutex<bloomery_daemon::pager::Pager<bloomery_substrate::fake::FakeSubstrate>> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "bloomery-v1-drift-blocked-test-{}-{seq}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    let journal = bloomery_core::journal::Journal::open(&dir.join("j.jsonl")).unwrap();
+    let images = bloomery_daemon::agents::ImageStore::new(&dir.join("img")).unwrap();
+    let mut fake = bloomery_substrate::fake::FakeSubstrate::new();
+    fake.script_reply(bloomery_substrate::Reply {
+        text: "ok".into(),
+        prompt_tokens: Some(8),
+        completion_tokens: Some(4),
+        duration_ms: 1,
+    });
+    let mut pager = bloomery_daemon::pager::Pager::new(
+        fake,
+        journal,
+        images,
+        Box::new(|| Some(1024 * 1024 * 1024)),
+    );
+    let gguf = dir.join("qwen.gguf");
+    std::fs::write(&gguf, b"weights").unwrap();
+    let meta = bloomery_core::gguf::GgufMeta {
+        arch: "qwen2".into(),
+        layers: 28,
+        kv_heads: 4,
+        head_dim: 128,
+        training_ctx: 4096,
+        weights_bytes: 1000,
+    };
+    pager.register_model("qwen", &gguf, meta, None).unwrap();
+    pager
+        .attach_profile(
+            "qwen",
+            bloomery_core::profile::Profile::from_json(
+                r#"{"assay_profile_version":3,"probe_version":"0.4.1","model":{"name":"qwen"},"verdicts":{}}"#,
+            )
+            .expect("fixture profile parses"),
+            false,
+        )
+        .unwrap();
+    pager
+        .set_drift(
+            "qwen",
+            bloomery_daemon::drift::ModelDrift {
+                step: bloomery_daemon::drift::DriftStatus::WithinNoise,
+                cumulative: bloomery_daemon::drift::DriftStatus::Confirmed {
+                    reference: "base42".to_string(),
+                },
+            },
+        )
+        .unwrap();
+    std::sync::Mutex::new(pager)
+}
+
 /// `GET /v1/models` shapes each entry per the OpenAI list envelope, not
 /// just "the name shows up somewhere in the body".
 #[test]

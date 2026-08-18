@@ -183,6 +183,21 @@ pub enum Event {
         sha: String,
         provenance: String,
     },
+    /// An admission block set by the drift watch, or cleared by an
+    /// operator (verdict-gated-admission design §4). Two rows at most per
+    /// model per boot: one when a confirmed cumulative regression set it,
+    /// one if the operator cleared it. A replay reconstructs which models
+    /// were held out, by which baseline, and who let them back in.
+    Admission {
+        model: String,
+        /// `"blocked"` or `"cleared"`.
+        action: String,
+        /// The blessed baseline's identity that refused.
+        reference: String,
+        /// `PROVENANCE_OPERATOR` on a clearing; the drift watch's own
+        /// name when the block was set.
+        provenance: String,
+    },
     /// One drift comparison, exactly as the gate ran it (drift-watch design
     /// §4).
     ///

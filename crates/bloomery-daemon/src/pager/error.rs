@@ -17,6 +17,14 @@ pub enum PagerError {
     /// Model has no profile and `allow_unprofiled=false` (the daemon's call
     /// in Task 16 — the pager itself accepts `profile: None`).
     Unprofiled(String),
+    /// Model has a profile, and this boot's cumulative drift comparison
+    /// settled `Confirmed` against the blessed baseline named here
+    /// (design §2). Distinct from `Unprofiled`: something WAS measured,
+    /// and what it measured was a reproduced regression.
+    DriftBlocked {
+        model: String,
+        reference: String,
+    },
     /// Residency arithmetic, in bytes.
     Refused {
         needed: u64,
@@ -41,6 +49,10 @@ impl std::fmt::Display for PagerError {
             PagerError::UnknownModel(m) => write!(f, "unknown model: {m}"),
             PagerError::UnknownAgent(a) => write!(f, "unknown agent: {a}"),
             PagerError::Unprofiled(m) => write!(f, "model {m} has no capability profile"),
+            PagerError::DriftBlocked { model, reference } => write!(
+                f,
+                "model {model} is drift-blocked: cumulative comparison confirmed a regression against baseline {reference}"
+            ),
             PagerError::Refused {
                 needed,
                 free,

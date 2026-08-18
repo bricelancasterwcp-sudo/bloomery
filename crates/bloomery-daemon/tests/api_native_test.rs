@@ -184,6 +184,151 @@ fn create_agent_with_unknown_model_returns_404() {
     handle.shutdown();
 }
 
+/// 422: a model with a standing drift block refuses new agent creation,
+/// naming the reference baseline the regression was measured against — the
+/// same status `Unprofiled` gets, because it is the same class of answer on
+/// the same path clients already handle. A `PagerError` mapped on one
+/// surface and not the other is a 500 waiting for whichever client hits the
+/// unmapped path, so this pins the native side of that obligation.
+#[test]
+fn create_agent_on_a_drift_blocked_model_returns_422() {
+    let (port, handle) = serve_drift_blocked_qwen();
+    let addr = format!("127.0.0.1:{port}");
+    let (st, body) = http(&addr, "POST", "/agents", r#"{"model":"qwen"}"#);
+    assert_eq!(st, 422, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"], "drift_blocked");
+    assert_eq!(v["model"], "qwen");
+    assert_eq!(v["reference"], "base42");
+    handle.shutdown();
+}
+
+/// Builds and serves a `Pager<FakeSubstrate>` with `qwen` registered,
+/// profiled (so admission reaches the drift-block clause rather than
+/// stopping at `Unprofiled`), and its cumulative drift reading set to a
+/// `Confirmed` regression against baseline `"base42"` — the one shape
+/// `set_drift` turns into an admission block (Task 2's invariant).
+fn serve_drift_blocked_qwen() -> (u16, bloomery_daemon::http::ServerHandle) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "bloomery-drift-blocked-test-{}-{seq}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    let journal = bloomery_core::journal::Journal::open(&dir.join("j.jsonl")).unwrap();
+    let images = bloomery_daemon::agents::ImageStore::new(&dir.join("img")).unwrap();
+    let mut pager = bloomery_daemon::pager::Pager::new(
+        bloomery_substrate::fake::FakeSubstrate::new(),
+        journal,
+        images,
+        Box::new(|| Some(1024 * 1024 * 1024)),
+    );
+    let gguf = dir.join("qwen.gguf");
+    std::fs::write(&gguf, b"weights").unwrap();
+    let meta = bloomery_core::gguf::GgufMeta {
+        arch: "qwen2".into(),
+        layers: 28,
+        kv_heads: 4,
+        head_dim: 128,
+        training_ctx: 4096,
+        weights_bytes: 1000,
+    };
+    pager.register_model("qwen", &gguf, meta, None).unwrap();
+    pager
+        .attach_profile(
+            "qwen",
+            bloomery_core::profile::Profile::from_json(&profile_doc("qwen", 2048))
+                .expect("fixture profile parses"),
+            false,
+        )
+        .unwrap();
+    pager
+        .set_drift(
+            "qwen",
+            bloomery_daemon::drift::ModelDrift {
+                step: bloomery_daemon::drift::DriftStatus::WithinNoise,
+                cumulative: bloomery_daemon::drift::DriftStatus::Confirmed {
+                    reference: "base42".to_string(),
+                },
+            },
+        )
+        .unwrap();
+
+    let (port, mut handle) = bloomery_daemon::http::serve(pager, 0);
+    handle.set_scratch_dir(dir);
+    (port, handle)
+}
+
+/// [`serve_drift_blocked_qwen`], but also wires the profiles directory and
+/// files `qwen`'s current profile on disk — the fixture "bless does not
+/// unblock" needs to observe something real over HTTP: `bless` reads
+/// `profiles_dir/qwen.json` from disk (`ProfileStore::bless`), and
+/// `serve_drift_blocked_qwen` alone wires no profiles directory at all, so a
+/// bless against it would 500 before the property could even be asked
+/// about.
+fn serve_drift_blocked_qwen_with_profiles() -> (u16, bloomery_daemon::http::ServerHandle, PathBuf) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "bloomery-drift-blocked-profiled-test-{}-{seq}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(dir.join("profiles")).expect("scratch dir");
+    std::fs::write(
+        dir.join("profiles").join("qwen.json"),
+        profile_doc("qwen", 2048),
+    )
+    .unwrap();
+
+    let journal = bloomery_core::journal::Journal::open(&dir.join("j.jsonl")).unwrap();
+    let images = bloomery_daemon::agents::ImageStore::new(&dir.join("img")).unwrap();
+    let mut pager = bloomery_daemon::pager::Pager::new(
+        bloomery_substrate::fake::FakeSubstrate::new(),
+        journal,
+        images,
+        Box::new(|| Some(1024 * 1024 * 1024)),
+    );
+    pager.set_profiles_dir(dir.join("profiles"));
+    let gguf = dir.join("qwen.gguf");
+    std::fs::write(&gguf, b"weights").unwrap();
+    let meta = bloomery_core::gguf::GgufMeta {
+        arch: "qwen2".into(),
+        layers: 28,
+        kv_heads: 4,
+        head_dim: 128,
+        training_ctx: 4096,
+        weights_bytes: 1000,
+    };
+    pager.register_model("qwen", &gguf, meta, None).unwrap();
+    pager
+        .attach_profile(
+            "qwen",
+            bloomery_core::profile::Profile::from_json(&profile_doc("qwen", 2048))
+                .expect("fixture profile parses"),
+            false,
+        )
+        .unwrap();
+    pager
+        .set_drift(
+            "qwen",
+            bloomery_daemon::drift::ModelDrift {
+                step: bloomery_daemon::drift::DriftStatus::WithinNoise,
+                cumulative: bloomery_daemon::drift::DriftStatus::Confirmed {
+                    reference: "base42".to_string(),
+                },
+            },
+        )
+        .unwrap();
+
+    let (port, mut handle) = bloomery_daemon::http::serve(pager, 0);
+    handle.set_scratch_dir(dir.clone());
+    (port, handle, dir)
+}
+
 /// 400: a body that isn't valid JSON gets a named error, not a panic or a
 /// route-level 5xx.
 #[test]
@@ -817,6 +962,206 @@ fn a_neighbouring_path_or_the_wrong_method_still_falls_through_to_not_found() {
         "no near-miss request blessed anything"
     );
     assert!(!dir.join("profiles").join("qwen.baseline.json").exists());
+    handle.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// The operator unblock route (verdict-gated-admission design §4): "I know,
+// let it run anyway" — clears THIS boot's admission block without touching
+// the reading or the blessed baseline. Neither this route nor `bless`
+// implies the other.
+// ---------------------------------------------------------------------------
+
+/// Every `Admission` row in the fixture's journal as
+/// `(model, action, reference, provenance)`.
+fn admission_rows(dir: &Path) -> Vec<(String, String, String, String)> {
+    bloomery_core::journal::replay(&dir.join("j.jsonl"))
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            bloomery_core::journal::Event::Admission {
+                model,
+                action,
+                reference,
+                provenance,
+            } => Some((
+                model.clone(),
+                action.clone(),
+                reference.clone(),
+                provenance.clone(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+/// 200: clearing a standing block answers with what was cleared, journals
+/// `"cleared"` with operator provenance, and admits new agents against the
+/// model again — while the drift reading itself, still `Confirmed`, is left
+/// exactly as measured.
+#[test]
+fn unblocking_a_blocked_model_admits_and_journals_the_operator() {
+    let (port, handle) = serve_drift_blocked_qwen();
+    let addr = format!("127.0.0.1:{port}");
+
+    let (st, body) = http(&addr, "POST", "/models/qwen/unblock", "");
+    assert_eq!(st, 200, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["model"], "qwen");
+    assert_eq!(v["cleared"]["reference"], "base42");
+
+    // Admission is open again…
+    let (st, body) = http(&addr, "POST", "/agents", r#"{"model":"qwen"}"#);
+    assert_eq!(st, 201, "{body}");
+
+    // …and the reading itself is untouched.
+    let (st, body) = http(&addr, "GET", "/status", "");
+    assert_eq!(st, 200, "{body}");
+    let status: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let model = status["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["name"] == "qwen")
+        .unwrap();
+    assert_eq!(
+        model["drift"]["cumulative"]["status"], "confirmed",
+        "{model}"
+    );
+
+    handle.shutdown();
+}
+
+/// 404: a name this daemon was never configured with. Same body shape as
+/// every other unknown-model refusal on this surface.
+#[test]
+fn unblocking_an_unknown_model_returns_404() {
+    let (port, handle) = bloomery_daemon::test_support::serve_fake();
+    let addr = format!("127.0.0.1:{port}");
+
+    let (st, body) = http(&addr, "POST", "/models/does-not-exist/unblock", "");
+    assert_eq!(st, 404, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"], "unknown_model");
+    assert_eq!(v["model"], "does-not-exist");
+    handle.shutdown();
+}
+
+/// 409: a known, unblocked model. Answering 200 here would tell an operator
+/// they cleared something when nothing was written — the silent no-op
+/// design §4 forbids, the same reason `bless`'s 409 exists.
+#[test]
+fn unblocking_a_model_with_no_standing_block_is_a_named_409_not_a_silent_no_op() {
+    let (port, handle) = bloomery_daemon::test_support::serve_fake();
+    let addr = format!("127.0.0.1:{port}");
+
+    let (st, body) = http(&addr, "POST", "/models/qwen/unblock", "");
+    assert_eq!(st, 409, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"], "no_admission_block");
+    assert_eq!(v["model"], "qwen");
+    assert!(
+        v["detail"].as_str().is_some_and(|d| !d.is_empty()),
+        "{body}"
+    );
+    handle.shutdown();
+}
+
+/// Unblocking does not rebaseline: it takes the block down without filing a
+/// new baseline anywhere, so there is nothing for a next-boot comparison to
+/// read differently. And a bless on a blocked model does not, on its own,
+/// admit anything this boot — the two routes answer different questions.
+///
+/// The fixture is a model that IS blocked
+/// (`serve_drift_blocked_qwen_with_profiles`), not `serve_with_profiles`'s
+/// unblocked one: against an unblocked model, "bless does not unblock" is
+/// unobservable — there is nothing standing for a bless to (not) clear, so
+/// the property can only be pinned by watching a real block survive a bless.
+#[test]
+fn unblock_does_not_bless_and_bless_does_not_unblock_over_http() {
+    let (port, handle, dir) = serve_drift_blocked_qwen_with_profiles();
+    let addr = format!("127.0.0.1:{port}");
+
+    // The block stands before either route is touched.
+    let block_reference = |body: &str| -> serde_json::Value {
+        let v: serde_json::Value = serde_json::from_str(body).unwrap();
+        v["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["name"] == "qwen")
+            .unwrap()["admission_block"]
+            .clone()
+    };
+    let (st, body) = http(&addr, "GET", "/status", "");
+    assert_eq!(st, 200, "{body}");
+    assert_eq!(block_reference(&body)["reference"], "base42", "{body}");
+    // The fixture's own `set_drift` already journaled the "blocked" row that
+    // put this block there — captured here so the next check is "bless adds
+    // no row of its own", not the wrong claim "there is no row at all".
+    let rows_before_bless = admission_rows(&dir);
+
+    // Bless does not unblock: the block stands after a bless…
+    let (st, body) = http(&addr, "POST", "/models/qwen/bless", "");
+    assert_eq!(st, 200, "{body}");
+    assert_eq!(
+        admission_rows(&dir),
+        rows_before_bless,
+        "bless journals no Admission row of its own"
+    );
+    let (st, body) = http(&addr, "GET", "/status", "");
+    assert_eq!(st, 200, "{body}");
+    assert_eq!(
+        block_reference(&body)["reference"],
+        "base42",
+        "bless must not clear the standing block: {body}"
+    );
+
+    // …observably: new agents are still refused after the bless.
+    let (st, body) = http(&addr, "POST", "/agents", r#"{"model":"qwen"}"#);
+    assert_eq!(
+        st, 422,
+        "a bless on a blocked model must not, on its own, admit anything this boot: {body}"
+    );
+
+    // Unblock does not rebaseline: the baseline bytes bless just wrote are
+    // untouched by the unblock that follows.
+    let baseline = dir.join("profiles").join("qwen.baseline.json");
+    assert!(baseline.exists());
+    let before = std::fs::read(&baseline).unwrap();
+    let (st, body) = http(&addr, "POST", "/models/qwen/unblock", "");
+    assert_eq!(st, 200, "{body}");
+    assert_eq!(
+        std::fs::read(&baseline).unwrap(),
+        before,
+        "unblock must not touch the blessed baseline"
+    );
+
+    // And now that unblock actually ran, admission is open again — the
+    // fixture's block is gone, not merely unobserved.
+    let (st, body) = http(&addr, "POST", "/agents", r#"{"model":"qwen"}"#);
+    assert_eq!(st, 201, "{body}");
+
+    handle.shutdown();
+}
+
+/// The route table's `_ => 404` still catches a neighbouring path or the
+/// wrong method.
+#[test]
+fn unblock_neighbouring_path_or_wrong_method_falls_through_to_not_found() {
+    let (port, handle) = serve_drift_blocked_qwen();
+    let addr = format!("127.0.0.1:{port}");
+
+    for (method, path) in [
+        ("POST", "/models/qwen/unblocking"),
+        ("GET", "/models/qwen/unblock"),
+        ("POST", "/models/qwen/unblock/again"),
+    ] {
+        let (st, body) = http(&addr, method, path, "");
+        assert_eq!(st, 404, "{method} {path}: {body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["error"], "not_found", "{method} {path}");
+    }
     handle.shutdown();
 }
 

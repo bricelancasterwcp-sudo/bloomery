@@ -8,10 +8,13 @@
 //! log is exactly the interleaving nobody can replay. So it records through
 //! the pager, and there stays one writer.
 //!
-//! Nothing here touches `done_trust`, `codec_gate` or admission. Design §7 is
-//! explicit: drift answers "has what assay can measure about this serving path
-//! changed", G4/G5 answer "does this model do bloomery's task honestly", and
-//! the two are separate fields on purpose.
+//! This module touches admission, and only admission: `set_drift` derives and
+//! stores the block a confirmed cumulative regression sets
+//! (verdict-gated-admission design §2), and `clear_admission_block` clears it
+//! on the operator's say-so (§4). `done_trust` remains the sole property of
+//! the G4 codec gate and the G5 refusal gate, and `codec_gate` is untouched —
+//! the same separation design §3 keeps between the reading and the policy
+//! derived from it.
 
 use std::path::{Path, PathBuf};
 
@@ -113,8 +116,91 @@ impl<S: Substrate> crate::pager::Pager<S> {
             .models
             .get_mut(model)
             .ok_or_else(|| PagerError::UnknownModel(model.to_string()))?;
+
+        // Design §2: the CUMULATIVE comparison decides, and only `Confirmed`
+        // blocks. Derived here, at the moment the reading settles, so the
+        // block and the reading it came from are written in one place and
+        // cannot disagree.
+        let block = match &drift.cumulative {
+            DriftStatus::Confirmed { reference } => Some(crate::drift::AdmissionBlock {
+                reference: reference.clone(),
+            }),
+            // Every other outcome admits. `admission_block` is per-process
+            // state that starts `None` every boot — nothing survives a
+            // restart for this line to "resurrect". Within one boot, a
+            // fresh non-Confirmed reading here simply overwrites whatever
+            // the field held a moment ago (a standing block, or an
+            // operator's earlier clear) with `None`, for the same reason a
+            // Confirmed reading would overwrite it with a new block: this
+            // is what the comparison just measured, full stop.
+            _ => None,
+        };
+
         entry.drift = Some(drift);
+        entry.admission_block = block.clone();
+
+        // Task 4's row, not Task 2's: a block newly standing is journaled
+        // here, at the moment it is derived, with the drift watch's own
+        // provenance — the counterpart to the "cleared" row an operator's
+        // later `clear_admission_block` writes (design §4/§7). `entry`'s
+        // borrow has already ended above, so this is free to take
+        // `&mut self.journal`.
+        if let Some(block) = block {
+            jrnl::admission(
+                &mut self.journal,
+                model,
+                "blocked",
+                &block.reference,
+                crate::drift::PROVENANCE_DRIFT_WATCH,
+            )?;
+        }
         Ok(())
+    }
+
+    /// The block currently holding `model` out of new admission, if any
+    /// (design §2/§3). `Some` iff this boot's stored `ModelDrift.cumulative`
+    /// settled `Confirmed` — see [`Pager::set_drift`], the only place that
+    /// invariant is established.
+    pub fn admission_block_for(&self, model: &str) -> Option<&crate::drift::AdmissionBlock> {
+        self.models
+            .get(model)
+            .and_then(|e| e.admission_block.as_ref())
+    }
+
+    /// Clears this model's admission block on an operator's say-so
+    /// (`POST /models/{name}/unblock`, design §4), and journals who did it.
+    ///
+    /// Touches neither the drift reading nor the blessed baseline: the
+    /// reading is a measurement and never changes here, and re-baselining
+    /// is `bless`'s job, taking effect at the next boot. This says only
+    /// "admit it anyway, now" — `bless` and `unblock` answer different
+    /// questions, and neither implies the other.
+    ///
+    /// `Ok(None)` is "known model, nothing was blocking" — **not** an error:
+    /// the request is well-formed and the model exists, only the daemon's
+    /// state conflicts with it. That is the route's 409, deliberately never
+    /// a silent 200 — answering 200 where nothing was blocking would tell an
+    /// operator they cleared something when nothing was written, the same
+    /// reasoning `bless_baseline`'s 409 rests on.
+    pub fn clear_admission_block(
+        &mut self,
+        model: &str,
+    ) -> Result<Option<crate::drift::AdmissionBlock>, PagerError> {
+        let entry = self
+            .models
+            .get_mut(model)
+            .ok_or_else(|| PagerError::UnknownModel(model.to_string()))?;
+        let Some(block) = entry.admission_block.take() else {
+            return Ok(None);
+        };
+        jrnl::admission(
+            &mut self.journal,
+            model,
+            "cleared",
+            &block.reference,
+            crate::drift::PROVENANCE_OPERATOR,
+        )?;
+        Ok(Some(block))
     }
 
     /// Journals one comparison (design §4's row).
