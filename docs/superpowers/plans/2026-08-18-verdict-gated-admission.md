@@ -536,7 +536,7 @@ git commit -m "feat: refuse admission while a drift block stands, on both surfac
 
 **Interfaces:**
 - Consumes: `AdmissionBlock` (Task 1), `admission_block_for` (Task 2), `PROVENANCE_OPERATOR` (`drift/watch.rs:145`).
-- Produces: `Pager::clear_admission_block(&mut self, model: &str) -> Result<AdmissionBlock, PagerError>` returning what was cleared; `Event::Admission`.
+- Produces: `Pager::clear_admission_block(&mut self, model: &str) -> Result<Option<AdmissionBlock>, PagerError>` — `Ok(None)` is "known model, nothing was blocking"; `Event::Admission`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -553,7 +553,7 @@ fn unblock_admits_and_leaves_the_reading_alone() {
             cumulative: DriftStatus::Confirmed { reference: "base42".into() },
         })
         .unwrap();
-    let cleared = pager.clear_admission_block("m").unwrap();
+    let cleared = pager.clear_admission_block("m").unwrap().expect("something was blocking");
     assert_eq!(cleared.reference, "base42");
     assert!(pager.admission_block_for("m").is_none());
     assert!(pager.create_agent(/* … */).is_ok());
@@ -573,7 +573,7 @@ fn unblock_with_nothing_blocking_is_a_conflict_not_a_no_op() {
     // they cleared something when nothing was written — the silent no-op
     // slice 1 §2 forbids, the same reason bless returns 409.
     let mut pager = test_pager_with_profiled_model("m");
-    assert!(pager.clear_admission_block("m").is_err());
+    assert!(pager.clear_admission_block("m").unwrap().is_none());
 }
 
 #[test]
@@ -642,18 +642,29 @@ In `crates/bloomery-daemon/src/pager/drift_watch.rs`:
     pub fn clear_admission_block(
         &mut self,
         model: &str,
-    ) -> Result<crate::drift::AdmissionBlock, PagerError> {
+    ) -> Result<Option<crate::drift::AdmissionBlock>, PagerError> {
         let entry = self
             .models
             .get_mut(model)
             .ok_or_else(|| PagerError::UnknownModel(model.to_string()))?;
-        let block = entry
-            .admission_block
-            .take()
-            .ok_or_else(|| PagerError::Contract(format!("no admission block on '{model}'")))?;
+        // `Ok(None)` is "known model, nothing was blocking" — the route's
+        // 409. NOT an error: the request was well-formed and the model
+        // exists; only the daemon's state conflicts with it.
+        let Some(block) = entry.admission_block.take() else {
+            return Ok(None);
+        };
         // journal the clearing with operator provenance
-        Ok(block)
+        Ok(Some(block))
     }
+```
+
+**Do NOT signal "nothing to clear" with `PagerError::Contract`.** That variant maps to **502** on both surfaces (`api_native.rs:325`, `api_v1.rs:480`), not the 409 this route's table specifies, and its `kind` field is documented as "currently always `MissingStats`, kept identical to the journal's `ContractViolation`/`kind` field" — writing anything else into it corrupts a field two places treat as single-valued. The three outcomes map as:
+
+| method result | route |
+| --- | --- |
+| `Err(PagerError::UnknownModel)` | 404, the surface's existing `unknown_model` shape |
+| `Ok(None)` | 409 `{error: "no_admission_block", model, detail}` |
+| `Ok(Some(block))` | 200 `{model, cleared: {reference}}` |
 ```
 
 Emit the `Event::Admission` row with `action: "cleared"` and `provenance: PROVENANCE_OPERATOR`, using the module's existing journalling helper (see how `blessed(...)` at `pager/journal.rs:194` is called). Also emit `action: "blocked"` from Task 2's `set_drift` path when a block is newly set — add that there and note it in this task's report.
@@ -766,7 +777,7 @@ git commit -m "docs: repeal the no-enforcement claims; record seam slice 2"
 
 No spec requirement is unassigned. §8's non-goals appear only as explicit non-actions in Task 5's debt record.
 
-**Type consistency:** `AdmissionBlock { reference: String }` is defined in Task 1 and used under that name in Tasks 2, 3 and 4. `admission_block_for(&self, model: &str) -> Option<&AdmissionBlock>` is introduced in Task 2 and used in Tasks 3 and 4. `clear_admission_block(&mut self, model: &str) -> Result<AdmissionBlock, PagerError>` is introduced in Task 4 and used only there. `PagerError::DriftBlocked { model, reference }` is introduced in Task 3 with the same field names on both surfaces.
+**Type consistency:** `AdmissionBlock { reference: String }` is defined in Task 1 and used under that name in Tasks 2, 3 and 4. `admission_block_for(&self, model: &str) -> Option<&AdmissionBlock>` is introduced in Task 2 and used in Tasks 3 and 4. `clear_admission_block(&mut self, model: &str) -> Result<Option<AdmissionBlock>, PagerError>` is introduced in Task 4 and used only there. `PagerError::DriftBlocked { model, reference }` is introduced in Task 3 with the same field names on both surfaces.
 
 **Test-helper names are illustrative, and the header says which are real.** The tasks below write `test_pager_with_model(...)` / `test_pager_with_profiled_model(...)` / `blessed_identity(...)` / `render_pager_error(...)` as shorthand for setup the crate already has its own way of doing. **None of those four names exists** — I checked. The Tech Stack header carries the real construction idiom (`Pager::new(...)` + `register_model` + `create_agent("qwen", 50, None, 10_000)`) and names the real helpers that do exist in `tests/drift_test.rs` (`scratch`, `store_in`, `qwen_like_meta`, `scripted_assay`). Build the setup from those; do not add a parallel helper set, and do not treat the shorthand as an API to create.
 
