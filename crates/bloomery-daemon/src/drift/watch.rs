@@ -163,8 +163,8 @@ pub const PROVENANCE_OPERATOR: &str = "operator";
 
 /// The provenance an `Event::Admission` "blocked" row carries when the drift
 /// watch itself set the block, i.e. every such row `Pager::set_drift`
-/// journals — as opposed to `PROVENANCE_OPERATOR`, which only ever names a
-/// "cleared" row (`POST /models/{name}/unblock`,
+/// journals — as opposed to `PROVENANCE_OPERATOR`, which, on an `Admission`
+/// row, only ever names a "cleared" row (`POST /models/{name}/unblock`,
 /// verdict-gated-admission design §4/§7).
 pub const PROVENANCE_DRIFT_WATCH: &str = "drift-watch";
 

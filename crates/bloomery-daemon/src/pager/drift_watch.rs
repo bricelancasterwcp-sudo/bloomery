@@ -8,10 +8,13 @@
 //! log is exactly the interleaving nobody can replay. So it records through
 //! the pager, and there stays one writer.
 //!
-//! Nothing here touches `done_trust`, `codec_gate` or admission. Design §7 is
-//! explicit: drift answers "has what assay can measure about this serving path
-//! changed", G4/G5 answer "does this model do bloomery's task honestly", and
-//! the two are separate fields on purpose.
+//! This module touches admission, and only admission: `set_drift` derives and
+//! stores the block a confirmed cumulative regression sets
+//! (verdict-gated-admission design §2), and `clear_admission_block` clears it
+//! on the operator's say-so (§4). `done_trust` remains the sole property of
+//! the G4 codec gate and the G5 refusal gate, and `codec_gate` is untouched —
+//! the same separation design §3 keeps between the reading and the policy
+//! derived from it.
 
 use std::path::{Path, PathBuf};
 

@@ -151,9 +151,11 @@ struct ModelEntry {
     /// the drift watch never ran for this model — a boot where POST failed, or
     /// one before the watch reached this model. Absent is not clean: the whole
     /// point of the drift-watch's named outcomes is that a comparison nobody
-    /// made never renders as one that passed (drift-watch design §8). Never
-    /// read for enforcement: drift is observability, and `done_trust` stays the
-    /// sole property of the G4/G5 gates (design §7).
+    /// made never renders as one that passed (drift-watch design §8). The
+    /// cumulative reading is read for enforcement exactly once, at the moment
+    /// it settles, to derive `admission_block` below (verdict-gated-admission
+    /// design §2/§3); `done_trust` stays the sole property of the G4/G5 gates
+    /// (design §7).
     drift: Option<crate::drift::ModelDrift>,
     /// Set when this boot's CUMULATIVE drift comparison settled `Confirmed`
     /// (design §2), cleared by the operator's explicit

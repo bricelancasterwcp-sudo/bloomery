@@ -282,6 +282,111 @@ wiring left unguarded — a revert-to-pre-drift mutant survived the whole suite.
 Live acceptance's chief yield was the assay-side erratum above, **not** a
 bloomery defect: all three boots read the spec-pinned outcomes first try.
 
+## Delivered in verdict-gated-admission (2026-08-18, `feat/verdict-gated-admission` branch)
+
+The capability-vector seam's slice 2. Where drift-watch (above) measured and
+recorded; this slice is the first to act on the measurement.
+
+**Settled (standing rulings for this slice — do not re-litigate without a
+recorded amendment):**
+
+- **Only a confirmed cumulative regression refuses admission.** `admit()`
+  gained one clause, checked before `has_profile` short-circuits (load-bearing
+  for correctness, not just message honesty — reversing the order would
+  silently admit a profiled-and-blocked model). All seven `DriftStatus`
+  outcomes are enumerated against admit/refuse, one assertion per row, so a
+  sampled subset can never stand in for the policy
+  (`only_a_confirmed_cumulative_reading_blocks_admission`,
+  `crates/bloomery-daemon/tests/pager_test.rs`). The rule an eighth outcome
+  inherits: refuse only what was established; name everything else.
+- **Cumulative blocks; `step` never does, in either direction.** A `step:
+  Confirmed` / `cumulative: WithinNoise` reading admits
+  (`a_confirmed_step_reading_alone_does_not_block`) and a `step: WithinNoise`
+  / `cumulative: Confirmed` reading refuses
+  (`a_confirmed_cumulative_reading_blocks_even_when_step_is_clean`) — the
+  asymmetry slice 1 named ("step alone leaks the ratchet," because step's
+  reference auto-advances every boot and would clear a persisting regression
+  on its own).
+- **The reading and the block are separate fields, on purpose.** `drift` is
+  written once, when the watch settles it, and is never rewritten by an
+  operator action; `admission_block: Option<AdmissionBlock>` is the policy
+  derived from it at that moment, and a policy is the operator's to override.
+  `unblock` clears the block and leaves the reading exactly as measured
+  (`unblock_admits_and_leaves_the_reading_alone`, and the HTTP-level
+  `unblocking_a_blocked_model_admits_and_journals_the_operator` in
+  `tests/api_native_test.rs`, both re-read `drift.cumulative` after clearing
+  and assert it unchanged).
+- **Two operator routes, deliberately independent.** `POST
+  /models/{name}/bless` is byte-for-byte unchanged and still only re-baselines
+  the *next* boot's cumulative reference. `POST /models/{name}/unblock` is new
+  and only clears *this* boot's block (200 cleared / 404 unknown model / 409
+  no block to clear, the 409 load-bearing for the same reason bless's is —
+  a silent 200 would tell an operator they cleared something that was never
+  set). Neither implies the other, pinned both at the pager layer
+  (`unblock_does_not_rebaseline_and_bless_does_not_unblock`) and over HTTP
+  (`unblock_does_not_bless_and_bless_does_not_unblock_over_http`). Every
+  `Event::Admission` row carries its own provenance —
+  `PROVENANCE_DRIFT_WATCH` ("drift-watch") on a "blocked" row,
+  `PROVENANCE_OPERATOR` ("operator") on a "cleared" row — so a replay can say
+  who decided, same discipline as `Event::Blessed`'s provenance family.
+- **`PagerError::DriftBlocked` renders 422 on both HTTP surfaces**, matching
+  `Unprofiled`'s status (same class of answer: this model cannot be admitted
+  now) rather than bless's 409. Both `map_error` functions are exhaustive
+  matches with no wildcard arm, so a variant handled on one surface and not
+  the other fails to compile rather than 500ing in production — stronger than
+  the review just asking for two tests.
+
+**Carried forward, still open:** slice 1's Task 4 debt that `Infra` folds into
+`Unmeasured` and needs string-sniffing to separate again, which that entry
+already flagged as wanted by "the enforcement slice." This is that slice, and
+it plainly did **not** need them apart — the refusal table above blocks on
+`Confirmed` alone, and both `Infra` and every other `Unmeasured` reason fold
+into the same admitting row. Unchanged and unstruck; a verdict-floors slice
+(design §8's other named candidate) will still want the two apart, because a
+floor keyed to measured capability cares whether "unmeasured" means
+"infrastructure failed" or "nothing to compare."
+
+**New this slice:**
+
+- **`verdict.parallel` and assay v1.8's exit 3 exist and are deliberately not
+  consumed.** Verdict floors (admitting on measured capability rather than on
+  drift) is a separate, later slice with its own spec (design §8); reading any
+  assay verdict beyond the drift comparison, or handling exit 3
+  ("incomplete comparison," unreachable today behind bloomery's own version
+  precheck), is explicitly out of scope here and not a gap in this slice's own
+  job.
+- **The block is per-model; there is no fleet-wide override.** Considered and
+  rejected in design: `allow_unprofiled`'s all-or-nothing shape (one flag,
+  every unprofiled model admitted) was the obvious precedent to reuse, but a
+  fleet-wide drift override would let one operator action silently readmit
+  every regressed model at once, including ones nobody has actually looked
+  at — the opposite of what a *confirmed, reproduced* regression should cost.
+  `unblock` stays scoped to one model, one decision, one journal row.
+- **The assay-pin upgrade note.** The daemon is pinned by `PYTHONPATH` to
+  assay's source tree (not a released version), so when assay v1.8 merges
+  (0.10.0, schema v9), the daemon starts producing v9 profiles the moment
+  that lands while every blessed reference still reads `0.9.0/v8`.
+  `instrument_precheck` compares both `probe_version` and `schema_version`, so
+  the first boot after the merge reads `InstrumentChanged` for **every**
+  model at once against its blessed v8 reference. That is exactly why
+  `InstrumentChanged` admits in the refusal table above — under enforcement,
+  a routine instrument upgrade must not read as a fleet-wide regression — and
+  it is no longer just an intention: `an_instrument_change_never_blocks_the_fleet`
+  (`tests/pager_test.rs`) pins the literal `0.9.0/v8` → `0.10.0/v9` transition
+  and asserts no block.
+- **Found, not fixed: a test's name overclaims what it checks.** Task 1's
+  `a_model_with_no_admission_block_renders_none` (`tests/pager_test.rs`)
+  asserts the Rust-level `model.admission_block.is_none()`, not the actual
+  JSON rendering its name promises. The claim itself was verified — Task 1's
+  review independently confirmed `None` serializes as JSON `null` rather than
+  vanishing, matching `drift`'s existing field — but the test does not pin
+  that rendering itself, so a future regression in the `Option` serialization
+  path would not be caught by this test. Flagged during the wave (routed to
+  final-review triage) and left as-is rather than opening a fix round on
+  completed, reviewed work; a follow-up test asserting the JSON body directly
+  (the pattern `a_model_with_no_admission_block_renders_none`'s sibling
+  `drift`-field tests already use) would close it.
+
 ## Phase 2 work items (in recommended order)
 
 5. **NVMe-media KV image read is unmeasured** — every recorded
