@@ -40,9 +40,35 @@ admitted; otherwise the POST window or `allow_unprofiled` or
 `PagerError::Unprofiled`. It becomes: a profile exists **and no
 admission block stands** → admitted; the rest unchanged.
 
-The block is set when, and only when, the drift watch settles
-`DriftStatus::Confirmed`. Stated as the full table, because a policy
-over a seven-word vocabulary must be enumerated rather than described:
+**Which of the two comparisons blocks.** `ModelDrift` carries two
+statuses — `step` (this boot vs the previous boot) and `cumulative`
+(this boot vs the blessed baseline). **The block is set on
+`cumulative == Confirmed`, regardless of what `step` reads.** Three
+reasons, and they agree:
+
+- Cumulative is measured against the baseline an operator accepted.
+  "This is now measurably worse than the state you blessed" is the
+  claim that should hold a model out; "it moved since last boot but is
+  still within noise of what you accepted" is not.
+- Bless re-baselines the cumulative reference, which is what makes
+  bless the coherent "this is the new normal" recovery in §4. A block
+  keyed to a reference bless does not touch would be unrecoverable by
+  the route built to recover it.
+- Step's reference auto-advances: next boot compares against *this*
+  boot, so a persisting regression reads `WithinNoise` on step the very
+  next boot. A step-keyed block would therefore clear itself after one
+  boot whether or not the regression went away — a block more transient
+  than the fault it names. Slice 1 says it plainly: step "alone leaks
+  the ratchet," and a ratcheting degradation is exactly what
+  enforcement exists to catch.
+
+`step` is still measured, journaled and rendered exactly as slice 1
+ships it. It simply never blocks.
+
+The block is set when, and only when, that cumulative comparison
+settles `DriftStatus::Confirmed`. Stated as the full table, because a
+policy over a seven-word vocabulary must be enumerated rather than
+described:
 
 | `DriftStatus` | admits? | why |
 | --- | --- | --- |
@@ -194,9 +220,14 @@ House rules apply (TDD; mutation checks under the pyc-equivalent
 discipline for Rust — verify each load-bearing test fails when its
 pinned line is broken). Specifically:
 
-- **The refusal table, enumerated.** All seven `DriftStatus` values
-  against admit/refuse. Sampling three of them would not pin a policy
-  whose whole content is which words mean what.
+- **The refusal table, enumerated.** All seven `DriftStatus` values on
+  `cumulative` against admit/refuse. Sampling three of them would not
+  pin a policy whose whole content is which words mean what.
+- **`step` never blocks**: a `step: Confirmed` / `cumulative:
+  WithinNoise` reading admits, and a `step: WithinNoise` /
+  `cumulative: Confirmed` reading refuses. Two tests, because the
+  asymmetry is the one thing about this policy a reader would guess
+  wrong.
 - **`InstrumentChanged` never blocks**, pinned with the mixed-version
   fixtures slice 1 §8 established, including the real pre-upgrade
   schema as committed bytes — so the first-boot-after-upgrade path is
