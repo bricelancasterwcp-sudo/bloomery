@@ -27,6 +27,20 @@ moving the compound item out of this section. Item 7's first paragraph
 (configured, not measured) and its "Multi-model window/placement
 divergence" third half remain open, unchanged and unstruck.
 
+**Amended 2026-08-18** (verdict-gated-admission, final fix wave before
+merge): two claims under "Delivered in verdict-gated-admission" overclaimed
+what was actually pinned by test at the time they were written — the
+provenance claim and the "pinned both at the pager layer and over HTTP"
+claim — corrected in place below, struck through, with what closed the gap.
+Four new items are recorded from the same review's record-don't-fix
+findings: R1 (the G4/G5 probes abort for a blocked model and `unblock`
+does not recover them — spec §5 also amended, a footnote, not a rewrite),
+R2 (`clear_admission_block` mutates before it journals, no named outcome
+for a refused row), R3 (two silent-clear paths held only by call-site
+discipline, not by type or test), R4 (erratum: spec §5's POST-window
+sentence is false on a multi-model daemon; the precedence it describes is
+still correct).
+
 ## Delivered in Phase 2a (2026-08-14)
 
 Struck through, never deleted: the original text stands as recorded, with
@@ -322,13 +336,33 @@ recorded amendment):**
   and only clears *this* boot's block (200 cleared / 404 unknown model / 409
   no block to clear, the 409 load-bearing for the same reason bless's is —
   a silent 200 would tell an operator they cleared something that was never
-  set). Neither implies the other, pinned both at the pager layer
-  (`unblock_does_not_rebaseline_and_bless_does_not_unblock`) and over HTTP
-  (`unblock_does_not_bless_and_bless_does_not_unblock_over_http`). Every
+  set). Neither implies the other, pinned at the pager layer
+  (`unblock_does_not_rebaseline_and_bless_does_not_unblock`) ~~and over HTTP
+  (`unblock_does_not_bless_and_bless_does_not_unblock_over_http`)~~. ~~Every
   `Event::Admission` row carries its own provenance —
   `PROVENANCE_DRIFT_WATCH` ("drift-watch") on a "blocked" row,
   `PROVENANCE_OPERATOR` ("operator") on a "cleared" row — so a replay can say
-  who decided, same discipline as `Event::Blessed`'s provenance family.
+  who decided~~, same discipline as `Event::Blessed`'s provenance family.
+  **Both struck claims overclaimed what was actually pinned, mutation-proven
+  at the final whole-branch review and CORRECTED at the final fix wave
+  (2026-08-18):** the HTTP test ran against `serve_with_profiles`'s
+  always-unblocked fixture, so "bless does not unblock" was unobservable
+  over HTTP at all — a mutation making `bless_baseline` silently `.take()`
+  the block left it green while the pager-level test above went red. It now
+  runs against `serve_drift_blocked_qwen_with_profiles`, a model that IS
+  blocked, and asserts the block survives a bless (`/status`'s
+  `admission_block`, and a 422 refusal on `POST /agents`) before checking
+  that the unblock which follows leaves the baseline bless just wrote
+  untouched; the same mutation now fails it. Separately, only the "cleared"
+  row's provenance was actually asserted
+  (`clear_admission_block_journals_a_cleared_row_with_operator_provenance`);
+  the "blocked" row's was not — a mutation swapping `PROVENANCE_DRIFT_WATCH`
+  for `PROVENANCE_OPERATOR` at its one call site (`pager/drift_watch.rs`,
+  `set_drift`) left the whole suite green.
+  `set_drift_journals_a_blocked_row_when_it_newly_blocks` now asserts the
+  "blocked" row's provenance too, and the same mutation now fails it. Both
+  properties are true of the shipped code and are now actually pinned by
+  test, both mutation-verified.
 - **`PagerError::DriftBlocked` renders 422 on both HTTP surfaces**, matching
   `Unprofiled`'s status (same class of answer: this model cannot be admitted
   now) rather than bless's 409. Both `map_error` functions are exhaustive
@@ -386,6 +420,75 @@ floor keyed to measured capability cares whether "unmeasured" means
   completed, reviewed work; a follow-up test asserting the JSON body directly
   (the pattern `a_model_with_no_admission_block_renders_none`'s sibling
   `drift`-field tests already use) would close it.
+
+**Recorded at the final whole-branch review's fix wave (2026-08-18) — RECORD,
+not fix (all four are behavior findings or hazards, not defects the wave's
+tests caught):**
+
+- **R1 — the G4/G5 probes abort for a blocked model, and `unblock` does not
+  recover them.** `codec_probe/mod.rs:332` and `codec_probe/refuse.rs:211`
+  both call `create_agent`, which this slice taught to return
+  `PagerError::DriftBlocked` for a blocked model; both map that error to
+  `abort(...)`, and `codec_probe/boot.rs:110-113` journals a `Degraded`
+  naming the model. So on a boot where a block appears before that model's
+  G4 or G5 probe runs, `codec_gate` stays `None` and `mutating_verbs` stays
+  `false` (fail-closed) for the whole boot — and because both probes are
+  boot-time only, strictly after `run_post` (`main.rs:278-301`), clearing
+  the block via `unblock` restores admission but does **not** recover the
+  G4/G5 gates: they stay unmeasured until the next boot re-probes from
+  nothing. Spec §5's "`done_trust`, `codec_gate` and the G4/G5 gates are
+  untouched" is true of the FIELDS (no new write path, no type change) and
+  false of the MEASUREMENT (a block can silently prevent one from ever
+  completing this boot). Direction is fail-closed and the abort is
+  journalled, so this is a recorded behaviour change, not a correctness
+  bug — a post-`unblock` re-probe is a candidate for a later slice. **Spec
+  §5 amended** (`docs/superpowers/specs/2026-08-18-verdict-gated-admission-design.md`,
+  a dated footnote in the drift-watch-spec convention, not a rewrite) to
+  say this plainly: the sentence as written would mislead the next reader
+  about what this wave changed.
+- **R2 — `clear_admission_block` mutates before it journals, with no named
+  outcome for a refused row.** `pager/drift_watch.rs:189` takes the block
+  out of `entry.admission_block` before `:192-198` journals the "cleared"
+  row. If that journal write fails, the operator gets a 500, the block is
+  already gone in memory, and a retry answers `409 no_admission_block` —
+  telling them they never had a block, when they did and only the row
+  recording its clearance was refused. `bless_baseline` was built with
+  `BlessError::Journal` ("the baseline was replaced but the journal refused
+  the row") for exactly this class of hazard; `unblock` does not mirror it,
+  so its documented 200/404/409 table (`api_native.rs`) has an unstated
+  fourth outcome. `set_drift`'s own write-then-journal ordering
+  (`drift_watch.rs:135-152`) carries the same hazard in the other
+  direction: a journal failure there can leave a block standing in memory
+  with no `"blocked"` row to explain it.
+- **R3 — two silent-clear paths, unreachable today by call-site discipline
+  alone.** `register_model` resets `admission_block: None` unconditionally
+  on every (re-)registration (`pager.rs:511`), and `set_drift` assigns the
+  derived block unconditionally on every call (`drift_watch.rs:136`) — so a
+  second `set_drift` for one model in one boot with a non-`Confirmed`
+  reading would silently drop a standing block with no `"cleared"` row to
+  record it, and a `register_model` re-registration would do the same.
+  Neither is reachable in production today: `register_model` has exactly
+  one caller, before the socket binds (nothing could be blocked yet), and
+  `watch_model` runs at most once per model per boot. The invariant "a
+  block is never dropped without a journal row" is held by call-site
+  discipline today, not by the type system or a test — a future caller of
+  either function would not be warned.
+- **R4 — erratum, spec §5's POST-window sentence.** Spec §5 says "The POST
+  window is unaffected. No drift has settled while POST is still probing."
+  That is false on a multi-model daemon: `set_drift` runs inside
+  `probe_each`'s per-model loop (`post.rs:454`), one model at a time as
+  each one's POST completes, while `set_posting(false)` runs only after the
+  whole loop finishes (`post.rs:406-409`). So on a daemon POSTing several
+  models, model A's cumulative comparison can settle `Confirmed` — and its
+  block can land — while model B is still being probed and `/status` still
+  reports `posting: true`. **The precedence is correct and the behaviour is
+  what the design wants:** `admit()` checks the block before the existence
+  gate (`pager.rs:646`), so a model that drifts mid-POST is refused the
+  moment its own reading settles rather than held open until the whole
+  boot's POST window closes. Only the spec sentence's factual claim — "no
+  drift has settled while POST is still probing" — is untrue on a
+  multi-model boot. Per house convention the committed spec is not
+  rewritten for this; the erratum stands here with the corrected statement.
 
 ## Phase 2 work items (in recommended order)
 

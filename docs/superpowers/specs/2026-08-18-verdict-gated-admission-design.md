@@ -184,6 +184,25 @@ slice repeals, and it must be rewritten rather than left to rot: the
 module now touches admission and only admission, and `done_trust`
 remains elsewhere's property.
 
+> **Footnote, 2026-08-18 (final fix wave).** "Untouched" above is true of
+> the FIELDS — this slice added no write path to `done_trust`,
+> `codec_gate` or `refusal_gate`, and none of the three's storage or type
+> changed — but not of the MEASUREMENT. The boot-time G4/G5 probes
+> (`codec_probe/mod.rs`, `codec_probe/refuse.rs`) call `create_agent` to
+> run their fixtures, and `create_agent` is exactly the function this
+> slice taught to refuse a drift-blocked model. A model that is blocked
+> when its boot's G4 or G5 probe runs gets `DriftBlocked` back, mapped to
+> `abort(...)` and journaled `Degraded` (`codec_probe/boot.rs`) — so
+> `codec_gate` stays `None` and `mutating_verbs` stays `false`
+> (fail-closed) for that whole boot, exactly as if the probe had never
+> run. Because both probes run once per boot, strictly after `run_post`
+> (`main.rs`), an operator's later `unblock` restores admission but does
+> **not** re-trigger them — the gate stays unmeasured until the next boot
+> re-probes from nothing. Fail-closed and journalled, so this is a
+> recorded behaviour change, not a correctness bug; a post-`unblock`
+> re-probe is a candidate for a later slice. Recorded in full as R1 in
+> `docs/CARRIED-DEBT.md`.
+
 ## 6. The assay pin upgrade, and why it is now dangerous
 
 Slice 1 moved the pin from `74c5b71` to assay 0.9.0 / schema v8 and

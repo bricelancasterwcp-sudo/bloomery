@@ -125,10 +125,14 @@ impl<S: Substrate> crate::pager::Pager<S> {
             DriftStatus::Confirmed { reference } => Some(crate::drift::AdmissionBlock {
                 reference: reference.clone(),
             }),
-            // Every other outcome admits. An operator-cleared block is NOT
-            // resurrected here: a later boot's non-Confirmed reading
-            // legitimately clears it, because the comparison was re-run and
-            // came back otherwise.
+            // Every other outcome admits. `admission_block` is per-process
+            // state that starts `None` every boot — nothing survives a
+            // restart for this line to "resurrect". Within one boot, a
+            // fresh non-Confirmed reading here simply overwrites whatever
+            // the field held a moment ago (a standing block, or an
+            // operator's earlier clear) with `None`, for the same reason a
+            // Confirmed reading would overwrite it with a new block: this
+            // is what the comparison just measured, full stop.
             _ => None,
         };
 
