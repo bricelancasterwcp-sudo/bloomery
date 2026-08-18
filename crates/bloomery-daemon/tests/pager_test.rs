@@ -8,6 +8,7 @@
 
 use bloomery_core::journal::{replay, sha256_hex, Event, Journal, PagerOpKind};
 use bloomery_daemon::agents::ImageStore;
+use bloomery_daemon::drift::{DriftStatus, ModelDrift};
 use bloomery_daemon::pager::*;
 use bloomery_substrate::{fake::FakeSubstrate, CtxHandle, ModelHandle, Reply, SubstrateError};
 use std::collections::{HashMap, VecDeque};
@@ -858,4 +859,136 @@ fn a_model_with_no_admission_block_renders_none() {
     let status = p.status();
     let model = status.models.iter().find(|m| m.name == "m").unwrap();
     assert!(model.admission_block.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Task 2: the watch sets the block — the enumerated policy
+// (`.superpowers/sdd/2026-08-18-verdict-gated-admission/task-2-brief.md`)
+// ---------------------------------------------------------------------------
+
+/// The policy IS this table — enumerate it rather than sample it. Refuse
+/// only what was established; name everything else. An outcome that
+/// declines to conclude must not be laundered into a conclusion by the
+/// admission path.
+#[test]
+fn only_a_confirmed_cumulative_reading_blocks_admission() {
+    let cases: Vec<(DriftStatus, bool)> = vec![
+        (DriftStatus::WithinNoise, false),
+        (
+            DriftStatus::Confirmed {
+                reference: "abc1234".into(),
+            },
+            true,
+        ),
+        (DriftStatus::Transient, false),
+        (
+            DriftStatus::Unconfirmed {
+                reason: "confirm probe failed".into(),
+            },
+            false,
+        ),
+        (DriftStatus::NotComparable, false),
+        (
+            DriftStatus::InstrumentChanged {
+                reference: "0.9.0/v8".into(),
+                current: "0.10.0/v9".into(),
+            },
+            false,
+        ),
+        (
+            DriftStatus::Unmeasured {
+                reason: "no baseline blessed".into(),
+            },
+            false,
+        ),
+    ];
+
+    let dir = fresh_dir("bloomery-pager-admission-enum");
+    let gguf = write_gguf(&dir, b"weights");
+    for (cumulative, expect_blocked) in cases {
+        let (mut p, _, _) = pager_in(&dir, 0, Some(10u64.pow(9)));
+        p.register_model("m", &gguf, meta(), None).unwrap();
+        p.set_drift(
+            "m",
+            ModelDrift {
+                step: DriftStatus::WithinNoise,
+                cumulative: cumulative.clone(),
+            },
+        )
+        .unwrap();
+        let blocked = p.admission_block_for("m").is_some();
+        assert_eq!(blocked, expect_blocked, "cumulative {cumulative:?}");
+    }
+}
+
+/// `step` compares against the PREVIOUS BOOT, whose reference advances every
+/// boot — a step-keyed block would clear itself next boot whether or not the
+/// regression persisted. Slice 1: step "alone leaks the ratchet".
+#[test]
+fn a_confirmed_step_reading_alone_does_not_block() {
+    let dir = fresh_dir("bloomery-pager-admission-step-only");
+    let (mut p, _, _) = pager_in(&dir, 0, Some(10u64.pow(9)));
+    let gguf = write_gguf(&dir, b"weights");
+    p.register_model("m", &gguf, meta(), None).unwrap();
+    p.set_drift(
+        "m",
+        ModelDrift {
+            step: DriftStatus::Confirmed {
+                reference: "step99".into(),
+            },
+            cumulative: DriftStatus::WithinNoise,
+        },
+    )
+    .unwrap();
+    assert!(p.admission_block_for("m").is_none());
+}
+
+/// The ratchet case: stable at a degraded level. `step` sees nothing because
+/// last boot was degraded too; `cumulative` sees the drift from the blessed
+/// baseline, and that is the claim that holds a model out.
+#[test]
+fn a_confirmed_cumulative_reading_blocks_even_when_step_is_clean() {
+    let dir = fresh_dir("bloomery-pager-admission-cumulative-only");
+    let (mut p, _, _) = pager_in(&dir, 0, Some(10u64.pow(9)));
+    let gguf = write_gguf(&dir, b"weights");
+    p.register_model("m", &gguf, meta(), None).unwrap();
+    p.set_drift(
+        "m",
+        ModelDrift {
+            step: DriftStatus::WithinNoise,
+            cumulative: DriftStatus::Confirmed {
+                reference: "base42".into(),
+            },
+        },
+    )
+    .unwrap();
+    let block = p.admission_block_for("m").expect("blocked");
+    assert_eq!(block.reference, "base42");
+}
+
+/// THE test of this slice. assay v1.8 (0.10.0/v9) lands against blessed v8
+/// references, so the first boot after that merge reads `InstrumentChanged`
+/// on EVERY model at once. Blocking on it would take the whole fleet out on
+/// a routine instrument upgrade. Slice 1 §3: "never a pass, never a fail".
+#[test]
+fn an_instrument_change_never_blocks_the_fleet() {
+    let dir = fresh_dir("bloomery-pager-admission-instrument-changed");
+    let (mut p, _, _) = pager_in(&dir, 0, Some(10u64.pow(9)));
+    let gguf = write_gguf(&dir, b"weights");
+    p.register_model("m", &gguf, meta(), None).unwrap();
+    p.set_drift(
+        "m",
+        ModelDrift {
+            step: DriftStatus::InstrumentChanged {
+                reference: "0.9.0/v8".into(),
+                current: "0.10.0/v9".into(),
+            },
+            cumulative: DriftStatus::InstrumentChanged {
+                reference: "0.9.0/v8".into(),
+                current: "0.10.0/v9".into(),
+            },
+        },
+    )
+    .unwrap();
+    assert!(p.admission_block_for("m").is_none());
 }

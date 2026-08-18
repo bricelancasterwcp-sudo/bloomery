@@ -113,8 +113,35 @@ impl<S: Substrate> crate::pager::Pager<S> {
             .models
             .get_mut(model)
             .ok_or_else(|| PagerError::UnknownModel(model.to_string()))?;
+
+        // Design §2: the CUMULATIVE comparison decides, and only `Confirmed`
+        // blocks. Derived here, at the moment the reading settles, so the
+        // block and the reading it came from are written in one place and
+        // cannot disagree.
+        let block = match &drift.cumulative {
+            DriftStatus::Confirmed { reference } => Some(crate::drift::AdmissionBlock {
+                reference: reference.clone(),
+            }),
+            // Every other outcome admits. An operator-cleared block is NOT
+            // resurrected here: a later boot's non-Confirmed reading
+            // legitimately clears it, because the comparison was re-run and
+            // came back otherwise.
+            _ => None,
+        };
+
         entry.drift = Some(drift);
+        entry.admission_block = block;
         Ok(())
+    }
+
+    /// The block currently holding `model` out of new admission, if any
+    /// (design §2/§3). `Some` iff this boot's stored `ModelDrift.cumulative`
+    /// settled `Confirmed` — see [`Pager::set_drift`], the only place that
+    /// invariant is established.
+    pub fn admission_block_for(&self, model: &str) -> Option<&crate::drift::AdmissionBlock> {
+        self.models
+            .get(model)
+            .and_then(|e| e.admission_block.as_ref())
     }
 
     /// Journals one comparison (design §4's row).
