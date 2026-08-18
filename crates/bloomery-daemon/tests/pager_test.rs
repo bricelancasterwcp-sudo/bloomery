@@ -1193,6 +1193,11 @@ fn set_drift_journals_a_blocked_row_when_it_newly_blocks() {
     assert_eq!(rows[0].0, "m");
     assert_eq!(rows[0].1, "blocked");
     assert_eq!(rows[0].2, "base42");
+    assert_eq!(
+        rows[0].3, "drift-watch",
+        "the block's row must carry the watch's own provenance, not the operator's — \
+         a replay needs to tell 'this newly blocked' from 'an operator did this'"
+    );
 }
 
 /// `clear_admission_block` journals `"cleared"` with operator provenance —
