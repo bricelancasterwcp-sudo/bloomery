@@ -843,3 +843,19 @@ fn agent_ids_are_unique_and_status_is_a_snapshot() {
     let json = serde_json::to_string(&status).unwrap();
     assert!(json.contains("\"bound_by\":\"training_ctx\""));
 }
+
+/// A fresh model has never been drift-blocked. Absent is the default, and it
+/// must be visible as absent rather than missing: an operator reading
+/// `/status` learns "nothing is holding this model out", which is a
+/// different fact from "this field was not rendered".
+#[test]
+fn a_model_with_no_admission_block_renders_none() {
+    let dir = fresh_dir("bloomery-pager-admission-block");
+    let (mut p, _, _) = pager_in(&dir, 0, Some(10u64.pow(9)));
+    let gguf = write_gguf(&dir, b"weights");
+    p.register_model("m", &gguf, meta(), None).unwrap();
+
+    let status = p.status();
+    let model = status.models.iter().find(|m| m.name == "m").unwrap();
+    assert!(model.admission_block.is_none());
+}

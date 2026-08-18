@@ -155,6 +155,15 @@ struct ModelEntry {
     /// read for enforcement: drift is observability, and `done_trust` stays the
     /// sole property of the G4/G5 gates (design §7).
     drift: Option<crate::drift::ModelDrift>,
+    /// Set when this boot's CUMULATIVE drift comparison settled `Confirmed`
+    /// (design §2), cleared by the operator's explicit
+    /// `POST /models/{name}/unblock`. While set, `admit` refuses new agents
+    /// on this model.
+    ///
+    /// Separate from `drift` on purpose: the reading is a measurement and
+    /// never changes; this is the policy derived from it, and a policy is
+    /// the operator's to override.
+    admission_block: Option<crate::drift::AdmissionBlock>,
     /// Per-model `n_gpu_layers` override + weights-VRAM ceiling (`pager::tuning`); both `None` -> default.
     n_gpu_layers_override: Option<u32>,
     weights_vram_bytes: Option<u64>,
@@ -497,6 +506,7 @@ impl<S: Substrate> Pager<S> {
                 codec_gate: None,
                 refusal_gate: None,
                 drift: None,
+                admission_block: None,
                 n_gpu_layers_override: None,
                 weights_vram_bytes: None,
                 envelope: EnvelopeLens::V1,
