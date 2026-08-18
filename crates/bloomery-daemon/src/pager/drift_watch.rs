@@ -130,7 +130,23 @@ impl<S: Substrate> crate::pager::Pager<S> {
         };
 
         entry.drift = Some(drift);
-        entry.admission_block = block;
+        entry.admission_block = block.clone();
+
+        // Task 4's row, not Task 2's: a block newly standing is journaled
+        // here, at the moment it is derived, with the drift watch's own
+        // provenance — the counterpart to the "cleared" row an operator's
+        // later `clear_admission_block` writes (design §4/§7). `entry`'s
+        // borrow has already ended above, so this is free to take
+        // `&mut self.journal`.
+        if let Some(block) = block {
+            jrnl::admission(
+                &mut self.journal,
+                model,
+                "blocked",
+                &block.reference,
+                crate::drift::PROVENANCE_DRIFT_WATCH,
+            )?;
+        }
         Ok(())
     }
 
@@ -142,6 +158,42 @@ impl<S: Substrate> crate::pager::Pager<S> {
         self.models
             .get(model)
             .and_then(|e| e.admission_block.as_ref())
+    }
+
+    /// Clears this model's admission block on an operator's say-so
+    /// (`POST /models/{name}/unblock`, design §4), and journals who did it.
+    ///
+    /// Touches neither the drift reading nor the blessed baseline: the
+    /// reading is a measurement and never changes here, and re-baselining
+    /// is `bless`'s job, taking effect at the next boot. This says only
+    /// "admit it anyway, now" — `bless` and `unblock` answer different
+    /// questions, and neither implies the other.
+    ///
+    /// `Ok(None)` is "known model, nothing was blocking" — **not** an error:
+    /// the request is well-formed and the model exists, only the daemon's
+    /// state conflicts with it. That is the route's 409, deliberately never
+    /// a silent 200 — answering 200 where nothing was blocking would tell an
+    /// operator they cleared something when nothing was written, the same
+    /// reasoning `bless_baseline`'s 409 rests on.
+    pub fn clear_admission_block(
+        &mut self,
+        model: &str,
+    ) -> Result<Option<crate::drift::AdmissionBlock>, PagerError> {
+        let entry = self
+            .models
+            .get_mut(model)
+            .ok_or_else(|| PagerError::UnknownModel(model.to_string()))?;
+        let Some(block) = entry.admission_block.take() else {
+            return Ok(None);
+        };
+        jrnl::admission(
+            &mut self.journal,
+            model,
+            "cleared",
+            &block.reference,
+            crate::drift::PROVENANCE_OPERATOR,
+        )?;
+        Ok(Some(block))
     }
 
     /// Journals one comparison (design §4's row).

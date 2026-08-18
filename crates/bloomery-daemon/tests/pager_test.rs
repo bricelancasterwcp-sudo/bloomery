@@ -1083,3 +1083,157 @@ fn an_unprofiled_model_still_refuses_as_unprofiled() {
         Err(PagerError::Unprofiled(_))
     ));
 }
+
+// ---------------------------------------------------------------------------
+// Task 4: `clear_admission_block` — the operator's way out
+// (`.superpowers/sdd/2026-08-18-verdict-gated-admission/task-4-brief.md`)
+// ---------------------------------------------------------------------------
+
+/// The point of separating the block from the reading: an operator may
+/// override the policy without any measurement changing. After clearing,
+/// `/status` still says exactly what was measured.
+#[test]
+fn unblock_admits_and_leaves_the_reading_alone() {
+    let dir = fresh_dir("bloomery-pager-unblock-leaves-reading");
+    let (mut p, _, _) = pager_in(&dir, 1, Some(10u64.pow(9)));
+    let gguf = write_gguf(&dir, b"weights");
+    p.register_model("m", &gguf, meta(), None).unwrap();
+    p.attach_profile("m", minimal_profile("m"), false).unwrap();
+    p.set_drift("m", confirmed_cumulative("base42")).unwrap();
+
+    let cleared = p
+        .clear_admission_block("m")
+        .unwrap()
+        .expect("something was blocking");
+    assert_eq!(cleared.reference, "base42");
+    assert!(p.admission_block_for("m").is_none());
+    assert!(p.create_agent("m", 50, None, 10_000).is_ok());
+
+    let status = p.status();
+    let model = status.models.iter().find(|m| m.name == "m").unwrap();
+    assert_eq!(
+        model.drift.as_ref().unwrap().cumulative,
+        DriftStatus::Confirmed {
+            reference: "base42".into()
+        },
+        "the reading is a measurement and must survive the override"
+    );
+}
+
+/// Answering 200 where nothing was blocking would tell an operator they
+/// cleared something when nothing was written — the silent no-op slice 1
+/// §2 forbids, the same reason bless returns 409. `Ok(None)` on a known
+/// model is that refusal, not an error.
+#[test]
+fn unblock_with_nothing_blocking_is_a_conflict_not_a_no_op() {
+    let dir = fresh_dir("bloomery-pager-unblock-nothing-blocking");
+    let (mut p, _, _) = pager_in(&dir, 0, Some(10u64.pow(9)));
+    let gguf = write_gguf(&dir, b"weights");
+    p.register_model("m", &gguf, meta(), None).unwrap();
+
+    assert!(p.clear_admission_block("m").unwrap().is_none());
+}
+
+/// An unknown model refuses first, the same shape every other route in this
+/// file uses.
+#[test]
+fn unblock_on_an_unknown_model_is_unknown_model() {
+    let dir = fresh_dir("bloomery-pager-unblock-unknown-model");
+    let (mut p, _, _) = pager_in(&dir, 0, Some(10u64.pow(9)));
+
+    assert!(matches!(
+        p.clear_admission_block("does-not-exist"),
+        Err(PagerError::UnknownModel(m)) if m == "does-not-exist"
+    ));
+}
+
+/// The two routes answer different questions and neither implies the
+/// other. bless leaves the block standing, and unblock does not touch the
+/// baseline bless just wrote.
+#[test]
+fn unblock_does_not_rebaseline_and_bless_does_not_unblock() {
+    let dir = fresh_dir("bloomery-pager-unblock-does-not-rebaseline");
+    let (mut p, _, _) = pager_in(&dir, 0, Some(10u64.pow(9)));
+    let gguf = write_gguf(&dir, b"weights");
+    p.register_model("m", &gguf, meta(), None).unwrap();
+    p.attach_profile("m", minimal_profile("m"), false).unwrap();
+    p.set_drift("m", confirmed_cumulative("base42")).unwrap();
+
+    let profiles_dir = dir.join("profiles");
+    std::fs::create_dir_all(&profiles_dir).unwrap();
+    p.set_profiles_dir(profiles_dir.clone());
+    std::fs::write(profiles_dir.join("m.json"), b"{}").unwrap();
+
+    // bless leaves the block standing…
+    p.bless_baseline("m").unwrap();
+    assert!(p.admission_block_for("m").is_some());
+
+    // …and unblock does not touch the baseline it just wrote.
+    let baseline_path = profiles_dir.join("m.baseline.json");
+    let before = std::fs::read(&baseline_path).unwrap();
+    p.clear_admission_block("m").unwrap();
+    let after = std::fs::read(&baseline_path).unwrap();
+    assert_eq!(after, before, "unblock must not touch the blessed baseline");
+    assert!(p.admission_block_for("m").is_none());
+}
+
+/// `set_drift` journals `"blocked"` the moment a confirmed cumulative
+/// regression newly holds a model out — the row the operator's later
+/// `"cleared"` row (task-4-brief.md §7) is paired against in a replay.
+#[test]
+fn set_drift_journals_a_blocked_row_when_it_newly_blocks() {
+    let dir = fresh_dir("bloomery-pager-set-drift-journals-blocked");
+    let (mut p, jpath, _) = pager_in(&dir, 0, Some(10u64.pow(9)));
+    let gguf = write_gguf(&dir, b"weights");
+    p.register_model("m", &gguf, meta(), None).unwrap();
+    p.set_drift("m", confirmed_cumulative("base42")).unwrap();
+
+    let rows = admission_rows(&jpath);
+    assert_eq!(rows.len(), 1, "one block, one row: {rows:?}");
+    assert_eq!(rows[0].0, "m");
+    assert_eq!(rows[0].1, "blocked");
+    assert_eq!(rows[0].2, "base42");
+}
+
+/// `clear_admission_block` journals `"cleared"` with operator provenance —
+/// the row that lets a replay say who let a held-out model back in.
+#[test]
+fn clear_admission_block_journals_a_cleared_row_with_operator_provenance() {
+    let dir = fresh_dir("bloomery-pager-clear-journals-cleared");
+    let (mut p, jpath, _) = pager_in(&dir, 0, Some(10u64.pow(9)));
+    let gguf = write_gguf(&dir, b"weights");
+    p.register_model("m", &gguf, meta(), None).unwrap();
+    p.set_drift("m", confirmed_cumulative("base42")).unwrap();
+
+    p.clear_admission_block("m").unwrap();
+
+    let rows = admission_rows(&jpath);
+    assert_eq!(rows.len(), 2, "one block, one clear: {rows:?}");
+    assert_eq!(rows[1].0, "m");
+    assert_eq!(rows[1].1, "cleared");
+    assert_eq!(rows[1].2, "base42");
+    assert_eq!(rows[1].3, "operator");
+}
+
+/// Every `Admission` row in the journal at `path` as
+/// `(model, action, reference, provenance)`.
+fn admission_rows(path: &Path) -> Vec<(String, String, String, String)> {
+    replay(path)
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            Event::Admission {
+                model,
+                action,
+                reference,
+                provenance,
+            } => Some((
+                model.clone(),
+                action.clone(),
+                reference.clone(),
+                provenance.clone(),
+            )),
+            _ => None,
+        })
+        .collect()
+}

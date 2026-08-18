@@ -898,6 +898,164 @@ fn a_neighbouring_path_or_the_wrong_method_still_falls_through_to_not_found() {
     handle.shutdown();
 }
 
+// ---------------------------------------------------------------------------
+// The operator unblock route (verdict-gated-admission design §4): "I know,
+// let it run anyway" — clears THIS boot's admission block without touching
+// the reading or the blessed baseline. Neither this route nor `bless`
+// implies the other.
+// ---------------------------------------------------------------------------
+
+/// Every `Admission` row in the fixture's journal as
+/// `(model, action, reference, provenance)`.
+fn admission_rows(dir: &Path) -> Vec<(String, String, String, String)> {
+    bloomery_core::journal::replay(&dir.join("j.jsonl"))
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            bloomery_core::journal::Event::Admission {
+                model,
+                action,
+                reference,
+                provenance,
+            } => Some((
+                model.clone(),
+                action.clone(),
+                reference.clone(),
+                provenance.clone(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+/// 200: clearing a standing block answers with what was cleared, journals
+/// `"cleared"` with operator provenance, and admits new agents against the
+/// model again — while the drift reading itself, still `Confirmed`, is left
+/// exactly as measured.
+#[test]
+fn unblocking_a_blocked_model_admits_and_journals_the_operator() {
+    let (port, handle) = serve_drift_blocked_qwen();
+    let addr = format!("127.0.0.1:{port}");
+
+    let (st, body) = http(&addr, "POST", "/models/qwen/unblock", "");
+    assert_eq!(st, 200, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["model"], "qwen");
+    assert_eq!(v["cleared"]["reference"], "base42");
+
+    // Admission is open again…
+    let (st, body) = http(&addr, "POST", "/agents", r#"{"model":"qwen"}"#);
+    assert_eq!(st, 201, "{body}");
+
+    // …and the reading itself is untouched.
+    let (st, body) = http(&addr, "GET", "/status", "");
+    assert_eq!(st, 200, "{body}");
+    let status: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let model = status["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["name"] == "qwen")
+        .unwrap();
+    assert_eq!(
+        model["drift"]["cumulative"]["status"], "confirmed",
+        "{model}"
+    );
+
+    handle.shutdown();
+}
+
+/// 404: a name this daemon was never configured with. Same body shape as
+/// every other unknown-model refusal on this surface.
+#[test]
+fn unblocking_an_unknown_model_returns_404() {
+    let (port, handle) = bloomery_daemon::test_support::serve_fake();
+    let addr = format!("127.0.0.1:{port}");
+
+    let (st, body) = http(&addr, "POST", "/models/does-not-exist/unblock", "");
+    assert_eq!(st, 404, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"], "unknown_model");
+    assert_eq!(v["model"], "does-not-exist");
+    handle.shutdown();
+}
+
+/// 409: a known, unblocked model. Answering 200 here would tell an operator
+/// they cleared something when nothing was written — the silent no-op
+/// design §4 forbids, the same reason `bless`'s 409 exists.
+#[test]
+fn unblocking_a_model_with_no_standing_block_is_a_named_409_not_a_silent_no_op() {
+    let (port, handle) = bloomery_daemon::test_support::serve_fake();
+    let addr = format!("127.0.0.1:{port}");
+
+    let (st, body) = http(&addr, "POST", "/models/qwen/unblock", "");
+    assert_eq!(st, 409, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"], "no_admission_block");
+    assert_eq!(v["model"], "qwen");
+    assert!(
+        v["detail"].as_str().is_some_and(|d| !d.is_empty()),
+        "{body}"
+    );
+    handle.shutdown();
+}
+
+/// Unblocking does not rebaseline: it takes the block down without filing a
+/// new baseline anywhere, so there is nothing for a next-boot comparison to
+/// read differently. And a bless on a blocked model does not, on its own,
+/// admit anything this boot — the two routes answer different questions.
+#[test]
+fn unblock_does_not_bless_and_bless_does_not_unblock_over_http() {
+    let (port, handle, dir) = serve_with_profiles(true);
+    let addr = format!("127.0.0.1:{port}");
+    std::fs::write(
+        dir.join("profiles").join("qwen.json"),
+        profile_doc("qwen", 2048),
+    )
+    .unwrap();
+
+    // Bless first — this boot's block, if any, must stand untouched by it.
+    let (st, body) = http(&addr, "POST", "/models/qwen/bless", "");
+    assert_eq!(st, 200, "{body}");
+    assert!(
+        admission_rows(&dir).is_empty(),
+        "bless journals no Admission row"
+    );
+
+    // No block was ever set on this fixture, so unblock is a 409 — bless did
+    // not create one, confirming bless does not unblock.
+    let (st, body) = http(&addr, "POST", "/models/qwen/unblock", "");
+    assert_eq!(st, 409, "{body}");
+
+    // Re-blessing after that 409 still leaves no baseline-affecting trace
+    // from unblock: the baseline bless wrote is unchanged.
+    let baseline = dir.join("profiles").join("qwen.baseline.json");
+    let before = std::fs::read(&baseline).unwrap();
+    assert!(baseline.exists());
+    assert_eq!(std::fs::read(&baseline).unwrap(), before);
+    handle.shutdown();
+}
+
+/// The route table's `_ => 404` still catches a neighbouring path or the
+/// wrong method.
+#[test]
+fn unblock_neighbouring_path_or_wrong_method_falls_through_to_not_found() {
+    let (port, handle) = serve_drift_blocked_qwen();
+    let addr = format!("127.0.0.1:{port}");
+
+    for (method, path) in [
+        ("POST", "/models/qwen/unblocking"),
+        ("GET", "/models/qwen/unblock"),
+        ("POST", "/models/qwen/unblock/again"),
+    ] {
+        let (st, body) = http(&addr, method, path, "");
+        assert_eq!(st, 404, "{method} {path}: {body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["error"], "not_found", "{method} {path}");
+    }
+    handle.shutdown();
+}
+
 /// The tier an operator declared is what every profile in this daemon is
 /// marked with, so `/status` has to say which one it is — `null` when the
 /// daemon was never told, never an invented name.

@@ -161,6 +161,13 @@ pub const PROVENANCE_AUTO_FIRST: &str = "auto-first-profile";
 /// that spelling is built.
 pub const PROVENANCE_OPERATOR: &str = "operator";
 
+/// The provenance an `Event::Admission` "blocked" row carries when the drift
+/// watch itself set the block, i.e. every such row `Pager::set_drift`
+/// journals — as opposed to `PROVENANCE_OPERATOR`, which only ever names a
+/// "cleared" row (`POST /models/{name}/unblock`,
+/// verdict-gated-admission design §4/§7).
+pub const PROVENANCE_DRIFT_WATCH: &str = "drift-watch";
+
 /// Rotates `model`'s current profile into `previous`, before POST probes it.
 ///
 /// **The order is a law, not a preference** (spec §5). POST deletes the
