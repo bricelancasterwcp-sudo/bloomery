@@ -184,6 +184,84 @@ fn create_agent_with_unknown_model_returns_404() {
     handle.shutdown();
 }
 
+/// 422: a model with a standing drift block refuses new agent creation,
+/// naming the reference baseline the regression was measured against — the
+/// same status `Unprofiled` gets, because it is the same class of answer on
+/// the same path clients already handle. A `PagerError` mapped on one
+/// surface and not the other is a 500 waiting for whichever client hits the
+/// unmapped path, so this pins the native side of that obligation.
+#[test]
+fn create_agent_on_a_drift_blocked_model_returns_422() {
+    let (port, handle) = serve_drift_blocked_qwen();
+    let addr = format!("127.0.0.1:{port}");
+    let (st, body) = http(&addr, "POST", "/agents", r#"{"model":"qwen"}"#);
+    assert_eq!(st, 422, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"], "drift_blocked");
+    assert_eq!(v["model"], "qwen");
+    assert_eq!(v["reference"], "base42");
+    handle.shutdown();
+}
+
+/// Builds and serves a `Pager<FakeSubstrate>` with `qwen` registered,
+/// profiled (so admission reaches the drift-block clause rather than
+/// stopping at `Unprofiled`), and its cumulative drift reading set to a
+/// `Confirmed` regression against baseline `"base42"` — the one shape
+/// `set_drift` turns into an admission block (Task 2's invariant).
+fn serve_drift_blocked_qwen() -> (u16, bloomery_daemon::http::ServerHandle) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "bloomery-drift-blocked-test-{}-{seq}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    let journal = bloomery_core::journal::Journal::open(&dir.join("j.jsonl")).unwrap();
+    let images = bloomery_daemon::agents::ImageStore::new(&dir.join("img")).unwrap();
+    let mut pager = bloomery_daemon::pager::Pager::new(
+        bloomery_substrate::fake::FakeSubstrate::new(),
+        journal,
+        images,
+        Box::new(|| Some(1024 * 1024 * 1024)),
+    );
+    let gguf = dir.join("qwen.gguf");
+    std::fs::write(&gguf, b"weights").unwrap();
+    let meta = bloomery_core::gguf::GgufMeta {
+        arch: "qwen2".into(),
+        layers: 28,
+        kv_heads: 4,
+        head_dim: 128,
+        training_ctx: 4096,
+        weights_bytes: 1000,
+    };
+    pager.register_model("qwen", &gguf, meta, None).unwrap();
+    pager
+        .attach_profile(
+            "qwen",
+            bloomery_core::profile::Profile::from_json(&profile_doc("qwen", 2048))
+                .expect("fixture profile parses"),
+            false,
+        )
+        .unwrap();
+    pager
+        .set_drift(
+            "qwen",
+            bloomery_daemon::drift::ModelDrift {
+                step: bloomery_daemon::drift::DriftStatus::WithinNoise,
+                cumulative: bloomery_daemon::drift::DriftStatus::Confirmed {
+                    reference: "base42".to_string(),
+                },
+            },
+        )
+        .unwrap();
+
+    let (port, mut handle) = bloomery_daemon::http::serve(pager, 0);
+    handle.set_scratch_dir(dir);
+    (port, handle)
+}
+
 /// 400: a body that isn't valid JSON gets a named error, not a panic or a
 /// route-level 5xx.
 #[test]

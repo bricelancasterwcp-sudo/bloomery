@@ -604,10 +604,15 @@ impl<S: Substrate> Pager<S> {
     }
 
     /// Law 5's gate: no model gets work without a measured capability
-    /// profile.
+    /// profile — and the drift-watch design §2's standing block, checked
+    /// first.
     ///
-    /// Three things can still admit an unprofiled model, and they are not
-    /// interchangeable:
+    /// Zero: a standing [`crate::drift::AdmissionBlock`] refuses outright,
+    /// as [`PagerError::DriftBlocked`], before the existence check below
+    /// ever runs — see the note on that check for why the order matters.
+    ///
+    /// Otherwise, three things can still admit an unprofiled model, and
+    /// they are not interchangeable:
     ///
     /// 1. **`posting`** — the bounded window while POST probes this daemon,
     ///    which is the only way a profile can ever come to exist
@@ -620,17 +625,32 @@ impl<S: Substrate> Pager<S> {
     ///
     /// An unprofiled model is never *silently* admitted on any path.
     ///
-    /// The gate is at agent **creation**, not per inference: an agent
-    /// admitted inside the POST window keeps working after the window
-    /// closes. Cutting a live conversation off mid-turn because POST
-    /// finished would be its own dishonesty. New work on a still-unprofiled
-    /// model is refused.
+    /// The gate is at agent **creation**, not per inference, for both
+    /// refusals above: an agent admitted inside the POST window keeps
+    /// working after the window closes, and an agent admitted before a
+    /// drift block appeared keeps working after the block lands. Cutting a
+    /// live conversation off mid-turn because POST finished, or because the
+    /// watch settled, would be its own dishonesty. New work on a
+    /// still-unprofiled or now-blocked model is refused.
     ///
     /// The window is not small: one `--quick` probe measured ~110 s per
     /// model (enthusiast-16GB tier, 2026-08-14), models are probed
     /// sequentially, so it lasts roughly that sum — minutes on a
     /// multi-model daemon. Anything admitted in that span outlives it.
     fn admit(&mut self, model: &str) -> Result<(), PagerError> {
+        // Design §2. Checked before the existence gate so a blocked model
+        // reports the reason that actually applies: it HAS a profile, and
+        // that is precisely why a regression against it could be measured.
+        if let Some(block) = self
+            .models
+            .get(model)
+            .and_then(|e| e.admission_block.as_ref())
+        {
+            return Err(PagerError::DriftBlocked {
+                model: model.to_string(),
+                reference: block.reference.clone(),
+            });
+        }
         let has_profile = self
             .models
             .get(model)

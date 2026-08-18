@@ -992,3 +992,94 @@ fn an_instrument_change_never_blocks_the_fleet() {
     .unwrap();
     assert!(p.admission_block_for("m").is_none());
 }
+
+// ---------------------------------------------------------------------------
+// Task 3: admit() consults the block, on both error surfaces
+// (`.superpowers/sdd/2026-08-18-verdict-gated-admission/task-3-brief.md`)
+// ---------------------------------------------------------------------------
+
+/// A minimal but real assay profile document — the same shape `post_test.rs`
+/// and `api_native_test.rs` use — just enough for a model to count as
+/// profiled.
+fn minimal_profile(model: &str) -> bloomery_core::profile::Profile {
+    bloomery_core::profile::Profile::from_json(&format!(
+        r#"{{"assay_profile_version":3,"probe_version":"0.4.1","model":{{"name":"{model}"}},"verdicts":{{}}}}"#
+    ))
+    .expect("fixture profile parses")
+}
+
+/// A confirmed-cumulative drift reading naming `reference` — the one shape
+/// `set_drift` turns into an admission block (Task 2's invariant).
+fn confirmed_cumulative(reference: &str) -> ModelDrift {
+    ModelDrift {
+        step: DriftStatus::WithinNoise,
+        cumulative: DriftStatus::Confirmed {
+            reference: reference.to_string(),
+        },
+    }
+}
+
+/// The block refuses new agents on a model that HAS a profile — the
+/// enforcement half of Task 2's invariant. Distinct from `Unprofiled`:
+/// something WAS measured, and what it measured was a reproduced
+/// regression.
+#[test]
+fn a_drift_blocked_model_refuses_new_agents() {
+    let dir = fresh_dir("bloomery-pager-drift-blocked-refuses");
+    let (mut p, _, _) = pager_in(&dir, 0, Some(10u64.pow(9)));
+    let gguf = write_gguf(&dir, b"weights");
+    p.register_model("m", &gguf, meta(), None).unwrap();
+    p.attach_profile("m", minimal_profile("m"), false).unwrap();
+    p.set_drift("m", confirmed_cumulative("base42")).unwrap();
+
+    let err = p.create_agent("m", 50, None, 10_000).unwrap_err();
+    match err {
+        PagerError::DriftBlocked { model, reference } => {
+            assert_eq!(model, "m");
+            assert_eq!(reference, "base42");
+        }
+        other => panic!("expected DriftBlocked, got {other:?}"),
+    }
+}
+
+/// The gate is at agent CREATION, never per inference — the same argument
+/// that already governs the POST window. An agent admitted before a block
+/// appeared keeps working; only new work on that model is refused.
+#[test]
+fn an_agent_created_before_the_block_keeps_working() {
+    let dir = fresh_dir("bloomery-pager-drift-blocked-preexisting");
+    let (mut p, _, _) = pager_in(&dir, 1, Some(10u64.pow(9)));
+    let gguf = write_gguf(&dir, b"weights");
+    p.register_model("m", &gguf, meta(), None).unwrap();
+    p.attach_profile("m", minimal_profile("m"), false).unwrap();
+
+    let agent = p.create_agent("m", 50, None, 10_000).unwrap();
+    p.set_drift("m", confirmed_cumulative("base42")).unwrap();
+
+    // The existing agent still resolves and can still be inferred against.
+    p.infer(&agent.id, "still here", 16, None)
+        .expect("an agent admitted before the block keeps working");
+
+    // New work on the same model is refused.
+    assert!(matches!(
+        p.create_agent("m", 50, None, 10_000),
+        Err(PagerError::DriftBlocked { .. })
+    ));
+}
+
+/// The two refusals stay distinguishable: drift-blocked means a profile
+/// exists and a regression was reproduced against it; unprofiled means no
+/// profile exists at all.
+#[test]
+fn an_unprofiled_model_still_refuses_as_unprofiled() {
+    let dir = fresh_dir("bloomery-pager-unprofiled-distinct");
+    let (mut p, _, _) = pager_in(&dir, 0, Some(10u64.pow(9)));
+    p.set_allow_unprofiled(false);
+    let gguf = write_gguf(&dir, b"weights");
+    p.register_model("m", &gguf, meta(), None).unwrap();
+
+    assert!(matches!(
+        p.create_agent("m", 50, None, 10_000),
+        Err(PagerError::Unprofiled(_))
+    ));
+}

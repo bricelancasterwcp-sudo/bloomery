@@ -277,6 +277,7 @@ fn status<S: Substrate>(pager: &Mutex<Pager<S>>) -> ApiResult {
 /// |---|---|---|
 /// | `UnknownModel` / `UnknownAgent` | 404 | `{error, model\|agent}` |
 /// | `Unprofiled` | 422 | `{error, model}` |
+/// | `DriftBlocked` | 422 | `{error, model, reference}` |
 /// | `Refused` | 409 | `{error, needed, free, reclaimable}` |
 /// | `PromptTooLarge` | 413 | `{error, needed_tokens, window_tokens}` |
 /// | `Budget` | 402 | `{error, remaining, requested}` |
@@ -287,6 +288,10 @@ fn map_error(e: &PagerError) -> ApiResult {
         PagerError::UnknownModel(model) => (404, json!({"error": "unknown_model", "model": model})),
         PagerError::UnknownAgent(agent) => (404, json!({"error": "unknown_agent", "agent": agent})),
         PagerError::Unprofiled(model) => (422, json!({"error": "unprofiled", "model": model})),
+        PagerError::DriftBlocked { model, reference } => (
+            422,
+            json!({"error": "drift_blocked", "model": model, "reference": reference}),
+        ),
         PagerError::Refused {
             needed,
             free,
