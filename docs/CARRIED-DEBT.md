@@ -453,8 +453,8 @@ tests caught):**
   say this plainly: the sentence as written would mislead the next reader
   about what this wave changed.
 - **R2 — `clear_admission_block` mutates before it journals, with no named
-  outcome for a refused row.** `pager/drift_watch.rs:189` takes the block
-  out of `entry.admission_block` before `:192-198` journals the "cleared"
+  outcome for a refused row.** `pager/drift_watch.rs:193` takes the block
+  out of `entry.admission_block` before `:196-202` journals the "cleared"
   row. If that journal write fails, the operator gets a 500, the block is
   already gone in memory, and a retry answers `409 no_admission_block` —
   telling them they never had a block, when they did and only the row
@@ -469,7 +469,7 @@ tests caught):**
 - **R3 — two silent-clear paths, unreachable today by call-site discipline
   alone.** `register_model` resets `admission_block: None` unconditionally
   on every (re-)registration (`pager.rs:511`), and `set_drift` assigns the
-  derived block unconditionally on every call (`drift_watch.rs:136`) — so a
+  derived block unconditionally on every call (`drift_watch.rs:140`) — so a
   second `set_drift` for one model in one boot with a non-`Confirmed`
   reading would silently drop a standing block with no `"cleared"` row to
   record it, and a `register_model` re-registration would do the same.
