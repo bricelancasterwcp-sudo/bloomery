@@ -87,6 +87,15 @@ pub enum DriftStatus {
     /// and not a drift verdict, so no confirm is run: there is no drift
     /// hypothesis to test.
     NotComparable,
+    /// `assay diff` compared the pair but could not finish it (its exit 3,
+    /// assay ≥ 0.10): at least one cell was measured on exactly one side, and
+    /// assay's precedence lets that outrank a measured drift among the cells
+    /// that did score. Not a drift verdict — there is no reproduced-drift
+    /// hypothesis for the confirm stage to test — and never a pass: the
+    /// unscored cells may hide exactly the move the gate exists to catch. A
+    /// later boot that measures the missing cell resolves it; a
+    /// [`DriftStatus::NotComparable`] pair never can.
+    Incomplete,
 }
 
 impl DriftStatus {
@@ -113,6 +122,7 @@ impl DriftStatus {
             }
             DriftStatus::Unmeasured { reason } => format!("unmeasured: {reason}"),
             DriftStatus::NotComparable => "not-comparable".to_string(),
+            DriftStatus::Incomplete => "incomplete".to_string(),
         }
     }
 }
@@ -306,6 +316,11 @@ fn settled(reading: &GateReading) -> Option<DriftStatus> {
         GateOutcome::WithinNoise => Some(DriftStatus::WithinNoise),
         GateOutcome::Drift => None,
         GateOutcome::NotComparable { .. } => Some(DriftStatus::NotComparable),
+        // Settled on the first reading: spec §4 reserves the confirm for the
+        // Drift hypothesis, and an incomplete comparison asserts no drift to
+        // reproduce. It stays a named non-answer until a boot measures the
+        // missing cell.
+        GateOutcome::Incomplete { .. } => Some(DriftStatus::Incomplete),
         GateOutcome::InstrumentChanged { reference, current } => {
             Some(DriftStatus::InstrumentChanged {
                 reference: reference.clone(),

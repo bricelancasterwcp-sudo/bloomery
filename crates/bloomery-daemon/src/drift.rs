@@ -558,6 +558,17 @@ pub enum GateOutcome {
         /// so the row records what actually happened.
         exit: i32,
     },
+    /// Exited 3 (assay ≥ 0.10): the comparison ran but was incomplete — at
+    /// least one cell was measured on exactly one side, and assay's precedence
+    /// (2 > 3 > 1 > 0) lets it mask a measured drift among the cells that did
+    /// score. Distinct from [`GateOutcome::NotComparable`], which never
+    /// compared at all: an incomplete pair can resolve on a later boot that
+    /// measures the missing cell, a refused one cannot. Never a pass.
+    Incomplete {
+        /// The exit code diff reported — 3 today; carried rather than assumed
+        /// so the row records what actually happened.
+        exit: i32,
+    },
     /// Design §3: the two documents were measured by different instruments,
     /// so no comparison between them measures the model. Both identities in
     /// `"<probe_version>/v<schema>"` form. The diff is never spawned.
@@ -602,6 +613,7 @@ impl GateOutcome {
             GateOutcome::WithinNoise => "within-noise".to_string(),
             GateOutcome::Drift => "drift".to_string(),
             GateOutcome::NotComparable { .. } => "not-comparable".to_string(),
+            GateOutcome::Incomplete { .. } => "incomplete".to_string(),
             GateOutcome::InstrumentChanged { reference, current } => {
                 format!("instrument-changed ({reference} -> {current})")
             }
@@ -864,19 +876,21 @@ impl DriftGate {
             }
         };
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        // assay documents exactly 0, 1 and 2 for `diff --gate`. Any other code
-        // is a tool this daemon does not understand — treating it as a verdict
-        // (in either direction) would be inventing one.
+        // assay documents exactly 0, 1, 2 and — since 0.10 — 3 for
+        // `diff --gate`. Any other code is a tool this daemon does not
+        // understand — treating it as a verdict (in either direction) would
+        // be inventing one.
         match output.status.code() {
             Some(0) => reading(GateOutcome::WithinNoise, Some(0)),
             Some(1) => reading(GateOutcome::Drift, Some(1)),
             Some(2) => reading(GateOutcome::NotComparable { exit: 2 }, Some(2)),
+            Some(3) => reading(GateOutcome::Incomplete { exit: 3 }, Some(3)),
             Some(n) => reading(
                 GateOutcome::Infra {
                     detail: with_stderr(
                         format!(
                             "undocumented exit {n} from `assay diff --gate` \
-                             (0, 1 and 2 are the documented codes)"
+                             (0, 1, 2 and 3 are the documented codes)"
                         ),
                         &stderr,
                     ),

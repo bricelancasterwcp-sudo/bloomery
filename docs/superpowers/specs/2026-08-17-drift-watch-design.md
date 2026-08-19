@@ -79,6 +79,21 @@ exercises exactly this path on every configured model.
   noise, `1` drift beyond noise, `2` not comparable. Same decoupling
   POST already practices: the artifact and the exit code are the
   contract; bloomery never parses diff's prose output.
+
+  > **Amendment (2026-08-19):** assay 0.10.0 (its v1.8 wave) added a
+  > fourth documented code — `3`, an **incomplete comparison**: a cell
+  > measured on exactly one side, outranking a measured drift
+  > (precedence `2 > 3 > 1 > 0`). The gate reads it as its own settled
+  > verdict, `incomplete` — never a pass, and no confirm run, since an
+  > incomplete comparison asserts no drift to reproduce; a later boot
+  > that measures the missing cell resolves it. A confirm re-diff
+  > exiting `3` follows the existing rule for a re-diff that did not
+  > answer: the first reading stands `unconfirmed`, naming
+  > `incomplete`. Before this amendment the daemon journaled exit `3`
+  > as infrastructure ("undocumented exit") — honest about not
+  > understanding it, wrong about the contract: assay's exit-code
+  > vocabulary grew under the live pin and this bullet's three-code
+  > claim went stale.
 - The journal row for every comparison records: model, comparison kind
   (step/cumulative), verdict, the exit code, and **both profile
   paths** — so any human or tool can re-run the identical diff. The

@@ -888,6 +888,9 @@ fn only_a_confirmed_cumulative_reading_blocks_admission() {
             false,
         ),
         (DriftStatus::NotComparable, false),
+        // Exit 3's incomplete comparison: no established drift, so no block —
+        // "refuse only what was established; name everything else."
+        (DriftStatus::Incomplete, false),
         (
             DriftStatus::InstrumentChanged {
                 reference: "0.9.0/v8".into(),

@@ -619,9 +619,27 @@ fn exit_two_is_not_comparable_and_never_a_pass() {
     assert_eq!(reading.exit_code, Some(2));
 }
 
-/// assay documents 0, 1 and 2 for `diff --gate`. Anything else is a tool this
-/// daemon does not understand, so it is infrastructure — the one honest
-/// reading. The code is still recorded: it exists, so `None` would be a lie.
+/// Exit 3 is assay ≥ 0.10's incomplete comparison: a cell measured on exactly
+/// one side, outranking a measured drift (its precedence is 2 > 3 > 1 > 0).
+/// It is a documented verdict, not an undocumented code — and it is never a
+/// pass, because the cells it could not score may hide exactly the move the
+/// gate exists to catch.
+#[test]
+fn exit_three_is_incomplete_and_never_a_pass() {
+    let (r, c) = pair("gate-exit3", Some(V8_QWEN15B), Some(V8_QWEN15B_DRYRUN));
+    let (gate, _calls) = gate_answering(exited(3));
+
+    let reading = gate.compare(&r, &c);
+
+    assert_eq!(reading.outcome, GateOutcome::Incomplete { exit: 3 });
+    assert_eq!(reading.exit_code, Some(3));
+    assert_eq!(reading.outcome.journal_outcome(), "incomplete");
+}
+
+/// assay documents 0, 1, 2 and (since 0.10) 3 for `diff --gate`. Anything
+/// else is a tool this daemon does not understand, so it is infrastructure —
+/// the one honest reading. The code is still recorded: it exists, so `None`
+/// would be a lie.
 #[test]
 fn an_undocumented_exit_code_is_infrastructure_not_a_verdict() {
     let (r, c) = pair("gate-exit7", Some(V8_QWEN15B), Some(V8_QWEN15B_DRYRUN));
@@ -1301,6 +1319,54 @@ fn a_clean_boot_reads_within_noise_on_both_comparisons_and_probes_once() {
             .collect::<Vec<_>>(),
         vec![("step", "within-noise"), ("cumulative", "within-noise")],
         "exactly one row per comparison, each naming its own verdict"
+    );
+    assert!(
+        !b.events()
+            .iter()
+            .any(|e| matches!(e, Event::Blessed { .. })),
+        "a baseline that already exists is never re-blessed by the daemon"
+    );
+}
+
+/// A FIRST diff exiting 3 (assay ≥ 0.10's incomplete comparison) settles
+/// without a confirm: spec §4 reserves the confirm for the Drift hypothesis,
+/// and an incomplete comparison asserts no drift to reproduce. The row names
+/// the settled verdict, and it is never a pass.
+#[test]
+fn a_first_diff_exiting_three_settles_incomplete_with_no_confirm() {
+    let b = boot("watch-incomplete");
+    b.seed("qwen.json", &profile_doc_ceiling("qwen", 1024)); // last boot's
+    b.seed("qwen.baseline.json", &profile_doc_ceiling("qwen", 900));
+    let (runner, probes) = scripted_probes(vec![Ok(profile_doc("qwen"))]);
+    let (gate, _calls) = gate_deciding(|reference, _current| {
+        if reference.ends_with(".previous.json") {
+            exited(3)
+        } else {
+            exited(0)
+        }
+    });
+
+    b.run(&runner, &gate);
+
+    assert_eq!(
+        probes.borrow().len(),
+        1,
+        "an incomplete first reading earns no confirm probe beyond the boot's own POST"
+    );
+    assert_eq!(
+        b.drift(),
+        Some(ModelDrift {
+            step: DriftStatus::Incomplete,
+            cumulative: DriftStatus::WithinNoise,
+        })
+    );
+    assert_eq!(
+        b.drift_rows()
+            .iter()
+            .map(|(c, o, _)| (c.as_str(), o.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("step", "incomplete"), ("cumulative", "within-noise")],
+        "one row per comparison; the step row spells the settled verdict, not a pass"
     );
     assert!(
         !b.events()
