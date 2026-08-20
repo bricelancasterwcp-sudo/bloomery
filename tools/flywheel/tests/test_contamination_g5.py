@@ -10,6 +10,11 @@ cap (same reasoning turn 1 used for `templates_python.py`/`templates_text.py`):
 3. `codec-tasks-v2-mixed` (factory-authored, frozen) must be disjoint from
    `codec-tasks-v1` — the CRITICAL disjointness requirement, checked via
    the same contamination guard with v2-mixed exported as a pseudo-corpus.
+
+`codec-tasks-v3-mixed`'s own disjointness (from BOTH older gates) is the
+same mechanism applied a third time, and lives in the sibling module
+`test_contamination_g5_v3.py` -- split out for the same 400-line house cap
+that split this file out of `test_contamination.py`.
 """
 
 import json

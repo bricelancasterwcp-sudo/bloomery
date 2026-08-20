@@ -24,7 +24,8 @@
 use bloomery_core::action::lens::{land, Landing, LandingLens, PlainText};
 use bloomery_core::action::PatchBody;
 use bloomery_daemon::codec_probe::fixtures::{
-    shipped_fixture_set, shipped_fixture_set_v2_mixed, Expect, Fixture,
+    shipped_fixture_set, shipped_fixture_set_v2_mixed, shipped_fixture_set_v3_mixed, Expect,
+    Fixture,
 };
 use bloomery_daemon::task::lens_py::PythonLens;
 use std::collections::BTreeSet;
@@ -355,21 +356,34 @@ fn v2_mixed_fixture_names_are_unique() {
     }
 }
 
-/// Names unique across BOTH shipped sets (task-4 brief): nothing downstream
-/// may alias a v1 fixture with a v2-mixed one by name.
+/// Names unique across ALL THREE shipped sets (task-4 brief, widened by the
+/// turn-3 task-8 brief when `codec-tasks-v3-mixed` froze): nothing
+/// downstream may alias a fixture from one gate set with one from another
+/// by name. This is the one v3 assertion that lives here rather than in
+/// `codec_fixtures_v3_test.rs` — it is the only one that has to see every
+/// shipped set at once.
 #[test]
-fn fixture_names_are_unique_across_both_shipped_sets() {
+fn fixture_names_are_unique_across_all_three_shipped_sets() {
     let v1 = shipped_fixture_set().expect("shipped_fixture_set");
     let v2 = shipped_fixture_set_v2_mixed().expect("shipped_fixture_set_v2_mixed");
+    let v3 = shipped_fixture_set_v3_mixed().expect("shipped_fixture_set_v3_mixed");
     let mut seen = BTreeSet::new();
-    for f in v1.fixtures.iter().chain(v2.fixtures.iter()) {
+    for f in v1
+        .fixtures
+        .iter()
+        .chain(v2.fixtures.iter())
+        .chain(v3.fixtures.iter())
+    {
         assert!(
             seen.insert(f.name.clone()),
-            "duplicate fixture name across codec-tasks-v1 and codec-tasks-v2-mixed: {}",
+            "duplicate fixture name across the shipped gate sets: {}",
             f.name
         );
     }
-    assert_eq!(seen.len(), v1.fixtures.len() + v2.fixtures.len());
+    assert_eq!(
+        seen.len(),
+        v1.fixtures.len() + v2.fixtures.len() + v3.fixtures.len()
+    );
 }
 
 /// The load-bearing patch-class check, mirroring v1's own: every
