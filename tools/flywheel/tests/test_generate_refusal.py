@@ -38,8 +38,17 @@ class RefusalGenerationTest(unittest.TestCase):
             refuse_tasks = {tid: metas for tid, metas in by_task.items() if metas[0]["expect"] == "refuse"}
             self.assertEqual(len(patch_tasks), 6)
             self.assertEqual(len(refuse_tasks), 4)
+            # Turn 3: the patch slice cycles three trajectory shapes with
+            # three pair sequences; the refuse shape's 2-pair sequence is
+            # what this test actually pins, alongside "a patch task always
+            # ends in `patch` -> `done`" regardless of shape.
+            pairs_by_shape = {
+                "plain": ["read", "patch", "done"],
+                "find": ["find", "read", "patch", "done"],
+                "run": ["read", "patch", "run", "done"],
+            }
             for metas in patch_tasks.values():
-                self.assertEqual([m["pair"] for m in metas], ["read", "patch", "done"])
+                self.assertEqual([m["pair"] for m in metas], pairs_by_shape[metas[0]["trajectory"]])
             for metas in refuse_tasks.values():
                 self.assertEqual([m["pair"] for m in metas], ["read", "done"])
 

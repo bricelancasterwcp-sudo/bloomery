@@ -28,17 +28,31 @@ python3 -m tools.flywheel.factory.generate \
   --out corpus.jsonl --report fingerprint.json
 ```
 
-Each surviving task yields exactly 3 JSONL lines (`read`, `patch`,
-`done`, in that order):
+Each surviving task yields one JSONL line per pair, in the order its
+TRAJECTORY SHAPE renders them (turn 3; `generate_request.PAIR_NAMES`):
+
+| `meta.trajectory` | pairs | sequence |
+| ----------------- | ----- | -------- |
+| `plain`           | 3     | `read`, `patch`, `done` |
+| `find`            | 4     | `find`, `read`, `patch`, `done` |
+| `run`             | 4     | `read`, `patch`, `run`, `done` |
+
+(plus 2 — `read`, `done` — for a refuse task, which carries no
+`trajectory`). The repair slice cycles the three shapes by slot position,
+333 of each at `--count 999`.
 
 ```json
 {"prompt": "...", "completion": "...", "meta": {
   "task_id": "s20260816-000000", "template": "py_inverted_boolean",
-  "lens": "python", "pair": "read",
+  "lens": "python", "pair": "read", "trajectory": "plain",
   "goal": "...", "target": "...", "target_contents": "...",
   "files": {"<path>": "<contents>"}, "search": "..."
 }}
 ```
+
+A find-shaped row additionally carries `meta.find_pattern`, and a
+run-verified row `meta.run_argv` — each present only on the shape that
+owns it, mirroring the wire request that produced it.
 
 `meta.goal`/`target`/`target_contents`/`files`/`search` are a superset of
 the brief's required `meta` fields (`task_id`/`template`/`lens`/`pair`) —
@@ -59,6 +73,7 @@ existed is treated as a legacy row and falls back to the target alone.
   "seed": 20260816,
   "tasks_by_template": {"py_inverted_boolean": 75, "...": 0},
   "tasks_by_lens": {"python": 599, "plaintext": 399},
+  "tasks_by_trajectory": {"find": 333, "plain": 333, "run": 333},
   "pairs": 2997,
   "dedup_dropped": 1,
   "corpus_sha256": "...",
@@ -111,19 +126,30 @@ factory/
   task.py             Task NamedTuple + structural validator (brief rule 2)
   wordlists.py         Domain vocabulary (10 unrelated themes + shared pools),
                         verified disjoint from the gate set's vocabulary
-  templates_python.py  8 python-lens template families
+  templates_python.py  8 python-lens families + their run-verified wrappers
   templates_text.py    5 plaintext-lens template families
+  templates_multifile_python.py  3 find-shaped, multi-file python families
+  templates_multifile_text.py    2 find-shaped, multi-file text families
   templates.py         Re-exports + the family registries + the rule-1
                         disjointness assertion
+  goal_phrasing.py      Shared goal-sentence skeletons, one set per shape
   contamination.py     GATE_VOCABULARY + the contamination comparator + CLI
   generate.py           The generator CLI (dedup, verification, fingerprint)
+  generate_slices.py    Which family fills which slot (the shape/lens cycle)
+  generate_request.py   The wire request + corpus row `meta` format
   toolclient.py         One long-lived flywheel-tool subprocess wrapper
 tests/
-  test_templates.py      rules 1-2
+  test_templates.py      rules 1-2 + the validator's per-shape branches
+  test_templates_multifile.py  the find-shaped families + the run wrappers
   test_generate.py       rules 3-6 (+ one real-binary integration test)
+  test_generate_trajectories.py  the three-shape slice cycle, end to end
   test_contamination.py  rule 7, including the planted-disguised-copy test
   fixtures/               canned stub tools used by test_generate.py
 ```
+
+(Turn 2's refusal modules — `templates_refusal*.py`, `generate_refusal.py`
+— and task 6a's `gate_sampling.py` are documented in their own module
+docstrings.)
 
 ## Running the tests
 

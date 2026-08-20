@@ -96,6 +96,38 @@ def patch_skeletons(
     return rng.choice(skeletons)
 
 
+def find_skeletons(
+    rng: random.Random,
+    subject: str,
+    problem: str,
+    evidence: str,
+    fix_goal: str,
+    instruction: str,
+) -> str:
+    """`patch_skeletons`'s find-shaped counterpart (turn-3 design doc §2:
+    "the goal names the symptom, never the file"). Same content clauses,
+    minus every one that carried a filename: there is no `target` and no
+    `fix_target` argument, because a goal that named either would hand the
+    model the answer and turn the opening `find` into a decorative step
+    (`task.validate_task`'s find branch refuses such a goal outright).
+
+    Each skeleton instead frames the missing location explicitly -- "find
+    it", "locate the module", "search the tree" -- so the trajectory's
+    first move reads as the obvious response to the goal rather than an
+    unmotivated flourish."""
+    skeletons = (
+        f"Somewhere in this workspace {subject} {problem} -- {evidence}. Track down whichever file "
+        f"owns it and change it so {fix_goal}. {instruction}",
+        f"Bug report, no file attached: {subject} {problem}. Evidence: {evidence}. Locate the "
+        f"module it lives in, then make sure {fix_goal}. {instruction}",
+        f"A support escalation says {subject} {problem}, and {evidence} backs that up. Search the "
+        f"tree for whatever defines it; once corrected, {fix_goal}. {instruction}",
+        f"Nobody on the team remembers where {subject} lives, but it {problem}: {evidence}. Find "
+        f"it first -- afterwards {fix_goal}. {instruction}",
+    )
+    return rng.choice(skeletons)
+
+
 def defect_absent_skeletons(rng: random.Random, target: str, claim: str, instruction: str) -> str:
     """`claim` is the full plausible-but-false defect clause, ALREADY
     carrying >= 1 backtick-quoted identifier/value that is real in the

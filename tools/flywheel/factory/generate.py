@@ -9,11 +9,13 @@ flywheel-tool> --out corpus.jsonl --report fingerprint.json``
 Pipeline, all driven by ONE `random.Random(seed)` instance (rule 3 —
 determinism depends on a single deterministic sequence of draws):
 
-1. Generate `count` candidate PATCH tasks by cycling template families in
-   a fixed 3:2 python:plaintext pattern (design spec §3's ~600/~400 split
-   at count=1000), each family drawing from `rng`. Every candidate is
-   structurally validated immediately (rule 2) — a violation is a
-   factory bug and aborts the run.
+1. Generate `count` candidate PATCH tasks, one per slot, with the slot's
+   family chosen by `generate_slices.family_functions` — turn 3 (design
+   doc §2) makes that a THREE-shape cycle (plain / find-shaped / run-
+   verified, 333 each at count=999) on top of turn 1's 3:2 python:
+   plaintext mix, all still purely position-derived. Each family draws
+   from `rng`. Every candidate is structurally validated immediately
+   (rule 2) — a violation is a factory bug and aborts the run.
 1b. Generate `refusal_count` candidate REFUSE tasks (G5 design doc §5),
     continuing the SAME `rng` stream, cycling the six (family, lens)
     groups (`templates_refusal.GROUP_CYCLE_ORDER`) so all three families
@@ -41,9 +43,11 @@ determinism depends on a single deterministic sequence of draws):
 4. A deterministic 5% validation split is drawn from the SAME `rng`,
    continuing its stream after ALL task generation, patch and refuse
    combined (rule 6).
-5. corpus.jsonl (3 pair-rows per surviving patch task in read/patch/done
-   order; 2 pair-rows per surviving refuse task in read/done order) and
-   the fingerprint JSON are written together at the end.
+5. corpus.jsonl (one pair-row per pair, in the order the task's SHAPE
+   renders them — `generate_request.PAIR_NAMES`: 3 for a plain patch task,
+   4 for a find-shaped or run-verified one, 2 for a refuse task) and the
+   fingerprint JSON are written together at the end. The wire request and
+   row `meta` formats both live in `generate_request.py`.
 
 Task 6a's addition lives INSIDE step 1/1b, not as a separate pass: when
 one or more `--gate` paths are given, every candidate (patch and refuse
@@ -74,42 +78,22 @@ import json
 import random
 import sys
 from pathlib import Path
-from typing import Union
 
-from tools.flywheel.factory import gate_sampling, generate_refusal, templates
+from tools.flywheel.factory import (
+    gate_sampling,
+    generate_refusal,
+    generate_request,
+    generate_slices,
+    templates,
+)
 from tools.flywheel.factory.contamination import GateFixture, load_gate_fixtures, normalize
+# `AnyTask` lives with the request/row format it exists to describe, so
+# there is exactly one definition of "a task of either class".
+from tools.flywheel.factory.generate_request import AnyTask
 from tools.flywheel.factory.task import RefusalTask, Task
 from tools.flywheel.factory.toolclient import ToolClient
 
-ENVELOPE = "v3"
-PATCH_CODEC = "search_replace"
 VALIDATION_SPLIT_FRACTION = 0.05
-
-AnyTask = Union[Task, RefusalTask]
-
-# Fixed 3:2 python:plaintext cycle (design spec §3: ~600/~400 of ~1000).
-# NOT rng-derived -- which family a given slot uses is a pure function of
-# its position, so determinism (rule 3) never depends on draw order here;
-# only each family's *content* consumes rng.
-_FAMILY_PATTERN: tuple[str, ...] = ("python", "python", "python", "plaintext", "plaintext")
-
-
-def _family_functions(count: int) -> list:
-    """The ordered list of template functions the run will call, one per
-    task slot, cycling each lens's own families in their sorted order."""
-    python_i = 0
-    plaintext_i = 0
-    fns = []
-    for i in range(count):
-        lens = _FAMILY_PATTERN[i % len(_FAMILY_PATTERN)]
-        if lens == "python":
-            _, fn = templates.PYTHON_TEMPLATES[python_i % len(templates.PYTHON_TEMPLATES)]
-            python_i += 1
-        else:
-            _, fn = templates.TEXT_TEMPLATES[plaintext_i % len(templates.TEXT_TEMPLATES)]
-            plaintext_i += 1
-        fns.append(fn)
-    return fns
 
 
 def fail(message: str) -> None:
@@ -132,7 +116,9 @@ def generate_candidate_tasks(
     SAME rng stream. Returns (accepted tasks, gate_rejections by rule,
     total candidate draws). `gates=[]` is byte-identical to the
     pre-task-6a code path -- one draw per slot, no extra rng consumption."""
-    return gate_sampling.draw_all(rng, _family_functions(count), templates.validate_task, gates, fail)
+    return gate_sampling.draw_all(
+        rng, generate_slices.family_functions(count), templates.validate_task, gates, fail
+    )
 
 
 def dedup_tasks(tasks: list[Task]) -> tuple[list[Task], int]:
@@ -154,51 +140,6 @@ def dedup_tasks(tasks: list[Task]) -> tuple[list[Task], int]:
     return unique, dropped
 
 
-def _build_patch_trajectory_request(task: Task) -> dict:
-    target_contents = task.files[task.target]
-    return {
-        "cmd": "trajectory",
-        "goal": task.goal,
-        "patch_codec": PATCH_CODEC,
-        "envelope": ENVELOPE,
-        "target": task.target,
-        "target_contents": target_contents,
-        "search": task.search,
-        "replace": task.replace,
-        "summary": task.summary,
-    }
-
-
-def _build_trajectory_request(task: AnyTask) -> dict:
-    if isinstance(task, RefusalTask):
-        return generate_refusal.build_refusal_trajectory_request(task)
-    return _build_patch_trajectory_request(task)
-
-
-def _row_meta(task_id: str, task: AnyTask, pair_name: str) -> dict:
-    if isinstance(task, RefusalTask):
-        return generate_refusal.refusal_row_meta(task_id, task, pair_name)
-    target_contents = task.files[task.target]
-    return {
-        "task_id": task_id,
-        "template": task.name,
-        "lens": task.lens,
-        "pair": pair_name,
-        "expect": "patch",
-        "goal": task.goal,
-        "target": task.target,
-        "target_contents": target_contents,
-        # Every file the task carries, not just the target: the post-hoc
-        # guard screens siblings and can only see them through this key.
-        "files": dict(task.files),
-        "search": task.search,
-    }
-
-
-def _expected_pair_names(task: AnyTask) -> tuple[str, ...]:
-    return ("read", "done") if isinstance(task, RefusalTask) else ("read", "patch", "done")
-
-
 def _verify_and_build_rows(assigned: list[tuple[str, AnyTask]], tool_path: Path) -> tuple[list[dict], int]:
     """Rule 4, extended additively for refuse tasks: every task goes
     through flywheel-tool `trajectory`, patch and refuse alike, over ONE
@@ -213,7 +154,7 @@ def _verify_and_build_rows(assigned: list[tuple[str, AnyTask]], tool_path: Path)
     total_pairs = 0
     with ToolClient(tool_path) as client:
         for task_id, task in assigned:
-            request = _build_trajectory_request(task)
+            request = generate_request.build_trajectory_request(task)
             response = client.trajectory(request)
 
             if "error" in response:
@@ -234,7 +175,7 @@ def _verify_and_build_rows(assigned: list[tuple[str, AnyTask]], tool_path: Path)
                 )
 
             pairs = response["pairs"]
-            expected_pair_names = _expected_pair_names(task)
+            expected_pair_names = generate_request.expected_pair_names(task)
             if len(pairs) != len(expected_pair_names):
                 fail(
                     f"task {task_id} ({task.name}) returned {len(pairs)} pairs, expected "
@@ -246,7 +187,7 @@ def _verify_and_build_rows(assigned: list[tuple[str, AnyTask]], tool_path: Path)
                     {
                         "prompt": pair["prompt"],
                         "completion": pair["completion"],
-                        "meta": _row_meta(task_id, task, pair_name),
+                        "meta": generate_request.row_meta(task_id, task, pair_name),
                     }
                 )
                 total_pairs += 1
@@ -366,14 +307,22 @@ def main(argv: list[str] | None = None) -> int:
 
     tasks_by_template: dict[str, int] = {}
     tasks_by_lens: dict[str, int] = {}
+    # The repair slice's shape split (turn-3 design doc §2/§5: "exact slice
+    # counts pre-registered before training"), recorded so a run's actual
+    # split is readable off the fingerprint rather than recomputed from the
+    # corpus. Refuse tasks carry no trajectory and are not counted here.
+    tasks_by_trajectory: dict[str, int] = {}
     for _task_id, task in assigned:
         tasks_by_template[task.name] = tasks_by_template.get(task.name, 0) + 1
         tasks_by_lens[task.lens] = tasks_by_lens.get(task.lens, 0) + 1
+        if isinstance(task, Task):
+            tasks_by_trajectory[task.trajectory] = tasks_by_trajectory.get(task.trajectory, 0) + 1
 
     fingerprint = {
         "seed": args.seed,
         "tasks_by_template": dict(sorted(tasks_by_template.items())),
         "tasks_by_lens": dict(sorted(tasks_by_lens.items())),
+        "tasks_by_trajectory": dict(sorted(tasks_by_trajectory.items())),
         "pairs": total_pairs,
         "dedup_dropped": total_dropped,
         "corpus_sha256": corpus_sha256,

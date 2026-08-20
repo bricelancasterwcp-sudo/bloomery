@@ -16,9 +16,10 @@ generated file.
 from __future__ import annotations
 
 import random
+from typing import Callable
 
 from tools.flywheel.factory import goal_phrasing
-from tools.flywheel.factory.task import DONE_INSTRUCTION, Task
+from tools.flywheel.factory.task import DONE_INSTRUCTION, RUN_TRAJECTORY, Task
 from tools.flywheel.factory.wordlists import (
     DICT_KEY_POOL,
     FLAG_NAMES,
@@ -355,3 +356,43 @@ FAMILIES = {
     "py_wrong_fstring_field": _family_wrong_fstring_field,
     "py_wrong_dict_key": _family_wrong_dict_key,
 }
+
+
+# Turn 3's run-verified slice (design doc §2: the ideal inserts a `run`
+# verification step before `done`, under the fixture's grant). Every family
+# above gains one as a WRAPPER -- never a copy -- so a later edit to any
+# family propagates to its run-verified twin for free; a copy-pasted variant
+# would drift the first time one side changed, which is why
+# `test_templates_multifile.py` re-derives each wrapper's body from its base
+# family at the same seed.
+#
+# The verification is `py_compile` of the task's own target: the one check
+# meaningful for every python family without a bespoke per-defect assertion.
+# These defects are semantic, so the file compiles before AND after -- what
+# the step trains is the HABIT of verifying before claiming done (the design
+# doc's stated goal), not a defect-specific oracle. Plaintext gets no
+# run-verified slice for the mirror-image reason: no verification to run.
+
+PY_COMPILE_PREFIX: tuple[str, ...] = ("python3", "-m", "py_compile")
+RUN_FAMILY_SUFFIX = "_run_verified"
+
+
+def _run_verified(fn: Callable[[random.Random], Task]) -> Callable[[random.Random], Task]:
+    """Wraps a plain family so its task renders the run-verified shape.
+    Draws through to `fn` unchanged, so the wrapper consumes exactly the
+    same rng sequence the base family does -- determinism (rule 3) is
+    inherited, not re-established."""
+
+    def wrapper(rng: random.Random) -> Task:
+        task = fn(rng)
+        return task._replace(
+            name=f"{task.name}{RUN_FAMILY_SUFFIX}",
+            trajectory=RUN_TRAJECTORY,
+            run_argv=PY_COMPILE_PREFIX + (task.target,),
+            commands=(PY_COMPILE_PREFIX,),
+        )
+
+    return wrapper
+
+
+RUN_FAMILIES = {f"{name}{RUN_FAMILY_SUFFIX}": _run_verified(fn) for name, fn in FAMILIES.items()}

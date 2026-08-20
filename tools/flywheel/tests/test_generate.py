@@ -299,9 +299,21 @@ class FingerprintShapeTest(unittest.TestCase):
             fp = json.loads(report.read_text(encoding="utf-8"))
             self.assertEqual(fp["corpus_sha256"], hashlib.sha256(out.read_bytes()).hexdigest())
 
-    def test_each_surviving_task_yields_exactly_three_pairs(self):
+    def test_each_surviving_task_yields_exactly_the_pairs_for_its_shape(self):
+        """Turn 3 made this pin per-shape: the patch slice now cycles
+        three trajectory shapes with three different pair sequences (3
+        plain, 4 find, 4 run). The invariant that survived is that a
+        task's rows are EXACTLY its shape's sequence, in order, and that
+        the fingerprint's `pairs` counts every row written. The cycle's
+        own ratio and the two new shapes' contents are pinned in
+        `test_generate_trajectories.py`."""
         import tempfile
 
+        pairs_by_shape = {
+            "plain": ["read", "patch", "done"],
+            "find": ["find", "read", "patch", "done"],
+            "run": ["read", "patch", "run", "done"],
+        }
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             out, report = tmp / "out.jsonl", tmp / "report.json"
@@ -312,9 +324,12 @@ class FingerprintShapeTest(unittest.TestCase):
             by_task = {}
             for line in lines:
                 row = json.loads(line)
-                by_task.setdefault(row["meta"]["task_id"], []).append(row["meta"]["pair"])
-            for task_id, pairs in by_task.items():
-                self.assertEqual(pairs, ["read", "patch", "done"], f"{task_id}: {pairs}")
+                by_task.setdefault(row["meta"]["task_id"], []).append(row["meta"])
+            for task_id, metas in by_task.items():
+                shape = metas[0]["trajectory"]
+                self.assertEqual(
+                    [m["pair"] for m in metas], pairs_by_shape[shape], f"{task_id} ({shape})"
+                )
 
 
 @unittest.skipUnless(REAL_TOOL is not None, "flywheel-tool binary not built; run cargo build -p bloomery-daemon --bin flywheel-tool")

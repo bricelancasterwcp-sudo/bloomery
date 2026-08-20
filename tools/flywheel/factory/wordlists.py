@@ -207,6 +207,23 @@ HOST_KEY_NAMES: tuple[str, ...] = (
     "origin_host",
 )
 
+# Marker verbs for turn 3's find-shaped multi-file families
+# (`templates_multifile_python.py`, `templates_multifile_text.py`). The two
+# pools are DISJOINT, and that disjointness is what makes every family's
+# `find_pattern` unique to its target by construction rather than by luck:
+# a pattern is always `<TARGET verb>_<noun>_<family suffix>`, and every
+# identifier a sibling file carries starts with a SIBLING verb, so no
+# sibling can contain the pattern regardless of which nouns the draw
+# happened to pick. (Matching on the noun alone would not be safe -- one
+# theme noun can be a prefix of another, e.g. `water_temp`/`water_temp_c`
+# -- which is also why every pattern carries a trailing suffix.)
+MULTIFILE_TARGET_VERBS: tuple[str, ...] = (
+    "resolve", "compute", "evaluate", "derive", "assemble",
+)
+MULTIFILE_SIBLING_VERBS: tuple[str, ...] = (
+    "summarize", "archive", "mirror", "rotate", "digest",
+)
+
 
 def all_wordlist_tokens() -> frozenset[str]:
     """Every single-token word this module contributes to template
@@ -235,6 +252,7 @@ def all_wordlist_tokens() -> frozenset[str]:
     for pool in (
         VALUE_HOLDER_NAMES, INDEX_VAR_NAMES, FLAG_NAMES, MULTIPLIER_LABELS,
         DICT_KEY_POOL, PORT_KEY_NAMES, HOST_KEY_NAMES,
+        MULTIFILE_TARGET_VERBS, MULTIFILE_SIBLING_VERBS,
     ):
         tokens.update(entry.lower() for entry in pool)
 

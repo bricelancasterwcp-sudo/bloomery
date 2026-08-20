@@ -23,12 +23,42 @@ CHECK_INSTRUCTION = "Check first, and only patch if it is genuinely wrong; then 
 MIN_TARGET_LINES = 5
 MAX_TARGET_LINES = 60
 
+# Turn 3 (task-7 brief; turn-3 design doc §2's "find/run enter through
+# repair ideals"): a repair task now declares WHICH trajectory shape the
+# tool should render for it. `PLAIN` is turn 1's read -> patch -> done and
+# is the default, so every pre-turn-3 construction site keeps producing
+# byte-identical tasks. The other two each add one real executor step:
+# `FIND` opens with a search across a multi-file workspace (find -> read ->
+# patch -> done) and `RUN` verifies its own patch before finishing (read ->
+# patch -> run -> done).
+PLAIN_TRAJECTORY = "plain"
+FIND_TRAJECTORY = "find"
+RUN_TRAJECTORY = "run"
+TRAJECTORIES = (PLAIN_TRAJECTORY, FIND_TRAJECTORY, RUN_TRAJECTORY)
+
 
 class Task(NamedTuple):
     """One generated task. `files` always contains at least `target`;
     template families that plant a companion (non-target) file for
-    realism add it here too. Immutable — `_replace(...)` builds a
-    modified copy rather than mutating in place."""
+    realism add it here too, and a find-shaped family plants 2-4 of them.
+    Immutable — `_replace(...)` builds a modified copy rather than
+    mutating in place.
+
+    The four trailing fields are turn 3's, all defaulted so the eight
+    positional arguments every turn-1/turn-2 template already passes keep
+    building a plain task:
+
+    - `trajectory` selects the shape (see `TRAJECTORIES`) and is the ONLY
+      discriminator — `find_pattern`/`run_argv` are read solely for the
+      shape that owns them, so a stray value on the wrong shape can never
+      quietly change what gets rendered.
+    - `find_pattern` is the regex the find-shaped ideal searches with; it
+      must occur in the target and in NO sibling (`validate_task`), or the
+      opening `find` would not identify the file to read.
+    - `run_argv`/`commands` are the verification the run-verified ideal
+      executes and the grant prefixes that permit it — the same
+      `commands` shape a fixture's grant carries, so `validate_task` can
+      apply the real `Grant`'s allowlist rule before the tool ever runs."""
 
     name: str
     lens: str  # "python" | "plaintext"
@@ -38,13 +68,81 @@ class Task(NamedTuple):
     search: str
     replace: str
     summary: str
+    trajectory: str = PLAIN_TRAJECTORY  # one of TRAJECTORIES
+    find_pattern: str = ""
+    run_argv: tuple[str, ...] = ()
+    commands: tuple[tuple[str, ...], ...] = ()
+
+
+def _find_shape_violations(task: Task, contents: str) -> list[str]:
+    """The find-shaped branch's own rules. A find-shaped ideal's opening
+    move is a SEARCH: the goal must therefore not hand the model the
+    filename (the plain shape's rule inverted — with the name in the goal
+    there is nothing to search for), and the pattern must single out the
+    target, since a pattern that also hits a sibling teaches the model to
+    read whichever file the walk happened to list first."""
+    violations: list[str] = []
+
+    if task.target in task.goal:
+        violations.append(
+            f"find-shaped goal names the target filename {task.target!r} -- a find-shaped task's "
+            f"goal must name the SYMPTOM, never the file, or there is nothing to find"
+        )
+
+    if not task.find_pattern:
+        violations.append("find-shaped task has an empty find_pattern")
+        return violations
+
+    if task.find_pattern not in contents:
+        violations.append(f"find_pattern {task.find_pattern!r} does not occur in the target's contents")
+
+    also_in = [
+        path
+        for path in sorted(task.files)
+        if path != task.target and task.find_pattern in task.files[path]
+    ]
+    if also_in:
+        violations.append(
+            f"find_pattern {task.find_pattern!r} also occurs in sibling file(s) {also_in} -- "
+            f"the find must single out the target"
+        )
+
+    return violations
+
+
+def _run_shape_violations(task: Task) -> list[str]:
+    """The run-verified branch's own rule: a non-empty `run_argv` that
+    some granted prefix in `commands` covers, element-wise — the exact
+    check `bloomery_core::grant::command::check_command` applies at render
+    time. Empty prefixes are skipped rather than matched: `Grant`'s wire
+    parser rejects them, and an empty prefix here would silently grant
+    every possible argv, which is the one way this rule could pass
+    vacuously."""
+    if not task.run_argv:
+        return ["run-verified task has an empty run_argv"]
+
+    granted = [prefix for prefix in task.commands if prefix]
+    if not any(tuple(task.run_argv[: len(prefix)]) == tuple(prefix) for prefix in granted):
+        return [
+            f"run_argv {list(task.run_argv)} does not start with any granted command prefix "
+            f"{[list(prefix) for prefix in granted]} -- the real Grant would refuse to run it"
+        ]
+    return []
 
 
 def validate_task(task: Task) -> list[str]:
-    """Mirrors codec-tasks-v1's own validator (brief rule 2). Returns a
-    list of human-readable violations; empty means the task is
-    structurally valid."""
+    """Mirrors codec-tasks-v1's own validator (brief rule 2), branching on
+    `task.trajectory` for turn 3's two new shapes. Returns a list of
+    human-readable violations; empty means the task is structurally valid.
+
+    Every rule below is shared by all three shapes EXCEPT the goal's
+    relationship to the target filename, which the find shape inverts (see
+    `_find_shape_violations`), plus each new shape's own extra rules. A
+    plain task therefore takes byte-identical rules to turn 1's."""
     violations: list[str] = []
+
+    if task.trajectory not in TRAJECTORIES:
+        violations.append(f"unknown trajectory {task.trajectory!r}, expected one of {TRAJECTORIES}")
 
     if task.target not in task.files:
         violations.append(f"target {task.target!r} is not among files {sorted(task.files)}")
@@ -55,8 +153,13 @@ def validate_task(task: Task) -> list[str]:
     if occurrences != 1:
         violations.append(f"search must appear exactly once in target, found {occurrences} time(s)")
 
-    if task.target not in task.goal:
+    if task.trajectory == FIND_TRAJECTORY:
+        violations.extend(_find_shape_violations(task, contents))
+    elif task.target not in task.goal:
         violations.append(f"goal does not contain the target filename {task.target!r}")
+
+    if task.trajectory == RUN_TRAJECTORY:
+        violations.extend(_run_shape_violations(task))
 
     if not task.goal.endswith(DONE_INSTRUCTION):
         violations.append(f"goal does not end with the exact instruction {DONE_INSTRUCTION!r}")
