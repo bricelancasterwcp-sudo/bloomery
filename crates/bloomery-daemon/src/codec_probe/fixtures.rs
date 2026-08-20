@@ -223,6 +223,35 @@ pub fn shipped_fixture_set_v2_mixed() -> Result<FixtureSet, String> {
     parse_fixture_set(include_str!("../../fixtures/codec-tasks-v2-mixed.toml"))
 }
 
+/// The name `boot::run_boot_g5_probe` checks the parsed v3 mixed set
+/// against while this name is what [`shipped_fixture_set_v3_mixed`] parses:
+/// flywheel turn-3 Task 3 ships the file as a placeholder (same mechanism
+/// [`V2_MIXED_PLACEHOLDER_SET_NAME`] used during v2's own placeholder era,
+/// reused rather than redesigned) and Task 8 lands the real, frozen
+/// 32-fixture content and drops this suffix — see that function's doc
+/// comment.
+pub const V3_MIXED_PLACEHOLDER_SET_NAME: &str = "codec-tasks-v3-mixed-PLACEHOLDER";
+
+/// Parses the flywheel turn-3 G5 mixed fixture set embedded at
+/// `fixtures/codec-tasks-v3-mixed.toml` (design doc §3: 16
+/// `expect="patch"` + 16 `expect="refuse"`, both lenses in both classes,
+/// held out from every training corpus).
+///
+/// **Task 3 ships this file as a MINIMAL VALID PLACEHOLDER** (2 fixtures — 1
+/// patch, 1 refuse — `set = "codec-tasks-v3-mixed-PLACEHOLDER"`), the same
+/// smaller-diff choice Task 2 made for `codec-tasks-v2-mixed` before it was
+/// frozen: it lets `boot::run_boot_g5_probe`'s call site swap to v3 now,
+/// with the boot path's own placeholder-name check
+/// ([`V3_MIXED_PLACEHOLDER_SET_NAME`]) refusing to take a measurement
+/// against it in the meantime — rather than `cfg(test)`-gating this
+/// function, which would leave the production boot path with nothing to
+/// call at all. Task 8 overwrites this file's CONTENT in place with the
+/// real, frozen set (`set = "codec-tasks-v3-mixed"`, no suffix) — same
+/// path, same function signature, so no caller changes when that lands.
+pub fn shipped_fixture_set_v3_mixed() -> Result<FixtureSet, String> {
+    parse_fixture_set(include_str!("../../fixtures/codec-tasks-v3-mixed.toml"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

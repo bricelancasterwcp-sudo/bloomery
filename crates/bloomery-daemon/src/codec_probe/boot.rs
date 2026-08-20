@@ -36,7 +36,7 @@ use std::sync::Mutex;
 use bloomery_substrate::Substrate;
 
 use super::fixtures::{
-    shipped_fixture_set, shipped_fixture_set_v2_mixed, V2_MIXED_PLACEHOLDER_SET_NAME,
+    shipped_fixture_set, shipped_fixture_set_v3_mixed, V3_MIXED_PLACEHOLDER_SET_NAME,
 };
 use super::{run_codec_probe, run_refusal_probe, ProbeAborted};
 use crate::pager::{Pager, PagerError};
@@ -183,7 +183,7 @@ pub fn g5_probe_aborted_reason(model: &str, reason: &str) -> String {
 ///
 /// The fixture set is parsed exactly once, before any model runs — same
 /// reasoning as [`run_boot_codec_probe`]'s own G4 parse. A still-placeholder
-/// set ([`V2_MIXED_PLACEHOLDER_SET_NAME`]) or an unparseable one is a
+/// set ([`V3_MIXED_PLACEHOLDER_SET_NAME`]) or an unparseable one is a
 /// build-time/authoring concern, not a per-model measurement, so it is
 /// journaled once and every opted-in model is skipped entirely — never
 /// scored against fixtures that are not the real instrument.
@@ -200,11 +200,11 @@ pub fn run_boot_g5_probe<S: Substrate + Send + 'static>(
     if g5_models.is_empty() {
         return Ok(());
     }
-    let set = match shipped_fixture_set_v2_mixed() {
+    let set = match shipped_fixture_set_v3_mixed() {
         Ok(set) => set,
         Err(e) => return journal_degraded(pager, fixture_set_unparseable_reason(&e)),
     };
-    if set.set == V2_MIXED_PLACEHOLDER_SET_NAME {
+    if set.set == V3_MIXED_PLACEHOLDER_SET_NAME {
         return journal_degraded(pager, g5_placeholder_skip_reason(&set.set));
     }
     // A distinct scratch subtree from G4's: the two engines' fixture NAMES
