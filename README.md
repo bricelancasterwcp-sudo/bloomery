@@ -88,15 +88,28 @@ semantic store, appliance boot) is not built. See
   time, no queue. **Advisory**: nothing blocks and nothing auto-swaps — the
   verdict is evidence, journaled, and config stays the operator's. The whole
   flow is driven in the suite through injected probe and cover seams (no
-  python, no assay, no GPU) — but **not yet exercised live**: there is no GPU
-  acceptance run behind this one as of 2026-08-19.
+  python, no assay, no GPU), and **live-verified end-to-end 2026-08-20**: a
+  real candidate reached a real `covered` verdict against the standing
+  baseline —
+  [the evidence](docs/superpowers/evidence/2026-08-20-swap-candidate-live-2.md).
+  **On a tier where the candidate cannot fit beside the resident model,
+  unload first.** The pager charges every loaded model's weights to one
+  budget and reclaims only agents' KV, so the candidate's probe requests are
+  refused (`503 residency_refused` on `/v1`) and the job lands as an `infra:`
+  report rather than a verdict. `POST /models/{m}/unload`, then the
+  swap-candidate POST, is the operator flow — measured live, same evidence
+  doc.
 * **Two HTTP surfaces.** A native API (`/agents`, `/agents/{id}/infer`,
   `/suspend`, `/resume`, `/models/{m}/unload`, `/models/{m}/bless`,
   `/models/{m}/unblock`, `POST`/`GET /models/{m}/swap-candidate`, `/status`)
   and an OpenAI-compatible shim (`GET /v1/models`, `POST
   /v1/chat/completions`).
 * **A journal you can replay.** Every boot writes `boot-<ts>.jsonl`; every
-  admission, decision, paging op, refusal and degradation is a line in it. The
+  admission, decision, paging op, refusal and degradation is a line in it, and
+  every row carries its writer's wall-clock stamp (`epoch_ms`) so a row can be
+  correlated with clocks *outside* the journal — GPU sample logs, daemon
+  stderr, an operator's notes. (Rows written before 2026-08-20 predate the
+  stamp; they replay unchanged.) The
   G2 numbers above are computed from nothing else — see
   [the evidence](docs/superpowers/evidence/2026-08-14-g2-agent-switch.md), whose
   journals are committed beside it.
