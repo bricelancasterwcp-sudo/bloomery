@@ -36,8 +36,9 @@ pub fn cover_argv(floor: &Path, candidate: &Path) -> Vec<String> {
     .collect()
 }
 
-/// What one cover run said. assay documents exactly 0, 1, 2 and 3 for
-/// `cover`; any other code is a tool this daemon does not understand.
+/// What one cover run said. assay ≥ 0.13.0 documents exactly 0, 1, 2 and 3
+/// for `cover` (the seam spec §3's contract); any other code is a tool this
+/// daemon does not understand.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoverOutcome {
     /// Exit 0: every cell the floor measured, the candidate provides
@@ -47,7 +48,20 @@ pub enum CoverOutcome {
     NotCovered,
     /// Exit 2: cover refused the pair (hardware class or instrument
     /// mismatch). Never a pass.
-    Refused { exit: i32 },
+    ///
+    /// `stderr` is assay's own words, trimmed, carried for the operator the
+    /// way [`crate::drift::with_stderr`] carries them into an `Infra` detail:
+    /// **operator detail, NEVER consulted for the verdict** — the verdict is
+    /// the exit code and nothing else. Empty is fine and expected on a
+    /// genuine refusal.
+    ///
+    /// It rides along because exit 2 is also what `argparse` returns for
+    /// `invalid choice: 'cover'` — an assay too old to have the subcommand
+    /// (anything < 0.13.0 under the PYTHONPATH pin) refuses in a way that is
+    /// indistinguishable from a real refusal by code alone. Discarding the
+    /// one sentence that says "this tool has no cover" would let a stale
+    /// install masquerade as a considered verdict about the candidate.
+    Refused { exit: i32, stderr: String },
     /// Exit 3: a floor cell the candidate did not measure. Never a
     /// pass — the unmeasured cell may hide the regression the check
     /// exists to catch.
@@ -127,8 +141,9 @@ impl CoverGate {
     /// exit code said.
     ///
     /// assay's prose is never parsed for a verdict — it rides along in
-    /// [`CoverOutcome::Infra`] details for the operator and nowhere else.
-    /// The four documented codes each get a name, and everything else is
+    /// [`CoverOutcome::Infra`] details and [`CoverOutcome::Refused`]'s
+    /// `stderr` for the operator, and nowhere else. The four codes assay
+    /// ≥ 0.13.0 documents each get a name, and everything else is
     /// infrastructure: a code this daemon does not understand cannot be
     /// resolved into "covered" or "not covered" without inventing an answer,
     /// and the safe-looking guess (treat it as a failure) is just as much an
@@ -152,7 +167,16 @@ impl CoverGate {
         match output.status.code() {
             Some(0) => reading(CoverOutcome::Covered, Some(0)),
             Some(1) => reading(CoverOutcome::NotCovered, Some(1)),
-            Some(2) => reading(CoverOutcome::Refused { exit: 2 }, Some(2)),
+            Some(2) => reading(
+                CoverOutcome::Refused {
+                    exit: 2,
+                    // The same trimmed stderr the Infra arms append: on a
+                    // genuine refusal it is assay's reason, and on a stale
+                    // assay it is argparse saying `cover` does not exist.
+                    stderr: stderr.clone(),
+                },
+                Some(2),
+            ),
             Some(3) => reading(CoverOutcome::Incomplete, Some(3)),
             Some(n) => reading(
                 CoverOutcome::Infra {

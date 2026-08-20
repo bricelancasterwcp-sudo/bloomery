@@ -119,7 +119,33 @@ fn exit_one_is_not_covered() {
 fn exit_two_is_refused_and_never_a_pass() {
     let (gate, _calls) = gate_answering(exited(2));
     let reading = gate.check(Path::new("f"), Path::new("c"));
-    assert_eq!(reading.outcome, CoverOutcome::Refused { exit: 2 });
+    assert_eq!(
+        reading.outcome,
+        CoverOutcome::Refused {
+            exit: 2,
+            // A refusal that said nothing carries nothing: the empty string
+            // is the expected shape, not a missing field.
+            stderr: String::new(),
+        }
+    );
+}
+
+/// An assay too old to have the subcommand (anything < 0.13.0 under the
+/// PYTHONPATH pin) makes `argparse` exit 2 with `invalid choice: 'cover'` —
+/// byte-identical, by exit code alone, to a considered refusal about the
+/// candidate. Carrying assay's sentence is the only thing that lets an
+/// operator tell "your floor and candidate disagree on hardware class" from
+/// "the tool you invoked has no cover command".
+#[test]
+fn a_missing_cover_subcommand_reads_refused_with_argparses_words() {
+    let (gate, _calls) = gate_saying(exited(2), "invalid choice: 'cover'");
+    match gate.check(Path::new("f"), Path::new("c")).outcome {
+        CoverOutcome::Refused { exit, stderr } => {
+            assert_eq!(exit, 2);
+            assert!(stderr.contains("invalid choice"), "{stderr}");
+        }
+        other => panic!("expected Refused, got {other:?}"),
+    }
 }
 
 #[test]
@@ -142,6 +168,45 @@ fn an_undocumented_exit_is_infrastructure_not_a_verdict() {
         }
         other => panic!("expected Infra, got {other:?}"),
     }
+}
+
+/// Mirrors `drift_test.rs::a_spawn_failure_is_infra_naming_the_command` for
+/// this gate: a runner that never reached a child at all must name what it
+/// tried to run, and carry the OS's own words — nothing downstream can
+/// reconstruct either from an outcome that only said "infrastructure".
+#[test]
+fn a_spawn_failure_is_infra_naming_the_command() {
+    let gate = CoverGate::with_runner(Box::new(|_program, _args| {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no such file or directory",
+        ))
+    }));
+
+    let reading = gate.check(Path::new("/d/floor.json"), Path::new("/d/cand.json"));
+
+    match &reading.outcome {
+        CoverOutcome::Infra { detail } => {
+            assert!(
+                detail.contains("python3"),
+                "the interpreter must be named: {detail:?}"
+            );
+            assert!(
+                detail.contains("assay") && detail.contains("cover"),
+                "the failed command must be named: {detail:?}"
+            );
+            assert!(
+                detail.contains("/d/floor.json") && detail.contains("/d/cand.json"),
+                "the argv must be named: {detail:?}"
+            );
+            assert!(
+                detail.contains("no such file"),
+                "the OS's own words must survive: {detail:?}"
+            );
+        }
+        other => panic!("expected Infra for a spawn failure, got {other:?}"),
+    }
+    assert_eq!(reading.exit_code, None);
 }
 
 #[test]
