@@ -22,7 +22,7 @@ PATCH_CODEC = "search_replace"
 
 
 def refusal_family_functions(count: int) -> list:
-    """The refusal analog of `generate._family_functions`: round-robins
+    """The refusal analog of `generate_slices.family_functions`: round-robins
     the six (family, lens) groups (`templates_refusal.GROUP_CYCLE_ORDER`)
     so a run of N refusal tasks splits as evenly as possible across all
     three families and both lenses, cycling each group's own template
@@ -111,7 +111,7 @@ def refusal_row_meta(task_id: str, task: RefusalTask, pair_name: str) -> dict:
         "goal": task.goal,
         "target": task.target,
         "target_contents": target_contents,
-        # Same reason as `generate._row_meta`'s `files`: the post-hoc guard
+        # Same reason as `generate_request.row_meta`'s `files`: the post-hoc guard
         # screens every file. For a missing-target refusal this is the ONLY
         # way its real sibling files reach the guard at all — `target` is
         # by construction absent from `files`, so `target_contents` is "".

@@ -36,6 +36,30 @@ FIND_TRAJECTORY = "find"
 RUN_TRAJECTORY = "run"
 TRAJECTORIES = (PLAIN_TRAJECTORY, FIND_TRAJECTORY, RUN_TRAJECTORY)
 
+# The alphabet a `find_pattern` is allowed to use: identifier characters
+# and spaces, on ONE line.
+#
+# This is a validator rule, not a stylistic preference, and it is what
+# makes the other two find rules mean anything. `_find_shape_violations`
+# checks "occurs in the target" / "occurs in no sibling" with plain Python
+# SUBSTRING containment, but `exec_find` compiles the pattern with
+# `Regex::new` and matches it LINE BY LINE. Substring containment and
+# regex matching coincide only for a single-line literal:
+#
+# - a metacharacter (`.`, `|`, `[`, `(`, `*`, ...) makes the regex match a
+#   LARGER language than the literal, so a pattern the validator cleared as
+#   "in no sibling" could still hit a sibling at render time -- and the
+#   tool only rejects a find matching ZERO files, so a wrong-file hit lands
+#   silently in trained text;
+# - a newline makes the regex match a SMALLER language (nothing, since the
+#   walk matches per line), so the validator would clear a pattern that can
+#   never find anything.
+#
+# Enforcing it here rather than only in a per-family test means the
+# property holds for every family that will ever exist, including one
+# written after this comment.
+FIND_PATTERN_LITERAL_RE = re.compile(r"\A[A-Za-z0-9_ ]+\Z")
+
 
 class Task(NamedTuple):
     """One generated task. `files` always contains at least `target`;
@@ -93,6 +117,14 @@ def _find_shape_violations(task: Task, contents: str) -> list[str]:
         violations.append("find-shaped task has an empty find_pattern")
         return violations
 
+    if not FIND_PATTERN_LITERAL_RE.match(task.find_pattern):
+        violations.append(
+            f"find_pattern {task.find_pattern!r} is not a single-line regex literal -- it must "
+            f"match {FIND_PATTERN_LITERAL_RE.pattern} (see the constant's own note: the two "
+            f"uniqueness checks below are SUBSTRING checks, and they only imply anything about "
+            f"what exec_find's REGEX will match when the pattern is a single-line literal)"
+        )
+
     if task.find_pattern not in contents:
         violations.append(f"find_pattern {task.find_pattern!r} does not occur in the target's contents")
 
@@ -112,12 +144,18 @@ def _find_shape_violations(task: Task, contents: str) -> list[str]:
 
 def _run_shape_violations(task: Task) -> list[str]:
     """The run-verified branch's own rule: a non-empty `run_argv` that
-    some granted prefix in `commands` covers, element-wise — the exact
-    check `bloomery_core::grant::command::check_command` applies at render
-    time. Empty prefixes are skipped rather than matched: `Grant`'s wire
-    parser rejects them, and an empty prefix here would silently grant
-    every possible argv, which is the one way this rule could pass
-    vacuously."""
+    some granted prefix in `commands` covers, element-wise — the same
+    match `bloomery_core::grant::command::check_command` applies at render
+    time, deliberately made STRICTER in one place.
+
+    The divergence: an EMPTY granted prefix is skipped here rather than
+    matched. `check_command` never sees one (`Grant`'s wire parser rejects
+    empty prefixes at construction, so the invariant holds by the time it
+    runs), but this validator reads `task.commands` straight off a
+    template, before any `Grant` exists. Treating an empty prefix as a
+    match would make it grant every possible argv — the one way this rule
+    could pass vacuously — so a task carrying one is refused here instead
+    of failing later at grant construction."""
     if not task.run_argv:
         return ["run-verified task has an empty run_argv"]
 

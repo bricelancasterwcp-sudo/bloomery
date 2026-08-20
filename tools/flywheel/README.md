@@ -23,10 +23,13 @@ patch landing; see `docs/superpowers/specs/2026-08-16-flywheel-14b-design.md`
 
 ```bash
 python3 -m tools.flywheel.factory.generate \
-  --seed 20260816 --count 1000 \
+  --seed 20260816 --count 999 \
   --tool target/release/flywheel-tool \
   --out corpus.jsonl --report fingerprint.json
 ```
+
+(`--count` a multiple of 3 splits the three trajectory shapes evenly —
+see the table below.)
 
 Each surviving task yields one JSONL line per pair, in the order its
 TRAJECTORY SHAPE renders them (turn 3; `generate_request.PAIR_NAMES`):
@@ -71,15 +74,21 @@ existed is treated as a legacy row and falls back to the target alone.
 ```json
 {
   "seed": 20260816,
-  "tasks_by_template": {"py_inverted_boolean": 75, "...": 0},
-  "tasks_by_lens": {"python": 599, "plaintext": 399},
+  "tasks_by_template": {"py_inverted_boolean": 26, "...": 0},
+  "tasks_by_lens": {"python": 735, "plaintext": 264},
   "tasks_by_trajectory": {"find": 333, "plain": 333, "run": 333},
-  "pairs": 2997,
-  "dedup_dropped": 1,
+  "pairs": 3663,
+  "dedup_dropped": 0,
   "corpus_sha256": "...",
   "val_split_ids": ["s20260816-000016", "..."]
 }
 ```
+
+Those are the real numbers a `--seed 20260816 --count 999` patch-only run
+produces. `tasks_by_lens` is python-heavy (735:264, not turn 1's 3:2)
+because the run-verified third of the slice is lens-py only — there is no
+plaintext verification to run — so the plain and find slices carry the
+whole plaintext share.
 
 `val_split_ids` (~5% of surviving task_ids, deterministic from seed) is
 loss-monitoring only — the training task must filter these task_ids out
@@ -102,6 +111,35 @@ Consequence: `--seed N` with the same `--count` twice produces a
 byte-identical `corpus.jsonl` and an identical `fingerprint.json`. This
 is a machine-checked property (`tests/test_generate.py`'s
 `DeterminismTest`), not just documentation.
+
+### One known exception: find-shaped rows carry a scratch path
+
+Turn 3's find shape has a **bounded** deviation from the rule above, and
+it only appears against the real binary (never the stub, which
+materializes nothing — which is why `DeterminismTest` cannot see it).
+
+`exec_find` renders each hit as `{canonicalized absolute path}:{lineno}:
+{line}`, and the path is the throwaway scratch directory `flywheel-tool`
+names with its own PID. So the three post-`find` rows of every
+find-shaped task — `read`, `patch`, `done`, the ones whose prompt carries
+the find observation in their transcript — differ byte-for-byte between
+two same-seed runs, and `corpus_sha256` differs with them. Measured on a
+999+300 run: exactly 999 of 4263 rows (= 333 find tasks × 3), and
+**nothing else**.
+
+`tests/test_generate_trajectories.py`'s `RealToolDeterminismBoundaryTest`
+pins the exception at exactly that size: the two corpora must be
+byte-identical once the scratch path is normalized, and plain/run rows
+must be byte-identical without any normalization. If anything else ever
+becomes nondeterministic, that test fails rather than this paragraph
+quietly becoming a licence.
+
+This is a consequence of the observation format the turn-3 gate protocol
+recorded (`docs/superpowers/evidence/2026-08-20-g5v3-protocol.md` §6.2 —
+`find` observations are *format*-faithful, not byte-faithful). Making the
+corpus fully byte-reproducible would mean rendering find hits relative to
+the scratch root in `flywheel_tool/render.rs`, i.e. changing an
+already-recorded observation format — a decision above this package.
 
 ## Verify contamination
 
@@ -139,7 +177,8 @@ factory/
   generate_request.py   The wire request + corpus row `meta` format
   toolclient.py         One long-lived flywheel-tool subprocess wrapper
 tests/
-  test_templates.py      rules 1-2 + the validator's per-shape branches
+  test_templates.py      rules 1-2 (registries, vocabulary, shared rules)
+  test_task_validation.py      validate_task's per-shape branches
   test_templates_multifile.py  the find-shaped families + the run wrappers
   test_generate.py       rules 3-6 (+ one real-binary integration test)
   test_generate_trajectories.py  the three-shape slice cycle, end to end

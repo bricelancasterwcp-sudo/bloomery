@@ -260,7 +260,8 @@ class ContaminationGuardStillCatchesPlantedViolationTest(unittest.TestCase):
 
 class CorpusRowsCarryEveryTaskFileTest(unittest.TestCase):
     """The post-hoc guard can only screen a task's SIBLING files if the
-    corpus row exposes them: `_row_meta`/`refusal_row_meta` write a `files`
+    corpus row exposes them: `generate_request.row_meta`/`refusal_row_meta`
+    write a `files`
     map (path -> contents) covering every file the task carries. Without it
     the CLI falls back to target-only (`_corpus_tasks_from_rows`'s legacy
     branch) and a planted sibling would be invisible post-hoc."""

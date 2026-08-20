@@ -14,6 +14,7 @@ imports the shared `STUB_TOOL`/`REAL_TOOL`/`run_generate` helpers from it.
 """
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -245,6 +246,97 @@ class RealToolTrajectoryShapesTest(unittest.TestCase):
 
     def test_the_fingerprint_records_the_slice_counts(self):
         self.assertEqual(self.fingerprint["tasks_by_trajectory"], {"find": 4, "plain": 4, "run": 4})
+
+
+# The scratch directory `flywheel-tool` materializes per request, as it
+# appears inside a real `exec_find` hit line. `Scratch::materialize` names
+# it `flywheel-tool-{tag}-{pid}-{counter}`, so the bytes differ between two
+# runs of the binary.
+_SCRATCH_PATH_RE = re.compile(r"/tmp/flywheel-tool-[a-z-]+-\d+-\d+/")
+
+
+@unittest.skipUnless(
+    REAL_TOOL is not None,
+    "flywheel-tool binary not built; run cargo build --release -p bloomery-daemon --bin flywheel-tool",
+)
+class RealToolDeterminismBoundaryTest(unittest.TestCase):
+    """**A known, bounded deviation from the determinism law** (design spec
+    rule 3: same seed -> byte-identical corpus), introduced by the find
+    shape and pinned here rather than left to be discovered.
+
+    `exec_find` renders each hit as `{canonicalized absolute path}:{lineno}:
+    {line}`, and the path it canonicalizes is the throwaway scratch dir the
+    tool names with its own PID. So the three post-`find` rows of every
+    find-shaped task (`read`/`patch`/`done` — the ones whose prompt carries
+    the find observation in their transcript) contain bytes that change
+    between two runs of the binary at the SAME seed. `corpus_sha256`
+    changes with them.
+
+    `DeterminismTest` in `test_generate.py` cannot see this: it drives the
+    stub, which materializes nothing. This test drives the REAL binary and
+    states the true property — everything else is byte-identical, and the
+    ONLY thing that varies is the scratch path. If any other
+    nondeterminism ever enters the factory, the normalized comparison below
+    fails and this stops being a bounded exception.
+
+    The tool-side fix (render find hits relative to the scratch root) lives
+    in `flywheel_tool/render.rs` and changes an observation format the
+    turn-3 gate protocol already recorded, so it is a controller decision,
+    not something to take silently here."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory()
+        tmp = Path(cls._tmp.name)
+        cls.corpora = []
+        for tag in ("a", "b"):
+            out, report = tmp / f"{tag}.jsonl", tmp / f"{tag}.json"
+            result = run_generate(
+                ["--seed", "31", "--count", "6", "--tool", str(REAL_TOOL),
+                 "--out", str(out), "--report", str(report)]
+            )
+            assert result.returncode == 0, result.stderr
+            cls.corpora.append(
+                [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+            )
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
+    @staticmethod
+    def _normalized(row):
+        return {
+            **row,
+            "prompt": _SCRATCH_PATH_RE.sub("<SCRATCH>/", row["prompt"]),
+            "completion": _SCRATCH_PATH_RE.sub("<SCRATCH>/", row["completion"]),
+        }
+
+    def test_only_find_shaped_post_find_rows_differ_between_identical_seeds(self):
+        a, b = self.corpora
+        self.assertEqual(len(a), len(b))
+        differing = [x for x, y in zip(a, b) if x != y]
+        self.assertTrue(differing, "expected the scratch-path deviation; did the tool change?")
+        self.assertEqual(
+            sorted({(r["meta"]["trajectory"], r["meta"]["pair"]) for r in differing}),
+            [("find", "done"), ("find", "patch"), ("find", "read")],
+            "something OTHER than the find observation's scratch path is nondeterministic",
+        )
+
+    def test_the_corpora_are_byte_identical_once_the_scratch_path_is_normalized(self):
+        a, b = self.corpora
+        self.assertEqual(
+            [self._normalized(r) for r in a],
+            [self._normalized(r) for r in b],
+            "a same-seed difference survives scratch-path normalization -- the determinism law "
+            "is broken by something other than the known, bounded exec_find path exception",
+        )
+
+    def test_plain_and_run_shapes_are_still_byte_identical_across_runs(self):
+        a, b = self.corpora
+        for x, y in zip(a, b):
+            if x["meta"]["trajectory"] != "find":
+                self.assertEqual(x, y, f"{x['meta']['task_id']}/{x['meta']['pair']}")
 
 
 if __name__ == "__main__":

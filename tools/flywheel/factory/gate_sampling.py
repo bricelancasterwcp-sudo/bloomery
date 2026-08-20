@@ -135,7 +135,7 @@ def draw_all(
     fail: Callable[[str], None],
 ) -> tuple[list[T], dict[str, int], int]:
     """Runs one `RejectionSampler` across `fns` (one family function per
-    requested task slot, in order -- `generate._family_functions` /
+    requested task slot, in order -- `generate_slices.family_functions` /
     `generate_refusal.refusal_family_functions`; the slot's family
     assignment never changes on a redraw, only its rng-derived content
     does). Returns (accepted tasks in slot order, gate_rejections by

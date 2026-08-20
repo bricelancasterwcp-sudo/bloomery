@@ -12,9 +12,11 @@ ideals"):
   same goals, plus `run_argv`/`commands` for a `py_compile` verification.
 
 Split out of `test_templates.py` (which stays the home of the registry
-counts, the word-list disjointness proof, and the validator's own
-mutation pins) to keep both files under the 400-line house cap — the same
-reasoning turn 1 used for `templates_python.py`/`templates_text.py`.
+counts and the word-list disjointness proof) to keep both files under the
+400-line house cap — the same reasoning turn 1 used for
+`templates_python.py`/`templates_text.py`. The validator's own per-shape
+mutation pins are a third file, `test_task_validation.py`; this one proves
+the shipped families SATISFY those rules, seed after seed.
 """
 
 import random
@@ -26,14 +28,13 @@ from tools.flywheel.factory import templates
 from tools.flywheel.factory.contamination import GATE_VOCABULARY
 from tools.flywheel.factory.wordlists import MULTIFILE_SIBLING_VERBS, MULTIFILE_TARGET_VERBS
 
-# `exec_find` compiles `find_pattern` as a REGEX (`task/exec.rs`'s
-# `Regex::new(pattern)`), so a pattern carrying a metacharacter would
-# either fail to compile (a hard tool error) or match something other than
-# the literal text the validator checked for. Every pattern this factory
-# emits must therefore be regex-literal: identifier characters and spaces
-# only, which is also exactly the alphabet a `def name`/`key = ` marker
-# needs.
-_REGEX_LITERAL_RE = re.compile(r"\A[A-Za-z0-9_ ]+\Z")
+# The regex-literal alphabet is the VALIDATOR's rule
+# (`task.FIND_PATTERN_LITERAL_RE`, enforced in `_find_shape_violations` and
+# mutation-pinned in `test_task_validation.py`), reused here rather than
+# re-declared: a second copy could drift from the rule the factory
+# actually applies, and then this per-family test would be proving
+# something no longer enforced.
+_REGEX_LITERAL_RE = task_mod.FIND_PATTERN_LITERAL_RE
 
 
 def _siblings(task):

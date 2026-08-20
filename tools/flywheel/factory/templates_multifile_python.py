@@ -20,10 +20,13 @@ suffix additionally keeps a family's pattern from matching a sibling
 family's target if the two ever share a workspace.
 
 The pattern is also kept regex-literal (identifier characters and spaces
-only): `exec_find` compiles it with `Regex::new`, so a metacharacter would
-either fail to compile or match something other than the literal text
-`validate_task` checked for. `test_templates_multifile.py` pins both
-properties across every draw.
+only, on one line): `exec_find` compiles it with `Regex::new` and matches
+line by line, so a metacharacter would match a LARGER language than the
+literal `validate_task` checked for -- possibly a sibling -- and a newline
+would match nothing at all. That is a VALIDATOR rule
+(`task.FIND_PATTERN_LITERAL_RE`), not just a convention these families
+happen to follow, so it holds for any family added later;
+`test_templates_multifile.py` additionally pins it across every draw here.
 
 Same determinism contract as `templates_python.py`: pure `(rng) -> Task`
 functions, every choice from `random.Random` or plain tuples, no `set`
