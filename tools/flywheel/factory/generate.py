@@ -15,9 +15,9 @@ determinism depends on a single deterministic sequence of draws):
    structurally validated immediately (rule 2) — a violation is a
    factory bug and aborts the run.
 1b. Generate `refusal_count` candidate REFUSE tasks (G5 design doc §5),
-    continuing the SAME `rng` stream, cycling the four (family, lens)
-    groups (`templates_refusal.GROUP_CYCLE_ORDER`) so both families and
-    both lenses stay represented — same "fail on structural violation"
+    continuing the SAME `rng` stream, cycling the six (family, lens)
+    groups (`templates_refusal.GROUP_CYCLE_ORDER`) so all three families
+    and both lenses stay represented — same "fail on structural violation"
     posture as patch tasks. `refusal_count` defaults to 0: omitting the
     flag reproduces turn-1 behavior byte-for-byte (no refusal generation
     code runs at all, so the rng stream driving the validation split

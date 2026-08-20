@@ -23,10 +23,12 @@ PATCH_CODEC = "search_replace"
 
 def refusal_family_functions(count: int) -> list:
     """The refusal analog of `generate._family_functions`: round-robins
-    the four (family, lens) groups (`templates_refusal.GROUP_CYCLE_ORDER`)
-    so a run of N refusal tasks splits as evenly as possible across both
-    families and both lenses, cycling each group's own template variants
-    in their sorted order."""
+    the six (family, lens) groups (`templates_refusal.GROUP_CYCLE_ORDER`)
+    so a run of N refusal tasks splits as evenly as possible across all
+    three families and both lenses, cycling each group's own template
+    variants in their sorted order. Reads the cycle order rather than
+    hardcoding a count, so turn 3's symptom-mismatch family needed no
+    change here."""
     group_indices = {name: 0 for name in templates_refusal.GROUP_CYCLE_ORDER}
     fns = []
     for i in range(count):

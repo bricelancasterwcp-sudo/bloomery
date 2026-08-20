@@ -26,6 +26,7 @@ from tools.flywheel.factory.task import (
     CHECK_INSTRUCTION,
     DEFECT_ABSENT,
     MISSING_TARGET,
+    REFUSAL_FAMILIES,
     REFUSAL_QUOTED_RE,
     RefusalTask,
     validate_refusal_task,
@@ -78,7 +79,9 @@ class RefusalTemplateShapeTest(unittest.TestCase):
             for seed in range(10):
                 task = fn(random.Random(seed))
                 self.assertIsInstance(task, RefusalTask, name)
-                self.assertIn(task.family, (DEFECT_ABSENT, MISSING_TARGET), name)
+                # Every registered family, not a hand-listed pair: turn 3
+                # adds symptom-mismatch to the same flat registry.
+                self.assertIn(task.family, REFUSAL_FAMILIES, name)
                 self.assertIn(task.lens, ("python", "plaintext"), name)
 
     def test_every_generated_refusal_task_is_structurally_valid(self):
