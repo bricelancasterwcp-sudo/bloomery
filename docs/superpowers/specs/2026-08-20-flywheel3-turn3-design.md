@@ -114,6 +114,23 @@ fixtures parse today. Any gap found in practice (e.g. grant plumbing for
 `run`-permitting fixtures) becomes its own reviewed task — named scope,
 never silent creep.
 
+> **Amendment (2026-08-20, recorded at planning, before implementation):**
+> the "expected nil" claim above did not survive the planning survey; per
+> this section's own escape clause the three gaps found are named scope:
+> (1) `Fixture` carries no command grants — `fixture_grant`
+> (`codec_probe/mod.rs:483-504`) hardcodes `"commands": []`, so a
+> run-granted fixture is inexpressible without a new optional field;
+> (2) G5's set selection is hardcoded — `boot.rs:203` calls
+> `shipped_fixture_set_v2_mixed()` literally, so running v3 requires
+> `shipped_fixture_set_v3_mixed()` plus the call-site swap and a v3
+> placeholder guard; (3) `flywheel-tool`'s wire shape (`TrajectoryRequest`)
+> carries a single target and no argv, so multi-file and run trajectories
+> need additive wire fields and handlers. Also recorded: §2's "byte-faithful"
+> for `find` means format-faithful (absolute-path embedding, see the v3
+> protocol doc), and the sibling-file contamination fast-follow is a
+> correctness precondition for multi-file tasks (sibling contents enter
+> rendered pairs), not post-hoc hygiene.
+
 ## 5. Pre-registration (committed BEFORE training)
 
 - **Baselines first**, measured before flywheel3 exists: **stock-14B**
