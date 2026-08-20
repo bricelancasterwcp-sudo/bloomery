@@ -282,9 +282,13 @@ pub enum Event {
     ///   documents `assay cover` was handed and the sha256 of each one's
     ///   **bytes** — so `sha256sum` on either path checks the row, and
     ///   `assay cover <floor_path> <candidate_profile_path>` re-runs exactly
-    ///   the comparison this row reports. `candidate_profile_sha` is `None`
-    ///   only when those bytes could not be re-read after the probe wrote
-    ///   them; `None`, never an empty string.
+    ///   the comparison this row reports — and keeps doing so, because the
+    ///   candidate's document is *retained content-named* (design §4 step 3)
+    ///   rather than left at the one staging path every candidate for this
+    ///   model would share, so a later job cannot overwrite the evidence an
+    ///   earlier row points at. `candidate_profile_sha` is `None` only when
+    ///   those bytes could not be re-read after they were retained; `None`,
+    ///   never an empty string.
     /// - `exit_code` is what `assay cover` reported, `None` when it never
     ///   answered (spawn failure, or a child killed by a signal, which leaves
     ///   no code at all). `None`, not `-1` and not `0`.

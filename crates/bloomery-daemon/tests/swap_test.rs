@@ -269,11 +269,23 @@ fn scratch(tag: &str) -> PathBuf {
     dir
 }
 
+/// The ceiling every fixture document reports unless a test needs two
+/// documents whose **bytes** differ.
+const DEFAULT_CEILING: u32 = 2048;
+
 /// A minimal but real assay profile document — the same shape `drift_test.rs`
 /// and `post_test.rs` feed their fake assay, so what parses there parses here.
 fn profile_doc(model: &str) -> String {
+    profile_doc_measuring(model, DEFAULT_CEILING)
+}
+
+/// The same document with its one non-identity number chosen by the caller.
+/// Two jobs whose documents differ in **bytes** retain under two different
+/// content names, which is what the retention pin needs — and they still agree
+/// on identity, which is what keeps `cover` willing to read them.
+fn profile_doc_measuring(model: &str, max_verified: u32) -> String {
     format!(
-        r#"{{"assay_profile_version":3,"probe_version":"0.4.1","model":{{"name":"{model}"}},"ceiling":{{"max_verified":2048}},"verdicts":{{}}}}"#
+        r#"{{"assay_profile_version":3,"probe_version":"0.4.1","model":{{"name":"{model}"}},"ceiling":{{"max_verified":{max_verified}}},"verdicts":{{}}}}"#
     )
 }
 
@@ -347,6 +359,15 @@ fn value_of(args: &[String], flag: &str) -> String {
 /// does. The same fixture as `drift_test.rs::scripted_probes`, with the
 /// document derived rather than supplied.
 fn scripted_probes(script: Vec<Result<(), i32>>) -> (PostRunner, Probes) {
+    scripted_probes_measuring(script, DEFAULT_CEILING)
+}
+
+/// [`scripted_probes`] whose written document reports `max_verified`, so two
+/// jobs in one test write bytes that differ.
+fn scripted_probes_measuring(
+    script: Vec<Result<(), i32>>,
+    max_verified: u32,
+) -> (PostRunner, Probes) {
     let seen: Probes = Probes::default();
     let sink = seen.clone();
     let runner = PostRunner::with_runner(Box::new(move |_py, args: &[String]| {
@@ -356,7 +377,7 @@ fn scripted_probes(script: Vec<Result<(), i32>>) -> (PostRunner, Probes) {
         sink.borrow_mut().push(out.clone());
         match step {
             Ok(()) => {
-                std::fs::write(&out, profile_doc(&model)).unwrap();
+                std::fs::write(&out, profile_doc_measuring(&model, max_verified)).unwrap();
                 Ok(output(exited(0), ""))
             }
             Err(code) => Ok(output(exited(code), &format!("cannot reach model {model}"))),
@@ -426,9 +447,30 @@ impl Job {
         std::fs::write(self.floor(), doc).unwrap();
     }
 
-    /// Where the candidate's own profile document is written.
-    fn candidate_profile(&self) -> PathBuf {
+    /// The one fixed path the candidate's probe writes to — POST's own
+    /// delete-before-probe path, shared by every candidate ever offered for
+    /// this model, which is exactly why the document does not stay here.
+    fn staging(&self) -> PathBuf {
         self.store.confirm_staging(&scratch_identity(MODEL))
+    }
+
+    /// The content-named documents retained for the candidate identity
+    /// (design §4 step 3: `{scratch}.transient-{sha8}.json`, beside the drift
+    /// transients), sorted. Found by reading the directory rather than by
+    /// re-deriving the name, so what this returns is what is really on disk.
+    fn retained_candidates(&self) -> Vec<PathBuf> {
+        let prefix = format!("{}.transient-", scratch_identity(MODEL));
+        let mut found: Vec<PathBuf> = std::fs::read_dir(self.store.root())
+            .expect("profiles dir")
+            .map(|entry| entry.expect("dir entry").path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with(&prefix) && n.ends_with(".json"))
+            })
+            .collect();
+        found.sort();
+        found
     }
 
     fn run(
@@ -510,11 +552,23 @@ fn a_covered_candidate_journals_the_verdict_with_digests() {
     job.run(&runner, &gate, &slot)
         .expect("the job records its result");
 
-    let candidate_profile = job.candidate_profile();
+    let staging = job.staging();
     assert_eq!(
         probes.borrow().as_slice(),
-        std::slice::from_ref(&candidate_profile),
-        "the candidate is probed exactly once, into its own document"
+        std::slice::from_ref(&staging),
+        "the candidate is probed exactly once, into its own staging document"
+    );
+    let retained = job.retained_candidates();
+    assert_eq!(
+        retained.len(),
+        1,
+        "the probed document is retained content-named: {retained:?}"
+    );
+    let candidate_profile = retained[0].clone();
+    assert!(
+        !staging.exists(),
+        "the document is moved to its content name, not copied — nothing is left \
+         at the shared staging path for the next job to overwrite"
     );
     let spawned: Vec<Vec<String>> = calls
         .borrow()
@@ -585,6 +639,66 @@ fn a_covered_candidate_journals_the_verdict_with_digests() {
             );
         }
         other => panic!("expected Done, got {other:?}"),
+    }
+}
+
+/// Design §4 step 3, and the promise the journal row makes: "anyone can re-run
+/// the identical `cover` from the row alone". That promise only holds if the
+/// document the row names outlives the next job — and every candidate offered
+/// for a model probes into the *same* staging path, which the next probe
+/// deletes before writing. So the document is retained content-named beside the
+/// drift transients, and two jobs leave two documents, each still checkable
+/// against the digest its own row recorded.
+#[test]
+fn a_retained_candidate_document_outlives_the_next_job() {
+    let job = job("retained");
+    job.seed_floor(&profile_doc(MODEL));
+    let (gate, _calls) = gate_answering(exited(0));
+
+    let (first_runner, _p) = scripted_probes(vec![Ok(())]);
+    job.run(&first_runner, &gate, &SwapSlot::default())
+        .expect("the first job records");
+    let (first_path, first_sha) = row_document(&job.swap_rows()[0]);
+    assert_eq!(job.sha_of(Path::new(&first_path)), first_sha);
+
+    // A second candidate for the same model, measuring differently — so its
+    // document differs in bytes, and therefore in content name.
+    let (second_runner, _p) = scripted_probes_measuring(vec![Ok(())], 4096);
+    job.run(&second_runner, &gate, &SwapSlot::default())
+        .expect("the second job records");
+
+    let rows = job.swap_rows();
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    let (second_path, second_sha) = row_document(&rows[1]);
+    assert_ne!(
+        second_path, first_path,
+        "two documents that differ in bytes are retained under two names"
+    );
+    assert_eq!(job.retained_candidates().len(), 2);
+    assert_eq!(
+        job.sha_of(Path::new(&first_path)),
+        first_sha,
+        "the FIRST row's document still checks out after a later job ran — the row is \
+         re-runnable, not merely re-runnable-until-next-time"
+    );
+    assert_eq!(job.sha_of(Path::new(&second_path)), second_sha);
+}
+
+/// A `SwapCandidate` row's `(candidate_profile_path, candidate_profile_sha)` —
+/// the pair that has to keep naming real bytes for the row to be evidence.
+fn row_document(row: &Event) -> (String, String) {
+    match row {
+        Event::SwapCandidate {
+            candidate_profile_path,
+            candidate_profile_sha,
+            ..
+        } => (
+            candidate_profile_path.clone(),
+            candidate_profile_sha
+                .clone()
+                .expect("a covered verdict digests the document it read"),
+        ),
+        other => panic!("expected SwapCandidate, got {other:?}"),
     }
 }
 
@@ -799,6 +913,55 @@ fn a_cover_that_cannot_run_is_a_row_naming_the_infrastructure_failure() {
         }
         other => panic!("expected SwapCandidate, got {other:?}"),
     }
+}
+
+/// The slot is released on **every** path this job returns through, the `Err`
+/// ones included. A worker that returned still holding it would leave this
+/// daemon answering `candidate_probe_in_progress` for a job nobody can see, for
+/// the life of the process — no restart-free way back.
+///
+/// Driven through the poisoned-pager failure: a modeled, named condition
+/// (`post::with_pager`), reached the same way `codec_probe_test.rs` reaches it,
+/// and the one `Err` return a test can produce without scripting the
+/// filesystem.
+#[test]
+fn an_err_return_still_releases_the_slot() {
+    let job = job("err-releases-slot");
+    job.seed_floor(&profile_doc(MODEL));
+    let (runner, probes) = scripted_probes(vec![Ok(())]);
+    let (gate, calls) = gate_answering(exited(0));
+    let slot = SwapSlot::default();
+    slot.try_start(MODEL, &job.candidate)
+        .expect("the slot is idle");
+
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = job.pager.lock().unwrap();
+        panic!("poison the pager lock");
+    }));
+    assert!(job.pager.is_poisoned());
+
+    let err = job
+        .run(&runner, &gate, &slot)
+        .expect_err("a poisoned pager aborts the job");
+    assert!(err.to_string().contains("poisoned"), "{err}");
+
+    assert!(probes.borrow().is_empty(), "nothing is probed");
+    assert!(calls.borrow().is_empty(), "nothing is covered");
+    match slot.snapshot() {
+        SwapState::Done { report, .. } => {
+            assert!(
+                report.outcome.starts_with("infra: "),
+                "the failure is named, and it is not a verdict: {report:?}"
+            );
+            assert_eq!(report.exit_code, None);
+        }
+        other => panic!("the slot must not still be Running: {other:?}"),
+    }
+    assert!(
+        slot.try_start(MODEL, &job.candidate).is_ok(),
+        "the next candidate is admitted — one failed job does not wedge the slot for the \
+         life of the process"
+    );
 }
 
 /// Every failure named (spec §7), including the ones that happen before

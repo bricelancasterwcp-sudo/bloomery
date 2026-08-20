@@ -14,7 +14,7 @@ use bloomery_substrate::Substrate;
 
 use crate::agents::model_digest;
 use crate::config::Tier;
-use crate::drift::{with_stderr, ProfileStore, DIFF_TIMEOUT_SECS};
+use crate::drift::{with_stderr, ProfileStore, DIFF_TIMEOUT_SECS, MAX_TRANSIENTS};
 use crate::pager::{Pager, PagerError};
 use crate::post::{with_pager, CommandRunner, PostRunner};
 
@@ -295,15 +295,16 @@ pub const NOTE_HANDOVER: &str = "on swap: edit config, restart; the next boot re
 /// whatever the verdict, because both gaps are true of every candidate.
 const NOTES: [&str; 2] = [NOTE_TASK_GATES, NOTE_HANDOVER];
 
-/// What a digest field carries in a *report* when the bytes it would describe
-/// could not be read at all.
+/// What a digest field carries in a *report* when this job never got a digest
+/// to put there — the bytes could not be read, or the job broke before it had
+/// read them.
 ///
 /// The same named placeholder `drift::watch`'s `reference_identity` uses, and
 /// for the same reason: an empty string reads as "no digest was needed" and a
 /// zero digest reads as a real one. It only ever appears beside an
-/// `"infra: …"` outcome whose sentence names exactly what could not be read —
-/// and never in a journal row, because those paths journal
-/// [`Event::Degraded`] instead of a verdict row.
+/// `"infra: …"` outcome whose sentence names exactly what failed — and never
+/// in a journal row, because those paths journal [`Event::Degraded`] instead
+/// of a verdict row, or (where the journal is what failed) write no row at all.
 const UNREAD: &str = "unread";
 
 /// Everything one candidate job learned — the single value both the journal
@@ -390,11 +391,14 @@ pub struct SwapOutcomeReport {
     pub candidate_gguf_sha: String,
     /// sha256 of the floor document's bytes, same `"unread"` rule.
     pub floor_sha: String,
-    /// Where the candidate's profile document was written — or, on an
-    /// `"infra: …"` outcome from a failed probe, where it *would* have been
-    /// written. The outcome word is what says whether it exists; the path is
-    /// carried either way because "which document" is the first thing an
-    /// operator chasing a failed probe looks for.
+    /// The content-named document the verdict was reached on — the same path
+    /// the journal row names, retained so a later candidate for this model
+    /// cannot overwrite it. On an `"infra: …"` outcome raised before the
+    /// retention (a failed probe, a failed preparation) it is instead the
+    /// staging path the document was, or would have been, written to. The
+    /// outcome word is what says which; the path is carried either way because
+    /// "which document" is the first thing an operator chasing a failure looks
+    /// for.
     pub candidate_profile_path: String,
     /// The two gaps design §4 requires every answer to name: the task gates
     /// this probe did not measure, and the handover a swap actually needs.
@@ -517,12 +521,19 @@ impl SwapSlot {
 ///    invocation ([`PostRunner::probe`], which deletes the target document
 ///    first, so an earlier job's document can never be read back as this
 ///    one's).
-/// 4. `assay cover <floor> <candidate profile>`, read as exit codes and
+/// 4. Retain the document content-named beside the drift transients, under the
+///    same bound ([`ProfileStore::retain_transient`]) — design §4 step 3. Every
+///    later mention of the candidate's profile, the cover invocation included,
+///    is of the retained path.
+/// 5. `assay cover <floor> <candidate profile>`, read as exit codes and
 ///    nothing else ([`CoverGate::check`]).
-/// 5. Journal one verdict row.
-/// 6. Unload and unregister the scratch identity — on **every** path past
+/// 6. Journal one verdict row.
+/// 7. Unload and unregister the scratch identity — on **every** path past
 ///    step 2, including the ones that failed.
-/// 7. Release the slot with the report.
+/// 8. Release the slot with the report — on **every** path this function can
+///    return through, the `Err` ones included. A slot still held by a job that
+///    already returned is a daemon that refuses every later candidate until it
+///    restarts, so releasing it is not conditional on the job having gone well.
 ///
 /// Returns `Err` only when the journal or the pager itself failed (law 7);
 /// every *coverage* outcome, including the infrastructure-shaped ones, is a
@@ -532,12 +543,12 @@ impl SwapSlot {
 /// **What the caller owes this function.** Two things, both of which belong at
 /// the site that puts this on a thread rather than here:
 ///
-/// - **The `Err` must not be dropped.** It is the only report that step 6's
+/// - **The `Err` must not be dropped.** It is the only report that step 7's
 ///   cleanup failed, and a failed unregister means the scratch identity —
 ///   possibly still holding weights — outlives the job after all, which is the
 ///   one thing design §4 says must not happen. Nothing in the report says so:
 ///   the report carries the *verdict*, which is unaffected.
-/// - **A panic must be caught there, not here.** Step 6 is explicit cleanup on
+/// - **A panic must be caught there, not here.** Step 7 is explicit cleanup on
 ///   the one path that returns, not a drop guard, so an unwind past step 2
 ///   leaks the registration *and* leaves the slot `Running` for the life of the
 ///   process — every later request answered `candidate_probe_in_progress` for a
@@ -564,7 +575,36 @@ pub fn run_candidate_probe<S: Substrate>(
     // this job by construction.
     let candidate_profile = store.confirm_staging(&scratch);
 
-    let prepared = prepare(pager, model, gguf, &scratch, &floor, &candidate_profile)?;
+    let prepared = match prepare(pager, model, gguf, &scratch, &floor, &candidate_profile) {
+        Ok(prepared) => prepared,
+        // The preparation itself broke — a journal that would not write, or a
+        // poisoned pager. Nothing was registered on any of those paths (the
+        // failure is at or before the registration), so there is nothing to
+        // clean up, but the slot is released before the error propagates for
+        // the same reason the judge-failed arm below releases it: a worker
+        // that returned still holding the slot would leave this daemon
+        // answering `candidate_probe_in_progress` for a job nobody can see,
+        // for the life of the process. No digest is claimed — the failure can
+        // land before either read, and `unread` is the honest placeholder for
+        // a digest this report does not carry.
+        Err(e) => {
+            slot.finish(
+                model,
+                SwapOutcomeReport {
+                    outcome: format!(
+                        "infra: {model}'s candidate job could not be prepared: {e}; nothing was \
+                         registered and nothing was probed"
+                    ),
+                    exit_code: None,
+                    candidate_gguf_sha: UNREAD.to_string(),
+                    floor_sha: UNREAD.to_string(),
+                    candidate_profile_path: candidate_profile.display().to_string(),
+                    notes: NOTES,
+                },
+            );
+            return Err(e);
+        }
+    };
     let (candidate_gguf_sha, floor_sha) = match prepared {
         Prepared::Registered {
             candidate_gguf_sha,
@@ -578,13 +618,23 @@ pub fn run_candidate_probe<S: Substrate>(
         }
     };
 
-    let evidence = Evidence {
+    let mut evidence = Evidence {
         candidate_gguf_sha,
         floor,
         floor_sha,
         candidate_profile,
     };
-    let judged = judge(pager, runner, gate, port, tier, model, &scratch, &evidence);
+    let judged = judge(
+        pager,
+        runner,
+        gate,
+        store,
+        port,
+        tier,
+        model,
+        &scratch,
+        &mut evidence,
+    );
     // Design §4's "the scratch identity never outlives the request", run
     // unconditionally: `judged` may have failed, and a failure is exactly when
     // a leaked registration would be least noticed.
@@ -616,6 +666,11 @@ struct Evidence {
     candidate_gguf_sha: String,
     floor: PathBuf,
     floor_sha: String,
+    /// Where the candidate's document is: the staging path the probe writes to
+    /// until [`judge`] retains it, the content-named retained path afterwards.
+    /// One field rather than two, so nothing downstream — the cover run, the
+    /// row, the report, the fallback report on a judging failure — can name a
+    /// document the job is no longer talking about.
     candidate_profile: PathBuf,
 }
 
@@ -722,17 +777,19 @@ fn prepare<S: Substrate>(
     })
 }
 
-/// Steps 3-5: probe the scratch identity, cover the pair, journal the verdict.
+/// Steps 3-6: probe the scratch identity, retain its document, cover the pair,
+/// journal the verdict.
 #[allow(clippy::too_many_arguments)]
 fn judge<S: Substrate>(
     pager: &Mutex<Pager<S>>,
     runner: &PostRunner,
     gate: &CoverGate,
+    store: &ProfileStore,
     port: u16,
     tier: &Tier,
     model: &str,
     scratch: &str,
-    evidence: &Evidence,
+    evidence: &mut Evidence,
 ) -> Result<SwapOutcomeReport, PagerError> {
     // POST's identical invocation (design §4 step 2: "the gate's interpreter is
     // the probe's interpreter"), against this daemon's own `/v1`.
@@ -752,9 +809,50 @@ fn judge<S: Substrate>(
             ),
         );
     }
-    // `None` only if the bytes the probe just wrote cannot be re-read; the
-    // cover run below reads them itself and answers for them either way, so
-    // this is an absent digest rather than a failure of its own.
+    // Design §4 step 3. The probe writes to ONE fixed staging path per
+    // identity (POST's delete-before-probe rule owns that path), so a row
+    // naming it would stop being re-runnable the moment another candidate is
+    // offered for this model — the next job's probe deletes the document this
+    // row claims anyone can re-cover. Retained content-named beside the drift
+    // transients, under the same bound and by the same call the confirm probe
+    // uses, so the row's path and its digest name a document that stays put.
+    let retention = match store.retain_transient(scratch, &evidence.candidate_profile) {
+        Ok(retention) => retention,
+        // No comparison is run: a verdict whose evidence cannot be re-read is
+        // not the evidence design §4 asks this row to be, and inventing one
+        // over a document about to be overwritten is worse than naming the
+        // failure. The same shape the drift watch's own retention failure
+        // takes (`drift::watch`: degraded, and the reading stands unconfirmed).
+        Err(e) => {
+            return degraded_report(
+                pager,
+                &evidence.candidate_gguf_sha,
+                &evidence.floor_sha,
+                &evidence.candidate_profile,
+                format!(
+                    "{model}'s candidate document {} could not be retained: {e}; no coverage \
+                     verdict was reached, because a verdict whose evidence the next job \
+                     overwrites is not evidence",
+                    evidence.candidate_profile.display()
+                ),
+            )
+        }
+    };
+    // The document moved. Everything downstream — the cover invocation, the
+    // digest, the row, the report — is of the retained path from here on.
+    evidence.candidate_profile = retention.retained;
+    for dropped in &retention.dropped {
+        with_pager(pager, |p| {
+            p.journal_degraded(format!(
+                "swap: dropped {} to stay within {scratch}'s bound of {MAX_TRANSIENTS} retained \
+                 candidate profiles",
+                dropped.display()
+            ))
+        })?;
+    }
+    // `None` only if the retained bytes cannot be re-read; the cover run below
+    // reads them itself and answers for them either way, so this is an absent
+    // digest rather than a failure of its own.
     let candidate_profile_sha = std::fs::read(&evidence.candidate_profile)
         .ok()
         .map(|bytes| sha256_hex_bytes(&bytes));
