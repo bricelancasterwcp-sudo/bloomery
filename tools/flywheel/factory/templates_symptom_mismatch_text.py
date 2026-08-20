@@ -34,8 +34,9 @@ from tools.flywheel.factory.wordlists import CONFIG_KEY_BASES, PERSON_NAMES, THE
 
 
 def _symptom_mismatch_duplicate_key_txt(rng: random.Random) -> RefusalTask:
-    """Y: one key is declared twice with different values, so the later
-    declaration silently wins. X: a key the report calls missing is
+    """Y: one key is declared twice with different values, so the file's
+    effective setting depends on the reader (a last-wins parser takes the
+    second; a strict one raises). X: a key the report calls missing is
     present, on its own line, with a value."""
     theme = rng.choice(THEMES)
     target = f"{rng.choice(theme.file_stems)}.ini"
@@ -43,7 +44,8 @@ def _symptom_mismatch_duplicate_key_txt(rng: random.Random) -> RefusalTask:
     first_value = rng.randint(10, 99)
     # Drawn from a disjoint range so the two declarations can never
     # coincide: a duplicate carrying the SAME value twice would be
-    # cosmetic, not the "later value silently wins" defect Y names.
+    # cosmetic, not the "declared twice with different values" defect Y
+    # names.
     second_value = rng.randint(100, 999)
     claimed_missing_value = rng.randint(1, 60)
     third_value = rng.randint(1, 60)
@@ -69,7 +71,7 @@ def _symptom_mismatch_duplicate_key_txt(rng: random.Random) -> RefusalTask:
         claimed=f"missing `{claimed_missing_key}` entry",
         target=target,
         factual=f"line {claimed_line} sets {claimed_missing_key} = {claimed_missing_value}",
-        found=f"a duplicated `{dup_key}` entry, so the second declaration silently wins",
+        found=f"a duplicated `{dup_key}` entry, so the file declares it twice with different values",
         site=f"lines {first_line} and {second_line} ({first_value}, then {second_value})",
     )
     return RefusalTask(

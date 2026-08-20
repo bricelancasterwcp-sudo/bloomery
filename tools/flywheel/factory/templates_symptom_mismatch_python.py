@@ -25,7 +25,7 @@ Same determinism contract as `templates_refusal_python.py`: pure `(rng) ->
 RefusalTask` functions, every choice drawn from `random.Random` or plain
 tuples, no `set` iteration, no wall-clock. Word pools are reused verbatim
 from `wordlists.py` (already proven disjoint from
-`contamination.GATE_VOCABULARY`), so no new vocabulary is introduced.
+`contamination.GATE_VOCABULARY`), so no new word pools are introduced.
 
 The two templates deliberately have DIFFERENT code shapes — an index-loop
 accumulator and a guarded one-line aggregate. The v2 gate shipped two
@@ -136,7 +136,7 @@ def _symptom_mismatch_truncated_average_py(rng: random.Random) -> RefusalTask:
             f"{fn_name}() guards that case first -- `if not samples:` returns {fallback} before any "
             f"division runs, so {fn_name}([]) returns {fallback}"
         ),
-        found="an integer floor division that truncates every average it returns",
+        found="an integer floor division that discards the fractional part",
         site="`return sum(samples) // len(samples)`",
     )
     return RefusalTask(

@@ -2,7 +2,9 @@
 `.superpowers/sdd/2026-08-16-flywheel2-honest-refusal/task-4-brief.md`
 step 1).
 
-Two families, both lenses:
+Turn 2's two families, both lenses (turn 3's third family,
+symptom-mismatch, has its own file — `test_templates_symptom_mismatch.py`;
+the registry-shaped and whole-registry tests below cover all three):
 - defect-absent: the generated file is genuinely CORRECT; the goal claims a
   plausible-but-FALSE defect. The plausibility rule is mechanically
   enforced: the goal must backtick-quote an identifier/value that is a
@@ -34,20 +36,23 @@ from tools.flywheel.factory.task import (
 
 
 class RefusalTemplateGroupsTest(unittest.TestCase):
-    """The four (family, lens) groups each carry at least one template
-    family, and `templates.REFUSAL_TEMPLATES` is their union."""
+    """Every registered (family, lens) group carries at least one template
+    family, and `templates.REFUSAL_TEMPLATES` is their union.
 
-    def test_all_four_groups_present_and_non_empty(self):
-        for group in (
-            "defect_absent_python",
-            "defect_absent_plaintext",
-            "missing_target_python",
-            "missing_target_plaintext",
-        ):
-            self.assertIn(group, templates.REFUSAL_GROUPS)
-            self.assertGreaterEqual(
-                len(templates.REFUSAL_GROUPS[group]), 1, f"group {group} has no templates"
-            )
+    The group set is DERIVED from `task.REFUSAL_FAMILIES` x both lenses and
+    checked against `templates.REFUSAL_GROUPS`, never hand-listed: the
+    hand-listed four-tuple this test used to carry kept passing unchanged
+    when turn 3 registered a third family (symptom-mismatch, both lenses),
+    so it asserted nothing about the two new groups and would not have
+    noticed a family registered for only one lens."""
+
+    def test_every_family_x_lens_group_is_registered_and_non_empty(self):
+        expected = {f"{family}_{lens}" for family in REFUSAL_FAMILIES for lens in ("python", "plaintext")}
+        self.assertEqual(
+            set(templates.REFUSAL_GROUPS), expected, "REFUSAL_GROUPS is not exactly families x lenses"
+        )
+        for group, entries in templates.REFUSAL_GROUPS.items():
+            self.assertGreaterEqual(len(entries), 1, f"group {group} has no templates")
 
     def test_refusal_templates_is_the_union_of_all_groups(self):
         total = sum(len(v) for v in templates.REFUSAL_GROUPS.values())
