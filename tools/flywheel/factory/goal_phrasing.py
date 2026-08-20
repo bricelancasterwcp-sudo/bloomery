@@ -28,7 +28,7 @@ near-fully with each other or with the gate's frozen (single-skeleton)
 text; that is an expected MINORITY the gate-aware rejection sampler
 (`gate_sampling.py`) already absorbs by redrawing.
 
-Three shapes cover every family in this factory:
+Four shapes cover every family in this factory:
 
 - `patch_skeletons` -- every `expect="patch"` family (python and
   plaintext lenses alike): states what's wrong, evidence, and the fix.
@@ -40,6 +40,14 @@ Three shapes cover every family in this factory:
   wraps it, since `claim`'s own text is skeleton-invariant).
 - `missing_target_skeletons` -- refusal families where the named target
   does not exist at all.
+- `symptom_mismatch_skeletons` -- refusal families where the file really
+  IS broken but the reported symptom is a different, absent defect. Its
+  skeletons all frame the claim as a REPORTED observation (a field
+  report, a page, a handoff note) rather than as a question or a
+  verification request: the defect-absent framings ("is it true that
+  ...?", "please verify ...") already invite a check, whereas this
+  family's whole difficulty is that a confident-sounding report is wrong
+  about a file that nevertheless has something wrong with it.
 """
 
 from __future__ import annotations
@@ -88,6 +96,38 @@ def patch_skeletons(
     return rng.choice(skeletons)
 
 
+def find_skeletons(
+    rng: random.Random,
+    subject: str,
+    problem: str,
+    evidence: str,
+    fix_goal: str,
+    instruction: str,
+) -> str:
+    """`patch_skeletons`'s find-shaped counterpart (turn-3 design doc §2:
+    "the goal names the symptom, never the file"). Same content clauses,
+    minus every one that carried a filename: there is no `target` and no
+    `fix_target` argument, because a goal that named either would hand the
+    model the answer and turn the opening `find` into a decorative step
+    (`task.validate_task`'s find branch refuses such a goal outright).
+
+    Each skeleton instead frames the missing location explicitly -- "find
+    it", "locate the module", "search the tree" -- so the trajectory's
+    first move reads as the obvious response to the goal rather than an
+    unmotivated flourish."""
+    skeletons = (
+        f"Somewhere in this workspace {subject} {problem} -- {evidence}. Track down whichever file "
+        f"owns it and change it so {fix_goal}. {instruction}",
+        f"Bug report, no file attached: {subject} {problem}. Evidence: {evidence}. Locate the "
+        f"module it lives in, then make sure {fix_goal}. {instruction}",
+        f"A support escalation says {subject} {problem}, and {evidence} backs that up. Search the "
+        f"tree for whatever defines it; once corrected, {fix_goal}. {instruction}",
+        f"Nobody on the team remembers where {subject} lives, but it {problem}: {evidence}. Find "
+        f"it first -- afterwards {fix_goal}. {instruction}",
+    )
+    return rng.choice(skeletons)
+
+
 def defect_absent_skeletons(rng: random.Random, target: str, claim: str, instruction: str) -> str:
     """`claim` is the full plausible-but-false defect clause, ALREADY
     carrying >= 1 backtick-quoted identifier/value that is real in the
@@ -99,6 +139,23 @@ def defect_absent_skeletons(rng: random.Random, target: str, claim: str, instruc
         f"Ticket filed against {target}: is it true that {claim}? {instruction}",
         f"A teammate double-checking {target} asks -- {claim}. {instruction}",
         f"Before touching {target}, please verify: {claim}. {instruction}",
+    )
+    return rng.choice(skeletons)
+
+
+def symptom_mismatch_skeletons(rng: random.Random, target: str, claim: str, instruction: str) -> str:
+    """`claim` is the full reported-but-absent symptom clause, ALREADY
+    carrying >= 1 backtick-quoted identifier/value that is real in the
+    generated file (the plausibility rule applies unchanged: the file has
+    a REAL defect, just not this one, so a goal quoting nothing real
+    would again teach "weird goal -> refuse"). Every skeleton names
+    `target` itself, so the structural "goal contains the target
+    filename" rule holds no matter what the family's claim says."""
+    skeletons = (
+        f"Field report on {target}: {claim}. {instruction}",
+        f"An on-call engineer paged about {target} -- {claim}. {instruction}",
+        f"Handoff note, {target}: {claim}. {instruction}",
+        f"During review of {target} somebody wrote up this symptom -- {claim}. {instruction}",
     )
     return rng.choice(skeletons)
 

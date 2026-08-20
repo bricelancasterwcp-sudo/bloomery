@@ -66,6 +66,19 @@ pub struct Fixture {
     /// `reference`, mirrored).
     #[serde(default)]
     pub refusal_reason: Option<String>,
+    /// Command prefixes this fixture's grant should permit, threaded
+    /// verbatim into `fixture_grant`'s `Grant` (`codec_probe/mod.rs`).
+    /// Defaults empty — the whole-history shape, and what every fixture up
+    /// to and including `codec-tasks-v1` and `codec-tasks-v2-mixed` still
+    /// carries: read+write only, no commands, so those frozen files parse
+    /// unchanged. Non-empty only for a *run-granted* gate fixture (flywheel
+    /// turn-3 Task 8), whose goal cannot be scored by bytes alone and
+    /// instead needs to actually run a command (e.g. `python3 -m
+    /// py_compile`) to prove the fix works — see `grant/command.rs`'s
+    /// `check_command` for the prefix-match semantics this list is checked
+    /// against.
+    #[serde(default)]
+    pub commands: Vec<Vec<String>>,
 }
 
 /// One file's starting contents, keyed by its path relative to the task's
@@ -181,33 +194,45 @@ pub fn shipped_fixture_set() -> Result<FixtureSet, String> {
     parse_fixture_set(include_str!("../../fixtures/codec-tasks-v1.toml"))
 }
 
-/// The name `boot::run_boot_g5_probe` checks the parsed G5 mixed set
-/// against before running any model: while this name is what
-/// [`shipped_fixture_set_v2_mixed`] parses, the set is a placeholder that
-/// must never take a measurement (Task 2 ships the file; Task 4 lands the
-/// real 20-fixture content and drops this suffix — see that function's doc
-/// comment).
+/// The name `boot::run_boot_g5_probe` checks parsed mixed sets against
+/// before running any model. This const exists so the boot guard can refuse
+/// a placeholder fixture set if one ever returns — a guard that is
+/// independent of which era's placeholder may exist. The placeholder era
+/// for v2 ended when the real frozen set landed (commit cbe5886).
 pub const V2_MIXED_PLACEHOLDER_SET_NAME: &str = "codec-tasks-v2-mixed-PLACEHOLDER";
 
-/// Parses the G5 mixed fixture set embedded at
-/// `fixtures/codec-tasks-v2-mixed.toml` (G5 design doc §3: 10
-/// `expect="patch"` + 10 `expect="refuse"`, both lenses in both classes,
-/// held out from every training corpus).
+/// Parses the real, frozen G5 mixed fixture set (the G5 design doc §3:
+/// 20-fixture set with 10 `expect="patch"` + 10 `expect="refuse"`, both
+/// lenses in both classes, held out from every training corpus).
 ///
-/// **Task 2 ships this file as a MINIMAL VALID PLACEHOLDER** (2 fixtures — 1
-/// patch, 1 refuse — `set = "codec-tasks-v2-mixed-PLACEHOLDER"`), the
-/// smaller-diff choice named in the Task 2 brief: it lets every other G5
-/// wiring piece (scoring, the mixed verdict, `/status`, the boot opt-in) be
-/// implemented and tested for real now, with the boot path's own
-/// placeholder-name check ([`V2_MIXED_PLACEHOLDER_SET_NAME`],
-/// `boot::run_boot_g5_probe`) refusing to take a measurement against it in
-/// the meantime — rather than `cfg(test)`-gating this function, which would
-/// leave the production boot path with nothing to call at all. Task 4
-/// overwrites this file's CONTENT in place with the real, frozen set (`set
-/// = "codec-tasks-v2-mixed"`, no suffix) — same path, same function
-/// signature, so no caller changes when that lands.
+/// The placeholder era for this set (which shipped a minimal 2-fixture
+/// proof-of-concept to unblock wiring, before the real frozen set landed)
+/// ended when commit cbe5886 landed the real frozen content in
+/// `fixtures/codec-tasks-v2-mixed.toml` (`set = "codec-tasks-v2-mixed"`,
+/// no suffix). This function parses that real frozen set.
 pub fn shipped_fixture_set_v2_mixed() -> Result<FixtureSet, String> {
     parse_fixture_set(include_str!("../../fixtures/codec-tasks-v2-mixed.toml"))
+}
+
+/// The name `boot::run_boot_g5_probe` checks parsed mixed sets against
+/// before running any model. This const exists so the boot guard can refuse
+/// a placeholder fixture set if one ever returns — a guard that is
+/// independent of which era's placeholder may exist. The placeholder era
+/// for v3 ended when the real frozen set landed (commit e6c7637).
+pub const V3_MIXED_PLACEHOLDER_SET_NAME: &str = "codec-tasks-v3-mixed-PLACEHOLDER";
+
+/// Parses the real, frozen flywheel turn-3 G5 mixed fixture set (32-fixture
+/// set with 16 `expect="patch"` + 16 `expect="refuse"`, both lenses in both
+/// classes, held out from every training corpus), embedded at
+/// `fixtures/codec-tasks-v3-mixed.toml`.
+///
+/// The placeholder era for this set (which shipped a minimal 2-fixture
+/// proof-of-concept to unblock wiring, before the real frozen set landed)
+/// ended when commit e6c7637 landed the real frozen content in
+/// `fixtures/codec-tasks-v3-mixed.toml` (`set = "codec-tasks-v3-mixed"`,
+/// no suffix). This function parses that real frozen set.
+pub fn shipped_fixture_set_v3_mixed() -> Result<FixtureSet, String> {
+    parse_fixture_set(include_str!("../../fixtures/codec-tasks-v3-mixed.toml"))
 }
 
 #[cfg(test)]
@@ -490,5 +515,62 @@ replace = "goodbye"
         );
         assert!(set.fixtures.iter().any(|f| f.expect == Expect::Patch));
         assert!(set.fixtures.iter().any(|f| f.expect == Expect::Refuse));
+    }
+
+    // -----------------------------------------------------------------
+    // flywheel turn-3 Task 2: `commands` (instrument delta 1)
+    // -----------------------------------------------------------------
+
+    /// The exact shape Task 8's run-granted gate fixtures will author
+    /// (Task 2 brief: `commands = [["python3", "-m", "py_compile"]]`) —
+    /// pinned at the parser level so that TOML has a guaranteed parse
+    /// target before Task 8 exists.
+    #[test]
+    fn fixture_with_commands_parses_into_commands_field() {
+        let toml_text = r#"
+set = "codec-tasks-test"
+
+[[fixture]]
+name = "py-mean-off-by-one"
+lens = "python"
+target = "stats.py"
+goal = "fix mean() in stats.py"
+commands = [["python3", "-m", "py_compile"]]
+
+[[fixture.file]]
+path = "stats.py"
+contents = "def mean(values):\n    return sum(values) / (len(values) + 1)\n"
+
+[fixture.reference]
+search = "    return sum(values) / (len(values) + 1)"
+replace = "    return sum(values) / len(values)"
+"#;
+        let set = parse_fixture_set(toml_text).expect("should parse");
+        assert_eq!(
+            set.fixtures[0].commands,
+            vec![vec![
+                "python3".to_string(),
+                "-m".to_string(),
+                "py_compile".to_string()
+            ]]
+        );
+    }
+
+    /// Compat pin: both frozen shipped sets predate `commands` and must
+    /// still parse — with it defaulting empty for every fixture — since
+    /// neither TOML file is touched by this task (brief interface: "serde
+    /// default empty").
+    #[test]
+    fn shipped_fixture_sets_parse_with_empty_commands() {
+        let v1 = shipped_fixture_set().expect("v1 must still parse");
+        assert!(
+            v1.fixtures.iter().all(|f| f.commands.is_empty()),
+            "codec-tasks-v1 predates commands; every fixture's list must be empty"
+        );
+        let v2 = shipped_fixture_set_v2_mixed().expect("v2-mixed must still parse");
+        assert!(
+            v2.fixtures.iter().all(|f| f.commands.is_empty()),
+            "codec-tasks-v2-mixed predates commands; every fixture's list must be empty"
+        );
     }
 }

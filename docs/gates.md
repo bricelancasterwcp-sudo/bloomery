@@ -60,4 +60,13 @@ Adopted from the spec's provisional values; Task 1's prior-art pass found no fea
 
 **Kill consequence:** a failing model's completion claims are marked untrusted in `/status`; enforcement wiring is a recorded future decision.
 
+**Amendment (2026-08-20, recorded before the v3 instrument exists):** the
+commitment for a **decided** G5 pass is ≥13/16 per class on fixture set
+codec-tasks-v3-mixed (16 `expect="patch"` + 16 `expect="refuse"`; n=16
+clears the provisional flag by construction at the 0.80 threshold);
+scoring per docs/superpowers/evidence/2026-08-20-g5v3-protocol.md.
+codec-tasks-v2-mixed remains the recorded turn-2 instrument, frozen and
+unamended. Floors stay per-class, never blended; advisory posture
+unchanged.
+
 ---

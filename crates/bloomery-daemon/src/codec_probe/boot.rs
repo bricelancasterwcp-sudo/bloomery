@@ -36,7 +36,7 @@ use std::sync::Mutex;
 use bloomery_substrate::Substrate;
 
 use super::fixtures::{
-    shipped_fixture_set, shipped_fixture_set_v2_mixed, V2_MIXED_PLACEHOLDER_SET_NAME,
+    shipped_fixture_set, shipped_fixture_set_v3_mixed, V3_MIXED_PLACEHOLDER_SET_NAME,
 };
 use super::{run_codec_probe, run_refusal_probe, ProbeAborted};
 use crate::pager::{Pager, PagerError};
@@ -155,16 +155,20 @@ pub const G5_POST_DISABLED_SKIP_REASON: &str =
     "G5 refusal probe skipped: POST disabled; opted-in models unmeasured — done_trust stays \
      unmeasured";
 
-/// Journaled once when the embedded G5 mixed set is still the Task-2
-/// placeholder (Task 4 lands the real, frozen 20-fixture
-/// `codec-tasks-v2-mixed` set) — a placeholder must never take a
-/// measurement, so every opted-in model is skipped rather than scored
-/// against fixtures that are not the real instrument yet.
+/// Journaled once when the embedded G5 mixed set is still a placeholder
+/// (its `set` field carries a `-PLACEHOLDER` suffix) — a placeholder must
+/// never take a measurement, so every opted-in model is skipped rather
+/// than scored against fixtures that are not the real instrument yet.
+/// Wording is deliberately era-independent (no task number, no specific
+/// gate-set name baked in beyond `set_name` itself): this helper outlives
+/// any one gate-set generation's placeholder period — a wording tied to
+/// "the current placeholder" (e.g. naming which real set is still
+/// pending) goes stale the moment that generation freezes and the next
+/// one's placeholder era begins, without this function itself changing.
 pub fn g5_placeholder_skip_reason(set_name: &str) -> String {
     format!(
-        "G5 refusal probe skipped: fixture set {set_name} is a Task-2 placeholder (the real \
-         codec-tasks-v2-mixed set has not landed yet); no model measured — done_trust stays \
-         unmeasured"
+        "G5 refusal probe skipped: fixture set {set_name} is a placeholder, not the frozen \
+         instrument; no model measured — done_trust stays unmeasured"
     )
 }
 
@@ -183,7 +187,7 @@ pub fn g5_probe_aborted_reason(model: &str, reason: &str) -> String {
 ///
 /// The fixture set is parsed exactly once, before any model runs — same
 /// reasoning as [`run_boot_codec_probe`]'s own G4 parse. A still-placeholder
-/// set ([`V2_MIXED_PLACEHOLDER_SET_NAME`]) or an unparseable one is a
+/// set ([`V3_MIXED_PLACEHOLDER_SET_NAME`]) or an unparseable one is a
 /// build-time/authoring concern, not a per-model measurement, so it is
 /// journaled once and every opted-in model is skipped entirely — never
 /// scored against fixtures that are not the real instrument.
@@ -200,11 +204,11 @@ pub fn run_boot_g5_probe<S: Substrate + Send + 'static>(
     if g5_models.is_empty() {
         return Ok(());
     }
-    let set = match shipped_fixture_set_v2_mixed() {
+    let set = match shipped_fixture_set_v3_mixed() {
         Ok(set) => set,
         Err(e) => return journal_degraded(pager, fixture_set_unparseable_reason(&e)),
     };
-    if set.set == V2_MIXED_PLACEHOLDER_SET_NAME {
+    if set.set == V3_MIXED_PLACEHOLDER_SET_NAME {
         return journal_degraded(pager, g5_placeholder_skip_reason(&set.set));
     }
     // A distinct scratch subtree from G4's: the two engines' fixture NAMES

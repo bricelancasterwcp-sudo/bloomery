@@ -11,7 +11,13 @@ from __future__ import annotations
 import random
 from typing import Callable
 
-from tools.flywheel.factory import templates_python, templates_refusal, templates_text
+from tools.flywheel.factory import (
+    templates_multifile_python,
+    templates_multifile_text,
+    templates_python,
+    templates_refusal,
+    templates_text,
+)
 from tools.flywheel.factory.contamination import GATE_VOCABULARY
 from tools.flywheel.factory.task import (
     DONE_INSTRUCTION,
@@ -30,6 +36,10 @@ __all__ = [
     "validate_refusal_task",
     "PYTHON_TEMPLATES",
     "TEXT_TEMPLATES",
+    "FIND_TEMPLATES",
+    "RUN_TEMPLATES",
+    "PY_COMPILE_PREFIX",
+    "RUN_FAMILY_SUFFIX",
     "REFUSAL_TEMPLATES",
     "REFUSAL_GROUPS",
     "ALL_TEMPLATE_WORDS",
@@ -46,6 +56,26 @@ PYTHON_TEMPLATES: tuple[tuple[str, TemplateFn], ...] = tuple(
 TEXT_TEMPLATES: tuple[tuple[str, TemplateFn], ...] = tuple(
     sorted(templates_text.FAMILIES.items(), key=lambda item: item[0])
 )
+
+# Turn 3's two new repair-trajectory registries (design doc §2). Same
+# sorted-by-name discipline as above, so the slot cycle in
+# `generate_slices.py` never depends on definition order.
+#
+# FIND_TEMPLATES is python-then-plaintext rather than one merged sort: the
+# slot cycle walks it round-robin, so the concatenation order IS the lens
+# mix (3 python : 2 plaintext families = the same 3:2 ratio `_FAMILY_PATTERN`
+# gives the plain slice, without a second hand-maintained pattern).
+FIND_TEMPLATES: tuple[tuple[str, TemplateFn], ...] = tuple(
+    sorted(templates_multifile_python.FAMILIES.items(), key=lambda item: item[0])
+) + tuple(sorted(templates_multifile_text.FAMILIES.items(), key=lambda item: item[0]))
+
+# Run-verified wrappers over the plain python families (there is no
+# plaintext run slice — see `templates_python.py`'s note on why).
+RUN_TEMPLATES: tuple[tuple[str, TemplateFn], ...] = tuple(
+    sorted(templates_python.RUN_FAMILIES.items(), key=lambda item: item[0])
+)
+PY_COMPILE_PREFIX = templates_python.PY_COMPILE_PREFIX
+RUN_FAMILY_SUFFIX = templates_python.RUN_FAMILY_SUFFIX
 
 # G5 design doc §5's refusal registry (`templates_refusal.py`'s own module
 # doc explains the (family, lens) group split): re-exported here so callers

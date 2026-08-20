@@ -8,6 +8,10 @@ Rule 2: structural validity mirrors codec-tasks-v1's own validator:
 search appears exactly once in the target's contents; target is a key in
 files; goal contains the target filename and ends with the exact phrase
 "Patch the file, then emit done."; target is 5-60 lines; search != replace.
+
+Turn 3's per-shape branches of that validator (what the find and run
+shapes each add or invert) live in `test_task_validation.py`, split out
+when they pushed this file past the 400-line house cap.
 """
 
 import random

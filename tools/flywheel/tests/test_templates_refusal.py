@@ -20,11 +20,13 @@ functions, byte-identical output for an identically-seeded `rng`.
 import random
 import unittest
 
-from tools.flywheel.factory import templates
+from tools.flywheel.factory import templates, templates_refusal_python, templates_refusal_text
 from tools.flywheel.factory.contamination import GATE_VOCABULARY
 from tools.flywheel.factory.task import (
+    CHECK_INSTRUCTION,
     DEFECT_ABSENT,
     MISSING_TARGET,
+    REFUSAL_FAMILIES,
     REFUSAL_QUOTED_RE,
     RefusalTask,
     validate_refusal_task,
@@ -77,7 +79,9 @@ class RefusalTemplateShapeTest(unittest.TestCase):
             for seed in range(10):
                 task = fn(random.Random(seed))
                 self.assertIsInstance(task, RefusalTask, name)
-                self.assertIn(task.family, (DEFECT_ABSENT, MISSING_TARGET), name)
+                # Every registered family, not a hand-listed pair: turn 3
+                # adds symptom-mismatch to the same flat registry.
+                self.assertIn(task.family, REFUSAL_FAMILIES, name)
                 self.assertIn(task.lens, ("python", "plaintext"), name)
 
     def test_every_generated_refusal_task_is_structurally_valid(self):
@@ -118,7 +122,7 @@ class DefectAbsentPlausibilityTest(unittest.TestCase):
             target="a.py",
             target_missing=False,
             files={"a.py": "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n"},
-            goal="a.py's `nonexistent_fn` looks wrong -- check a.py and fix if it really is wrong.",
+            goal=f"a.py's `nonexistent_fn` looks wrong. {CHECK_INSTRUCTION}",
             refusal_reason="No change needed.",
         )
         violations = validate_refusal_task(bad)
@@ -280,7 +284,7 @@ class RefusalValidationMechanicsTest(unittest.TestCase):
             target="mathy.py",
             target_missing=False,
             files={"mathy.py": "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n"},
-            goal="mathy.py's `add` looks miscalculated -- check mathy.py and fix if it really is wrong.",
+            goal=f"mathy.py's `add` looks miscalculated. {CHECK_INSTRUCTION}",
             refusal_reason="No change needed: add() in mathy.py is already correct.",
         )
 
@@ -292,7 +296,7 @@ class RefusalValidationMechanicsTest(unittest.TestCase):
             target="ghost.py",
             target_missing=True,
             files={"sibling.py": "def noop():\n    return None\n\n\ndef other():\n    return 1\n"},
-            goal="ghost.py's helper() looks broken -- check ghost.py and fix if it really is wrong.",
+            goal=f"ghost.py's helper() looks broken. {CHECK_INSTRUCTION}",
             refusal_reason="Cannot: ghost.py does not exist in this workspace.",
         )
 
@@ -318,9 +322,23 @@ class RefusalValidationMechanicsTest(unittest.TestCase):
         self.assertTrue(any("real sibling file" in v for v in violations))
 
     def test_goal_must_contain_target_filename(self):
-        bad = self._valid_defect_absent()._replace(goal="Something is `add`. Check first.")
+        bad = self._valid_defect_absent()._replace(goal=f"Something is `add`. {CHECK_INSTRUCTION}")
         violations = validate_refusal_task(bad)
         self.assertTrue(any("target filename" in v for v in violations))
+
+    def test_goal_not_ending_with_the_check_instruction_is_a_violation(self):
+        bad = self._valid_defect_absent()._replace(goal="mathy.py's `add` looks miscalculated. Take a look.")
+        violations = validate_refusal_task(bad)
+        self.assertTrue(any("check-first instruction" in v for v in violations), violations)
+
+    def test_a_goal_truncated_mid_instruction_is_still_a_violation(self):
+        # Mutation pin: a substring/startswith-shaped check would accept a
+        # goal that merely CONTAINS part of the instruction. Only an
+        # `endswith` over the whole literal rejects this one.
+        good = self._valid_defect_absent()
+        bad = good._replace(goal=good.goal[: -len("; then emit done.")])
+        violations = validate_refusal_task(bad)
+        self.assertTrue(any("check-first instruction" in v for v in violations), violations)
 
     def test_empty_refusal_reason_is_a_violation(self):
         bad = self._valid_defect_absent()._replace(refusal_reason="   ")
@@ -331,6 +349,27 @@ class RefusalValidationMechanicsTest(unittest.TestCase):
         bad = self._valid_defect_absent()._replace(target_missing=True)
         violations = validate_refusal_task(bad)
         self.assertTrue(any("inconsistent" in v for v in violations))
+
+
+class CheckInstructionIsCanonicalTest(unittest.TestCase):
+    """CARRIED-DEBT fast-follow: the check-first instruction was declared
+    verbatim in BOTH refusal family modules with nothing pinning the copies
+    together — the drift `DONE_INSTRUCTION`'s single home in `task.py`
+    already prevents for the repair shape."""
+
+    def test_the_literal_is_exactly_the_frozen_wording(self):
+        self.assertEqual(
+            CHECK_INSTRUCTION,
+            "Check first, and only patch if it is genuinely wrong; then emit done.",
+        )
+
+    def test_both_refusal_family_modules_use_the_one_canonical_object(self):
+        # `assertIs`, not `assertEqual`: identity is what proves a single
+        # source of truth. Two separate module-level literals compare equal
+        # today yet drift independently tomorrow (this string is not
+        # identifier-shaped, so CPython does not intern it).
+        self.assertIs(templates_refusal_python.CHECK_INSTRUCTION, CHECK_INSTRUCTION)
+        self.assertIs(templates_refusal_text.CHECK_INSTRUCTION, CHECK_INSTRUCTION)
 
 
 class RefusalVocabularyDisjointFromGateSetTest(unittest.TestCase):

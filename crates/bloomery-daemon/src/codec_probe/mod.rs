@@ -477,9 +477,10 @@ fn materialize(model_dir: &Path, fixture: &Fixture) -> Result<PathBuf, ProbeAbor
 }
 
 /// The fixture's whole capability boundary (protocol §2): read+write on its
-/// own scratch dir, **no** commands, no network. Built through
-/// `Grant::from_json` because that is the type's only construction path, and
-/// it validates.
+/// own scratch dir, plus whatever command prefixes `fixture.commands`
+/// grants (empty for every fixture predating flywheel turn-3 Task 2 — see
+/// that field's doc comment), no network. Built through `Grant::from_json`
+/// because that is the type's only construction path, and it validates.
 fn fixture_grant(dir: &Path, fixture: &Fixture) -> Result<Grant, ProbeAborted> {
     let dir = dir.to_str().ok_or_else(|| {
         abort(format!(
@@ -491,7 +492,7 @@ fn fixture_grant(dir: &Path, fixture: &Fixture) -> Result<Grant, ProbeAborted> {
     let json = serde_json::json!({
         "read_roots": [dir],
         "write_roots": [dir],
-        "commands": [],
+        "commands": fixture.commands,
         "network": false,
     })
     .to_string();
@@ -501,6 +502,17 @@ fn fixture_grant(dir: &Path, fixture: &Fixture) -> Result<Grant, ProbeAborted> {
             fixture.name
         ))
     })
+}
+
+/// [`fixture_grant`] under a test-reachable name — the function itself
+/// stays crate-private (it is internal probe-engine plumbing, not part of
+/// this crate's real public API), so this thin wrapper is what
+/// `tests/codec_probe_grant_test.rs` links against, same pattern as
+/// `post.rs`'s `run_bounded_for_test` and `swap.rs`'s
+/// `CoverGate::with_runner`.
+#[cfg(any(test, feature = "test-support"))]
+pub fn fixture_grant_for_test(dir: &Path, fixture: &Fixture) -> Result<Grant, ProbeAborted> {
+    fixture_grant(dir, fixture)
 }
 
 /// Reads a target file's bytes for the §3 scoring comparison. A target that

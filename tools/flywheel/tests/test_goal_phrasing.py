@@ -2,16 +2,17 @@
 phrasing skeleton diversity across every template family) --
 `tools/flywheel/factory/goal_phrasing.py`.
 
-Every one of the 21 template families (8 python patch, 5 plaintext
-patch, 4 defect-absent refusal, 4 missing-target refusal) now offers
->= 4 structurally distinct goal-phrasing skeletons, chosen per draw via
-`rng.choice`. The property that actually matters -- and previously did
-NOT hold (99% `goal_near_duplicate` rejection at full-scale generation,
-even after the identifier-entropy fix) -- is that two draws landing on
-DIFFERENT skeletons stay well under 0.8 token-set Jaccard, even when
-their identifiers happen to coincide by chance. This file pins that
-property directly against the REAL family functions (never a synthetic
-stand-in) for all 21 families, plus `goal_phrasing.py`'s own assembler
+Every one of the 25 template families (8 python patch, 5 plaintext
+patch, 4 defect-absent refusal, 4 missing-target refusal, 4
+symptom-mismatch refusal) now offers >= 4 structurally distinct
+goal-phrasing skeletons, chosen per draw via `rng.choice`. The property
+that actually matters -- and previously did NOT hold (99%
+`goal_near_duplicate` rejection at full-scale generation, even after the
+identifier-entropy fix) -- is that two draws landing on DIFFERENT
+skeletons stay well under 0.8 token-set Jaccard, even when their
+identifiers happen to coincide by chance. This file pins that property
+directly against the REAL family functions (never a synthetic stand-in)
+for all 25 families, plus `goal_phrasing.py`'s own assembler
 determinism.
 
 Classification of "which skeleton a goal used" is a TEST-ONLY technique
@@ -26,6 +27,7 @@ import unittest
 
 from tools.flywheel.factory import goal_phrasing, templates, templates_python, templates_text
 from tools.flywheel.factory.contamination import jaccard, token_set
+from tools.flywheel.factory.task import CHECK_INSTRUCTION
 
 N_SEEDS = 100
 MAX_CROSS_SKELETON_JACCARD = 0.8
@@ -34,6 +36,7 @@ SAMPLE_SIZE = 60  # bounded, not exhaustive -- requirement 2's own wording
 _PATCH_MARKERS = ("Bug ticket for", "A reviewer flagged", "Please correct")
 _DEFECT_ABSENT_MARKERS = ("Ticket filed against", "A teammate double-checking", "Before touching")
 _MISSING_TARGET_MARKERS = ("Ticket:", "A user reported", "Before editing")
+_SYMPTOM_MISMATCH_MARKERS = ("An on-call engineer paged", "Handoff note,", "During review of")
 
 
 def _classify(goal: str, markers: tuple[str, ...]) -> int:
@@ -101,12 +104,24 @@ class MissingTargetRefusalFamilyDiversityTest(unittest.TestCase):
                     _assert_cross_skeleton_diversity(self, name, fn, _MISSING_TARGET_MARKERS)
 
 
+class SymptomMismatchRefusalFamilyDiversityTest(unittest.TestCase):
+    def test_every_symptom_mismatch_family_clears_the_cross_skeleton_jaccard_bar(self):
+        for group_name in ("symptom_mismatch_python", "symptom_mismatch_plaintext"):
+            for name, fn in templates.REFUSAL_GROUPS[group_name]:
+                with self.subTest(family=name):
+                    _assert_cross_skeleton_diversity(self, name, fn, _SYMPTOM_MISMATCH_MARKERS)
+
+
 class AllFamiliesCoveredTest(unittest.TestCase):
     """Guards against a typo/omission silently shrinking coverage below
-    all 21 families (8 python + 5 plaintext + 4 defect-absent + 4
-    missing-target)."""
+    all 25 families (8 python + 5 plaintext + 4 defect-absent + 4
+    missing-target + 4 symptom-mismatch). Turn 3 raised this pin from 21
+    deliberately: the symptom-mismatch family (task 5) adds two templates
+    per lens, and its goals go through the same skeleton assembler
+    contract, so leaving the count at 21 would have meant the new family
+    was silently unexercised here."""
 
-    def test_exactly_twenty_one_families_are_exercised_across_this_file(self):
+    def test_exactly_twenty_five_families_are_exercised_across_this_file(self):
         python_count = len(templates_python.FAMILIES)
         text_count = len(templates_text.FAMILIES)
         defect_absent_count = len(templates.REFUSAL_GROUPS["defect_absent_python"]) + len(
@@ -115,8 +130,11 @@ class AllFamiliesCoveredTest(unittest.TestCase):
         missing_target_count = len(templates.REFUSAL_GROUPS["missing_target_python"]) + len(
             templates.REFUSAL_GROUPS["missing_target_plaintext"]
         )
-        total = python_count + text_count + defect_absent_count + missing_target_count
-        self.assertEqual(total, 21, f"expected 21 families, counted {total}")
+        symptom_mismatch_count = len(templates.REFUSAL_GROUPS["symptom_mismatch_python"]) + len(
+            templates.REFUSAL_GROUPS["symptom_mismatch_plaintext"]
+        )
+        total = python_count + text_count + defect_absent_count + missing_target_count + symptom_mismatch_count
+        self.assertEqual(total, 25, f"expected 25 families, counted {total}")
 
 
 class GoalPhrasingAssemblerDeterminismTest(unittest.TestCase):
@@ -142,6 +160,12 @@ class GoalPhrasingAssemblerDeterminismTest(unittest.TestCase):
         b = goal_phrasing.missing_target_skeletons(random.Random(99), *args)
         self.assertEqual(a, b)
 
+    def test_symptom_mismatch_skeletons_is_deterministic(self):
+        args = ("a.py", "`f` returns the wrong total for every window", "Check first, and only patch if it is genuinely wrong; then emit done.")
+        a = goal_phrasing.symptom_mismatch_skeletons(random.Random(99), *args)
+        b = goal_phrasing.symptom_mismatch_skeletons(random.Random(99), *args)
+        self.assertEqual(a, b)
+
     def test_each_assembler_offers_at_least_four_skeletons(self):
         # Drive many seeds and count how many DISTINCT skeleton openings
         # appear -- a mechanical floor on "at least 4 skeletons", not
@@ -151,6 +175,16 @@ class GoalPhrasingAssemblerDeterminismTest(unittest.TestCase):
         seen = {goal_phrasing.patch_skeletons(random.Random(seed), *patch_args) for seed in range(50)}
         openings = {_classify(g, _PATCH_MARKERS) for g in seen}
         self.assertEqual(openings, {1, 2, 3, 4})
+
+        refusal_args = ("a.py", "`f` returns the wrong total for every window", CHECK_INSTRUCTION)
+        for assembler, markers in (
+            (goal_phrasing.defect_absent_skeletons, _DEFECT_ABSENT_MARKERS),
+            (goal_phrasing.missing_target_skeletons, _MISSING_TARGET_MARKERS),
+            (goal_phrasing.symptom_mismatch_skeletons, _SYMPTOM_MISMATCH_MARKERS),
+        ):
+            with self.subTest(assembler=assembler.__name__):
+                seen = {assembler(random.Random(seed), *refusal_args) for seed in range(50)}
+                self.assertEqual({_classify(g, markers) for g in seen}, {1, 2, 3, 4})
 
 
 if __name__ == "__main__":
