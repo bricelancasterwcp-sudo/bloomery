@@ -1,8 +1,20 @@
-"""Flywheel turn-1 QLoRA training — the pre-registered run.
+"""Flywheel QLoRA training — the pre-registered run. Turn 3 (flywheel3)
+uses this file UNCHANGED apart from this header; every hyperparameter
+below is the turn-1 recipe, held fixed across turns 1, 2 and 3.
 
 Governing documents:
-- spec  docs/superpowers/specs/2026-08-16-flywheel-14b-design.md §4
-- gates docs/superpowers/evidence/2026-08-16-flywheel1-preregistration.md
+- spec  docs/superpowers/specs/2026-08-20-flywheel3-turn3-design.md §5
+        (turn 1: …/2026-08-16-flywheel-14b-design.md §4)
+- gates docs/superpowers/evidence/2026-08-20-flywheel3-preregistration.md
+        (turn 1: …/2026-08-16-flywheel1-preregistration.md;
+         turn 2: …/2026-08-16-flywheel2-preregistration.md)
+
+**Seeds: the two literal 20260816 seeds below (`random_state` on the LoRA
+init, `seed` on TrainingArguments) do NOT move per turn and were not
+changed for turn 3.** They are the *procedure's* identity — holding them
+fixed is what makes turn 3 a comparison against turns 1-2 rather than a
+fresh draw. The seed that refreshes each turn is the CORPUS seed
+(20260817 → 20260820), which is recorded in the fingerprint, not here.
 
 Binding rules implemented here (do not change without a recorded
 amendment):
@@ -15,10 +27,10 @@ amendment):
 - Validation split (fingerprint val_split_ids) is filtered OUT of the
   train set and used for loss monitoring only.
 
-Usage:
-  python tools/flywheel/train.py --corpus ~/flywheel1/corpus.jsonl \
-      --fingerprint ~/flywheel1/fingerprint.json \
-      --base ~/models/hf/Qwen3-14B --out ~/flywheel1/adapter \
+Usage (turn 3):
+  python tools/flywheel/train.py --corpus ~/flywheel3/corpus.jsonl \
+      --fingerprint docs/superpowers/evidence/2026-08-20-flywheel3-fingerprint.json \
+      --base ~/models/hf/Qwen3-14B --out ~/flywheel3/adapter \
       [--max-steps N]   # smoke: --max-steps 5
 """
 
