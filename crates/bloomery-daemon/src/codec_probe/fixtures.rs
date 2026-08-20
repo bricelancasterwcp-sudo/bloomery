@@ -198,7 +198,7 @@ pub fn shipped_fixture_set() -> Result<FixtureSet, String> {
 /// before running any model. This const exists so the boot guard can refuse
 /// a placeholder fixture set if one ever returns — a guard that is
 /// independent of which era's placeholder may exist. The placeholder era
-/// for v2 ended when the real frozen set landed (commit 474b565).
+/// for v2 ended when the real frozen set landed (commit cbe5886).
 pub const V2_MIXED_PLACEHOLDER_SET_NAME: &str = "codec-tasks-v2-mixed-PLACEHOLDER";
 
 /// Parses the real, frozen G5 mixed fixture set (the G5 design doc §3:
@@ -207,7 +207,7 @@ pub const V2_MIXED_PLACEHOLDER_SET_NAME: &str = "codec-tasks-v2-mixed-PLACEHOLDE
 ///
 /// The placeholder era for this set (which shipped a minimal 2-fixture
 /// proof-of-concept to unblock wiring, before the real frozen set landed)
-/// ended when commit 474b565 landed the real frozen content in
+/// ended when commit cbe5886 landed the real frozen content in
 /// `fixtures/codec-tasks-v2-mixed.toml` (`set = "codec-tasks-v2-mixed"`,
 /// no suffix). This function parses that real frozen set.
 pub fn shipped_fixture_set_v2_mixed() -> Result<FixtureSet, String> {

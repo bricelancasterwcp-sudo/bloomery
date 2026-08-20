@@ -119,7 +119,10 @@ including the find shape. Ruling bT7/R1 (2026-08-20) fixed the tool's
 `Scratch::materialize` to name its scratch directory from a content hash
 of the request identity, rather than the tool's PID. Identical requests
 now materialize at identical paths, so two same-seed runs of the factory
-produce byte-identical corpora with zero differing rows.
+produce byte-identical corpora with zero differing rows. Concurrent
+identical requests are serialized by an exclusive flock held for the
+scratch directory's lifetime (see `scratch.rs`), preventing tool processes
+from corrupting each other's observations.
 
 Find-shaped rows still carry real, unmodified absolute paths in their
 observations — `exec_find` emits `{canonicalized absolute path}:{lineno}:
