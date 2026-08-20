@@ -18,11 +18,12 @@ use super::PagerError;
 
 /// Appends one already-built event.
 ///
-/// `pub(crate)` for exactly one caller: the drift watch's row is constructed
-/// by `drift::drift_event`, beside the gate that produced the reading, so that
-/// the row cannot describe a different pair of documents than the comparison
-/// read. Every other event in this module is built here, where the `Event`
-/// variant and its call site are one function apart.
+/// `pub(crate)` for the two rows that are constructed beside the gate that
+/// produced them rather than here — the drift watch's (`drift::drift_event`)
+/// and the swap-candidate job's (`swap::swap_candidate_event`) — so that
+/// neither row can describe a different pair of documents than the comparison
+/// actually read. Every other event in this module is built here, where the
+/// `Event` variant and its call site are one function apart.
 pub(crate) fn append(j: &mut Journal, e: &Event) -> Result<(), PagerError> {
     j.append(e)
         .map_err(|err| PagerError::Substrate(format!("journal append failed: {err}")))

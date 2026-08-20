@@ -446,6 +446,28 @@ impl<S: Substrate> Pager<S> {
         jrnl::degraded(&mut self.journal, reason)
     }
 
+    /// Journals one swap-candidate coverage verdict (swap-candidate seam
+    /// design §4's row) — same single-writer reason as
+    /// [`Pager::journal_post`]: the job runs outside the pager, on a request
+    /// thread, and must not open a second writer onto this journal.
+    ///
+    /// The row is built by `swap::swap_candidate_event` from the reading
+    /// itself rather than from arguments spelled out here, so it cannot come
+    /// to describe different documents — or different bytes — than the cover
+    /// run actually compared. The same discipline (and the same reason)
+    /// [`Pager::journal_drift`] follows.
+    ///
+    /// [`Pager::journal_drift`]: crate::pager::Pager::journal_drift
+    pub fn journal_swap_candidate(
+        &mut self,
+        reading: &crate::swap::CandidateReading,
+    ) -> Result<(), PagerError> {
+        jrnl::append(
+            &mut self.journal,
+            &crate::swap::swap_candidate_event(reading),
+        )
+    }
+
     /// Read-only view of the substrate, for inspection and tests.
     pub fn substrate(&self) -> &S {
         &self.substrate
@@ -825,6 +847,35 @@ impl<S: Substrate> Pager<S> {
             entry.handle = None;
         }
         jrnl::model_unloaded(&mut self.journal, name)
+    }
+
+    /// Unloads `name`'s weights and forgets its registration entirely — the
+    /// exact inverse of [`Pager::register_model`].
+    ///
+    /// Exists for the swap-candidate seam (design §4: "the scratch identity
+    /// never outlives the request"), which registers a candidate GGUF under a
+    /// scratch name so assay can probe it through `/v1`, then must leave the
+    /// registry exactly as it found it. The weights go back through
+    /// [`Pager::unload_model`] — the same call `POST /models/{name}/unload`
+    /// makes, so a scratch model's bytes are credited back by the one path
+    /// that already knows how, including suspending anything still holding a
+    /// context on it.
+    ///
+    /// **The registration survives an unload that failed**, deliberately. The
+    /// placement budget subtracts every *loaded* model's weights
+    /// (`loaded_weights_bytes`), so forgetting an entry whose weights the
+    /// substrate still holds would silently under-count the pool by exactly
+    /// those bytes — law 1's pre-checked memory pressure, quietly wrong. A
+    /// named error with the entry still standing is the honest failure.
+    ///
+    /// An agent still in the table on this model is suspended by the unload
+    /// but **not** removed: it keeps its id and its image, and its next
+    /// request is refused by name rather than served against weights nobody
+    /// registered.
+    pub fn unregister_model(&mut self, name: &str) -> Result<(), PagerError> {
+        self.unload_model(name)?;
+        self.models.remove(name);
+        Ok(())
     }
 
     /// Removes `id` from the agent table entirely: destroys its resident
