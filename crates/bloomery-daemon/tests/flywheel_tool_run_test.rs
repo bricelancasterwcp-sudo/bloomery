@@ -376,6 +376,56 @@ fn bin_run_request_with_ungranted_argv_is_a_named_error() {
     assert!(error.contains("grant violation"), "{error}");
 }
 
+/// A reference patch that does not land is NOT a hard error in the
+/// run-verified path: it answers with the pairs built so far (read, patch —
+/// the two that exist without a landing), plus `landed: false` and a
+/// `landing_detail`, and no `patched_contents`. Same partial-response
+/// contract turn 1 pinned in
+/// `flywheel_tool_test.rs::bin_trajectory_request_with_a_bad_search_yields_landed_false_with_detail`.
+///
+/// Worth stating because this shape has a *second*, deliberately different
+/// failure mode next door: a patch that lands but whose verification exits
+/// non-zero is a hard error with no pairs at all
+/// (`bin_run_request_whose_verification_exits_nonzero_is_a_hard_error`).
+/// The two must not collapse into each other — a patch that never landed
+/// was never verified, and there is nothing to run.
+#[test]
+fn bin_run_verified_request_with_a_bad_search_yields_landed_false_with_detail() {
+    let mut request = run_request("v1");
+    request["search"] = serde_json::json!("this text is not in the file at all");
+
+    let response = run_flywheel_tool(&request);
+
+    assert_eq!(response["landed"], serde_json::json!(false), "{response}");
+    let detail = response["landing_detail"]
+        .as_str()
+        .expect("landing_detail present when landed: false");
+    assert!(
+        detail.contains("did not apply"),
+        "expected a did-not-apply detail, got: {detail:?}"
+    );
+    assert!(
+        response.get("patched_contents").is_none(),
+        "patched_contents must be absent when landed: false, got {response}"
+    );
+
+    let pairs = response["pairs"].as_array().expect("pairs array");
+    assert_eq!(pairs.len(), 2, "{response}");
+    assert_eq!(
+        pairs[0]["completion"].as_str().unwrap(),
+        format!("<action verb=\"read\" path=\"{TARGET}\">\n</action>")
+    );
+    // No `run` pair: the verification step is only renderable once there is
+    // a patched file to run against.
+    for pair in pairs {
+        let completion = pair["completion"].as_str().unwrap();
+        assert!(
+            !completion.contains("verb=\"run\""),
+            "a trajectory whose patch never landed must not render a run pair: {completion:?}"
+        );
+    }
+}
+
 /// `find_pattern` and `run_argv` name two different 4-pair shapes; there is
 /// no defined 5-pair shape that is both, so a request carrying both is a
 /// named error rather than a silent pick-one.
@@ -387,6 +437,46 @@ fn bin_request_carrying_both_find_pattern_and_run_argv_is_a_named_error() {
     let error = error_of(&run_flywheel_tool(&request));
     assert!(error.contains("find_pattern"), "{error}");
     assert!(error.contains("run_argv"), "{error}");
+}
+
+/// Neither shape selector applies under `expect="refuse"`: a refusal renders
+/// exactly 2 pairs (read, done) and never patches anything, so there is
+/// nothing for a `find` step or a verification `run` to attach to. Both
+/// halves of that guard are exercised here — the arm is one `Err` behind an
+/// or-pattern, and a test for only one half would leave the other free to
+/// fall through to `handle_refuse_trajectory`, which would silently ignore
+/// the selector and render a 2-pair refusal as if nothing were wrong.
+#[test]
+fn bin_refuse_request_carrying_a_shape_selector_is_a_named_error() {
+    for (label, selector) in [
+        (
+            "run_argv",
+            serde_json::json!({"run_argv": [PYTHON, CHECK_SCRIPT]}),
+        ),
+        (
+            "find_pattern",
+            serde_json::json!({"find_pattern": "average"}),
+        ),
+    ] {
+        let mut request = run_request("v1");
+        let object = request.as_object_mut().expect("request is an object");
+        object.remove("run_argv");
+        object.insert("expect".into(), serde_json::json!("refuse"));
+        object.insert(
+            "refusal_reason".into(),
+            serde_json::json!("No change needed: average() already divides by len(xs)."),
+        );
+        for (k, v) in selector.as_object().expect("selector is an object") {
+            object.insert(k.clone(), v.clone());
+        }
+
+        let error = error_of(&run_flywheel_tool(&request));
+        assert!(error.contains("refuse"), "{label}: {error}");
+        assert!(
+            error.contains("find_pattern") && error.contains("run_argv"),
+            "{label}: {error}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

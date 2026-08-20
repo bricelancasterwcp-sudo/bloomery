@@ -8,12 +8,13 @@
 //! *.rs` file is its own crate), so the small set this file needs is
 //! restated here rather than shared.
 //!
-//! **Two sibling files carry the rest**, split out when this one reached
-//! its 800-line ceiling (task-6 brief, Step 1) — a pure move, no test body
-//! changed: `flywheel_tool_refuse_test.rs` holds the task-3 brief's refusal
+//! **Three sibling files carry the rest.** The first was split out of this
+//! one when it reached the 800-line ceiling (task-6 brief, Step 1) — a pure
+//! move, no test body changed: `flywheel_tool_refuse_test.rs` holds the
+//! task-3 brief's refusal
 //! trajectories (both families, plus the missing-target anti-drift pin),
-//! and `flywheel_tool_verbs_test.rs` holds the task-6 brief's find-shaped
-//! and run-verified trajectories. What stays here is turn-1's material:
+//! and `flywheel_tool_find_test.rs` / `flywheel_tool_run_test.rs` hold the
+//! task-6 brief's two turn-3 shapes. What stays here is turn-1's material:
 //! the patch-mode anti-drift pin, `transcript_entry`'s format pins, the
 //! bin-level patch-mode requests, and the turn-1 golden.
 

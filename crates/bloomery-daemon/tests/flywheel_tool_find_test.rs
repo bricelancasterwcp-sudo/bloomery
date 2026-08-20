@@ -421,6 +421,52 @@ fn bin_find_shaped_request_whose_files_disagree_with_target_contents_is_a_named_
     assert!(error.contains(TARGET), "{error}");
 }
 
+/// A reference patch that does not land is NOT a hard error in the
+/// find-shaped path either: it answers with the pairs built so far
+/// (find, read, patch — the three that exist without a landing), plus
+/// `landed: false` and a `landing_detail`, and no `patched_contents`. Same
+/// partial-response contract turn 1 pinned in
+/// `flywheel_tool_test.rs::bin_trajectory_request_with_a_bad_search_yields_landed_false_with_detail`,
+/// cloned here because that pin says nothing about this shape — the find and
+/// read steps still really ran, so the pairs that precede the patch are real
+/// and are still returned.
+#[test]
+fn bin_find_shaped_request_with_a_bad_search_yields_landed_false_with_detail() {
+    let mut request = find_request("v1");
+    request["search"] = serde_json::json!("this text is not in the file at all");
+
+    let response = run_flywheel_tool(&request);
+
+    assert_eq!(response["landed"], serde_json::json!(false), "{response}");
+    let detail = response["landing_detail"]
+        .as_str()
+        .expect("landing_detail present when landed: false");
+    assert!(
+        detail.contains("did not apply"),
+        "expected a did-not-apply detail, got: {detail:?}"
+    );
+    assert!(
+        response.get("patched_contents").is_none(),
+        "patched_contents must be absent when landed: false, got {response}"
+    );
+
+    // The find and read steps really happened, so their pairs survive: the
+    // response is the 4-pair shape minus only the `done` pair the missing
+    // landing made unrenderable.
+    let pairs = response["pairs"].as_array().expect("pairs array");
+    assert_eq!(pairs.len(), 3, "{response}");
+    assert_eq!(
+        pairs[0]["completion"].as_str().unwrap(),
+        format!(
+            "<action verb=\"find\" pattern=\"{FIND_PATTERN}\" path=\"{FIND_PATH}\">\n</action>"
+        )
+    );
+    assert_eq!(
+        pairs[1]["completion"].as_str().unwrap(),
+        format!("<action verb=\"read\" path=\"{TARGET}\">\n</action>")
+    );
+}
+
 /// A `files` entry names where bytes get written, so a path that climbs out
 /// of the scratch dir is refused by name — before anything is written, and
 /// whether or not the escape would have resolved to a real location.
