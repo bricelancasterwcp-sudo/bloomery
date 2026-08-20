@@ -346,3 +346,24 @@ after a number has been seen.
 - `2026-08-20-flywheel3-contamination-report.json` — post-hoc guard run
   over the written corpus against all three gate sets.
 - `~/flywheel3/corpus.jsonl` — **out of repo**, sha256 above.
+
+## Addendum, 2026-08-20 — "decided" is two-sided (controller ruling bT10/R1)
+
+Appended 2026-08-20, **before any turn-3 training process was started**;
+strictly additive — no line above is edited. **"Decided" means the Wilson
+95% interval does not straddle 0.80**, and that property is *two-sided*:
+an interval lying entirely **above** 0.80 is a **decided PASS** (at n=16
+only **16/16** reaches it, exactly as the bT1/R1 table above states), and
+an interval lying entirely **below** 0.80 is a **decided FAIL** — the
+sense already carried by the measured anchors above, where stock's 2/16
+patch and 5/16 refuse are recorded as decided fails. The bT1/R1 wording
+("**decided** means the interval clears 0.80") named only the upper leg;
+under bT10/R1 it is read as the two-sided property, so that a decided
+fail and a decided pass are the same fact about the interval pointing in
+opposite directions. **The flag marks the record and never changes the
+floor decision.** The floor alone decides: ≥13/16 per class passes,
+<13/16 fails, whether the interval is decided or provisional — so a
+13-15/16 provisional pass is a pass, a 16/16 decided pass is a pass, and
+a decided fail fails on exactly the same floor a provisional one would.
+No fixture, floor, endpoint, seed, or corpus parameter is touched by this
+addendum, and no turn-3 number has been seen at the time it is written.
