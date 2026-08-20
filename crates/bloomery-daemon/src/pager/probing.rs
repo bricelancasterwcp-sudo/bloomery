@@ -42,6 +42,12 @@
 //!   the job's step-7 `unregister_model` closes it structurally on every path
 //!   that job can return through, and re-registering a name starts a fresh
 //!   entry with the window shut.
+//! - **Nor can what it admitted.** An agent minted inside the window would
+//!   otherwise be merely *suspended* by step 7 and revived — usable, ungated —
+//!   by the next job's re-registration of the same scratch name, because law 5
+//!   is checked at agent creation and never per inference. Step 7 evicts every
+//!   agent bound to the identity instead; the argument is on
+//!   [`Pager::unregister_model`](super::Pager::unregister_model).
 //!
 //! **What it does expose, honestly.** For the length of one probe — ~10
 //! minutes on the enthusiast-16GB tier — anything that can reach this daemon's
@@ -51,8 +57,12 @@
 //! [`crate::post`] already documents for the boot window ("a replay can bound
 //! the window and see what was admitted during it — it cannot tell which of
 //! those calls were assay's and which were a client's"), narrowed from every
-//! configured model to one scratch name that no configured model can hold and
-//! that is unregistered when the job ends. The admission is journaled, once,
+//! configured model to one scratch name — which is unregistered when the job
+//! ends, taking every agent bound to it along
+//! ([`Pager::unregister_model`](super::Pager::unregister_model)). No *bare*
+//! TOML key can hold that name; a quoted one can, and
+//! [`crate::swap::SCRATCH_SUFFIX`] carries that caveat and the reasoning for
+//! naming it rather than guarding it. The admission is journaled, once,
 //! naming the identity and the reason.
 //!
 //! **Closing is the caller's discipline, and it is not optional.** The swap

@@ -896,11 +896,47 @@ impl<S: Substrate> Pager<S> {
     /// those bytes — law 1's pre-checked memory pressure, quietly wrong. A
     /// named error with the entry still standing is the honest failure.
     ///
-    /// An agent still in the table on this model is suspended by the unload
-    /// but **not** removed: it keeps its id and its image, and its next
-    /// request is refused by name rather than served against weights nobody
-    /// registered.
+    /// **Every agent bound to `name` is evicted, not merely suspended** —
+    /// [`Pager::remove_agent`], id, context and image, before the unload.
+    ///
+    /// Suspending them is not enough, and the reason is specific to what this
+    /// call is for. A suspended agent keeps its `model` *string*, and its next
+    /// request is refused only because no model of that name is registered any
+    /// more (`paging::place`'s `UnknownModel`). For a scratch identity that
+    /// refusal is temporary by construction: the next candidate job for the
+    /// same model registers exactly that name again, and law 5 is checked at
+    /// agent **creation**, never per inference — so a survivor would come back
+    /// usable, against a *different* candidate's weights, without passing any
+    /// gate at all. Design §4's "the scratch identity never outlives the
+    /// request" has to mean the agents on it too, or it means nothing.
+    ///
+    /// **Before the unload, not after**, for two reasons. [`Pager::suspend`]
+    /// saves a KV image on the way out, and [`Pager::remove_agent`] would drop
+    /// it again a moment later — the wasted work that method's doc exists to
+    /// avoid. And an eviction that has already emptied the table leaves
+    /// [`Pager::unload_model`]'s suspend loop nothing that can fail.
+    ///
+    /// An unknown model is refused before anything is evicted, so a refused
+    /// unregister still changes nothing.
     pub fn unregister_model(&mut self, name: &str) -> Result<(), PagerError> {
+        if !self.models.contains_key(name) {
+            return Err(PagerError::UnknownModel(name.to_string()));
+        }
+        let bound: Vec<String> = self
+            .table
+            .iter()
+            .filter(|a| a.model == name)
+            .map(|a| a.id.clone())
+            .collect();
+        for id in bound {
+            self.remove_agent(
+                &id,
+                &format!(
+                    "{name} was unregistered; an agent bound to it cannot outlive the \
+                     registration, because re-registering that name would revive it"
+                ),
+            )?;
+        }
         self.unload_model(name)?;
         self.models.remove(name);
         Ok(())
