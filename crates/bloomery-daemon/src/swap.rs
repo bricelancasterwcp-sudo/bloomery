@@ -4,8 +4,10 @@
 //! `assay cover`, consumed — like the drift gate — strictly through
 //! documented exit codes. Advisory: nothing here blocks admission.
 
+mod context;
 mod job;
 
+pub use context::{ProbeFactory, SwapContext, SwapProbes};
 pub use job::run_candidate_probe;
 
 use std::path::{Path, PathBuf};
@@ -292,7 +294,11 @@ pub const NOTE_HANDOVER: &str = "on swap: edit config, restart; the next boot re
 
 /// The two notes, in the order §4 names them. Fixed: every report carries both,
 /// whatever the verdict, because both gaps are true of every candidate.
-const NOTES: [&str; 2] = [NOTE_TASK_GATES, NOTE_HANDOVER];
+///
+/// `pub` because the HTTP layer's spawn site builds one report of its own — a
+/// caught panic's — and a second spelling of this pair there could come to
+/// disagree with the job's about which gaps a candidate has.
+pub const NOTES: [&str; 2] = [NOTE_TASK_GATES, NOTE_HANDOVER];
 
 /// What a digest field carries in a *report* when this job never got a digest
 /// to put there — the bytes could not be read, or the job broke before it had
@@ -304,7 +310,13 @@ const NOTES: [&str; 2] = [NOTE_TASK_GATES, NOTE_HANDOVER];
 /// `"infra: …"` outcome whose sentence names exactly what failed — and never
 /// in a journal row, because those paths journal [`Event::Degraded`] instead
 /// of a verdict row, or (where the journal is what failed) write no row at all.
-const UNREAD: &str = "unread";
+///
+/// `pub` for the same reason [`NOTES`] is: the HTTP layer's spawn site builds
+/// a caught panic's report itself, and a literal `"unread"` retyped there
+/// would be a second spelling of this one sentinel. It renders in the GET
+/// body's `candidate_gguf_sha` / `floor_sha` exactly as it reads — a fixed
+/// word, never a digest.
+pub const UNREAD: &str = "unread";
 
 /// Everything one candidate job learned — the single value both the journal
 /// row and the operator's report are built from, so the two cannot come to
