@@ -39,9 +39,16 @@ generator, `gate_sampling.py`): the rule set itself now lives in a single
 shared helper, ``_violations_for_task``, with ``check_corpus`` as one
 caller (post-hoc, over every task in a finished corpus.jsonl) and the new
 ``task_violates_gates`` as the other (at generation time, over ONE
-candidate before it is ever written to a corpus). This is factoring, not
-new policy — the guard CLI's behavior, and every rule it enforces, is
-untouched.
+candidate before it is ever written to a corpus). That was factoring, not
+new policy.
+
+Turn 3 widens the CONTENTS rule (both callers at once, since both go
+through the one shared helper): every file a task carries is compared
+against every gate fixture file, not just the declared target's contents.
+A sibling file that is a verbatim copy of a gate fixture file is a
+contamination too, and turn 3's multi-file repair tasks render siblings
+into real training pairs. Corpus rows carry a `files` map for exactly
+this reason; a row predating it falls back to target-only.
 
 CLI: ``python3 -m tools.flywheel.factory.contamination --corpus
 corpus.jsonl --gate crates/bloomery-daemon/fixtures/codec-tasks-v1.toml
@@ -118,20 +125,29 @@ class Report:
 
 def _corpus_tasks_from_rows(rows: Iterable[dict]) -> dict[str, dict]:
     """Groups corpus.jsonl rows by task_id, keeping the first occurrence
-    of each task's goal/target/target_contents/search (generate.py writes
-    these on every one of a task's 3 pair rows; they are identical across
-    the 3, so first-occurrence is sufficient and avoids relying on
-    iteration order beyond "first seen wins" — the row order in the file
-    is itself deterministic, written by generate.py in task order)."""
+    of each task's goal/target/files/search (generate.py writes these on
+    every one of a task's 3 pair rows; they are identical across the 3, so
+    first-occurrence is sufficient and avoids relying on iteration order
+    beyond "first seen wins" — the row order in the file is itself
+    deterministic, written by generate.py in task order).
+
+    `meta["files"]` (every file the task carries, not just the declared
+    target) is what lets the post-hoc guard screen SIBLING files. A row
+    written before that key existed is a legacy row: fall back to
+    `{target: target_contents}` so an older corpus.jsonl still gets its
+    target checked rather than silently skipping the contents rule."""
     tasks: dict[str, dict] = {}
     for row in rows:
         meta = row["meta"]
         task_id = meta["task_id"]
         if task_id not in tasks:
+            files = meta.get("files")
+            if files is None:
+                files = {meta["target"]: meta["target_contents"]}
             tasks[task_id] = {
                 "goal": meta["goal"],
                 "target": meta["target"],
-                "target_contents": meta["target_contents"],
+                "files": files,
                 "search": meta["search"],
             }
     return tasks
@@ -140,7 +156,7 @@ def _corpus_tasks_from_rows(rows: Iterable[dict]) -> dict[str, dict]:
 def _violations_for_task(
     goal: str,
     target: str,
-    target_contents: str,
+    files: dict[str, str],
     search: str,
     fixtures: Iterable[GateFixture],
     jaccard_threshold: float = 0.8,
@@ -153,14 +169,22 @@ def _violations_for_task(
     goals, file contents, target filenames, search strings; OR >=
     `jaccard_threshold` Jaccard token-set similarity between the goal and
     any gate goal. `task_id`/corpus-vs-candidate bookkeeping stays with
-    each caller — this function only knows about the four scalar fields
-    every rule compares, so a violation dict here never carries
-    `task_id`."""
+    each caller — this function only knows about the fields every rule
+    compares, so a violation dict here never carries `task_id`.
+
+    `files` is EVERY file the task carries, not just the declared
+    target's contents: the gate side has always iterated `fixture.files`,
+    and the corpus side now matches it, so the contents rule is a full
+    cross product. A task whose sibling file is a verbatim copy of a gate
+    fixture file is a contamination just as surely as one whose target
+    is, and Task 7's multi-file repair tasks render siblings into real
+    training pairs. An empty `files` is legal (nothing to compare) and
+    leaves the goal/target/search rules running unchanged."""
     violations: list[dict] = []
     goal_norm = normalize(goal)
     target_norm = normalize(target)
     search_norm = normalize(search)
-    contents_norm = normalize(target_contents)
+    files_norm = {path: normalize(contents) for path, contents in sorted(files.items())}
     goal_tokens = token_set(goal)
 
     for fixture in fixtures:
@@ -189,15 +213,18 @@ def _violations_for_task(
                 }
             )
         for gate_path, gate_contents in sorted(fixture.files.items()):
-            if contents_norm == normalize(gate_contents):
-                violations.append(
-                    {
-                        "rule": "file_contents_match",
-                        "gate_fixture": fixture.name,
-                        "gate_file": gate_path,
-                        "detail": "corpus target file contents match a gate fixture file",
-                    }
-                )
+            gate_norm = normalize(gate_contents)
+            for corpus_path, corpus_norm in files_norm.items():
+                if corpus_norm == gate_norm:
+                    violations.append(
+                        {
+                            "rule": "file_contents_match",
+                            "gate_fixture": fixture.name,
+                            "gate_file": gate_path,
+                            "corpus_file": corpus_path,
+                            "detail": f"corpus file {corpus_path!r} contents match a gate fixture file",
+                        }
+                    )
 
         similarity = jaccard(goal_tokens, token_set(fixture.goal))
         if similarity >= jaccard_threshold:
@@ -226,33 +253,33 @@ def task_violates_gates(
     (`_violations_for_task` always checks fixtures/rules in the same
     order, so this is stable across identical inputs), or `None` if the
     candidate is clean against every gate. `gates=[]` always returns
-    `None` — nothing to screen against, and no extra work done."""
+    `None` — nothing to screen against, and no extra work done.
+
+    `task.files` goes in whole, so every file the candidate carries is
+    screened, not just the declared target's contents. A missing-target
+    `RefusalTask` therefore has its real SIBLING files screened (there is
+    no target file to screen — `files` never contains the target); a
+    multi-file repair task has its companion files screened too."""
     if not gates:
         return None
 
-    if isinstance(task, RefusalTask):
-        target_contents = "" if task.target_missing else task.files[task.target]
-        search = ""
-    else:
-        target_contents = task.files[task.target]
-        search = task.search
-
-    violations = _violations_for_task(task.goal, task.target, target_contents, search, gates, jaccard_threshold)
+    search = "" if isinstance(task, RefusalTask) else task.search
+    violations = _violations_for_task(task.goal, task.target, task.files, search, gates, jaccard_threshold)
     return violations[0]["rule"] if violations else None
 
 
 def check_corpus(rows: Iterable[dict], fixtures: list[GateFixture], jaccard_threshold: float = 0.8) -> Report:
     """The comparator itself. Fails on any of: exact or normalized match
-    of goals, file contents, target filenames, search strings; OR >=
-    `jaccard_threshold` Jaccard token-set similarity between any corpus
-    goal and any gate goal."""
+    of goals, the contents of ANY file a task carries (target or sibling),
+    target filenames, search strings; OR >= `jaccard_threshold` Jaccard
+    token-set similarity between any corpus goal and any gate goal."""
     corpus_tasks = _corpus_tasks_from_rows(rows)
     violations: list[dict] = []
 
     for task_id in sorted(corpus_tasks):
         task = corpus_tasks[task_id]
         for violation in _violations_for_task(
-            task["goal"], task["target"], task["target_contents"], task["search"], fixtures, jaccard_threshold
+            task["goal"], task["target"], task["files"], task["search"], fixtures, jaccard_threshold
         ):
             violations.append({"task_id": task_id, **violation})
 

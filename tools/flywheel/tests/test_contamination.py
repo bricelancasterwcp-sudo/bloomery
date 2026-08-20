@@ -17,26 +17,30 @@ import unittest
 from pathlib import Path
 
 from tools.flywheel.factory import contamination
+from tools.flywheel.factory.task import MISSING_TARGET, RefusalTask, Task
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 GATE_PATH = REPO_ROOT / "crates" / "bloomery-daemon" / "fixtures" / "codec-tasks-v1.toml"
 
 
-def _corpus_row(task_id, goal, target, target_contents, search, pair="read"):
-    return {
-        "prompt": "irrelevant for this test",
-        "completion": "irrelevant for this test",
-        "meta": {
-            "task_id": task_id,
-            "template": "unit_test_family",
-            "lens": "python",
-            "pair": pair,
-            "goal": goal,
-            "target": target,
-            "target_contents": target_contents,
-            "search": search,
-        },
+def _corpus_row(task_id, goal, target, target_contents, search, pair="read", files=None):
+    """`files` omitted entirely (not `{}`) when not given — that is exactly
+    the legacy row shape written before the `files` key existed, which
+    `_corpus_tasks_from_rows` must still handle by falling back to the
+    target alone."""
+    meta = {
+        "task_id": task_id,
+        "template": "unit_test_family",
+        "lens": "python",
+        "pair": pair,
+        "goal": goal,
+        "target": target,
+        "target_contents": target_contents,
+        "search": search,
     }
+    if files is not None:
+        meta["files"] = files
+    return {"prompt": "irrelevant for this test", "completion": "irrelevant for this test", "meta": meta}
 
 
 class GateVocabularyIsComplete(unittest.TestCase):
@@ -213,6 +217,87 @@ class DisguisedCopyIsCaughtTest(unittest.TestCase):
             contamination.token_set(self.disguised_goal), contamination.token_set(self.gate_goal)
         )
         self.assertGreaterEqual(similarity, 0.8)
+
+
+CLEAN_GOAL = (
+    "orbitwatch.py's exposure_minutes() divides the wrong total when averaging "
+    "a night's readings. Fix exposure_minutes() in orbitwatch.py so it uses the "
+    "readings count. Patch the file, then emit done."
+)
+CLEAN_TARGET = "orbitwatch.py"
+CLEAN_CONTENTS = (
+    "def exposure_minutes(readings):\n    total = 0\n    for r in readings:\n"
+    "        total += r\n    return total / (len(readings) + 3)\n"
+)
+CLEAN_SEARCH = "    return total / (len(readings) + 3)"
+
+
+class SiblingFileScreeningTest(unittest.TestCase):
+    """CARRIED-DEBT fast-follow: the guard compared only the DECLARED
+    target's contents, so a task whose sibling file was a verbatim copy of a
+    gate fixture file passed both the draw-time screen and the post-hoc CLI.
+    Task 7's multi-file repair tasks render siblings into real training
+    pairs, which makes this a correctness precondition, not hygiene. Each
+    test plants a gate fixture file as a SIBLING (never as the target) so it
+    can only be caught by screening every file."""
+
+    def setUp(self):
+        self.fixtures = contamination.load_gate_fixtures(GATE_PATH)
+        self.gate_contents = next(f for f in self.fixtures if f.name == "py-mean-off-by-one").files["stats.py"]
+
+    def _patch_task(self, files):
+        return Task(
+            name="unit_test_family",
+            lens="python",
+            target=CLEAN_TARGET,
+            files=files,
+            goal=CLEAN_GOAL,
+            search=CLEAN_SEARCH,
+            replace="    return total / len(readings)",
+            summary="fix the divisor",
+        )
+
+    def test_the_same_task_without_the_plant_is_clean(self):
+        # Pins that the tests below catch the PLANT and not something
+        # incidental about the task's goal/target/search.
+        clean = self._patch_task({CLEAN_TARGET: CLEAN_CONTENTS})
+        self.assertIsNone(contamination.task_violates_gates(clean, self.fixtures))
+
+    def test_draw_time_screen_rejects_a_planted_sibling(self):
+        planted = self._patch_task({CLEAN_TARGET: CLEAN_CONTENTS, "sidecar.py": self.gate_contents})
+        self.assertEqual(contamination.task_violates_gates(planted, self.fixtures), "file_contents_match")
+
+    def test_draw_time_screen_rejects_a_planted_refusal_sibling(self):
+        planted = RefusalTask(
+            name="unit_test_family",
+            lens="python",
+            family=MISSING_TARGET,
+            target=CLEAN_TARGET,
+            target_missing=True,
+            files={"sidecar.py": self.gate_contents},
+            goal=CLEAN_GOAL,
+            refusal_reason=f"Cannot: {CLEAN_TARGET} does not exist in this workspace.",
+        )
+        self.assertEqual(contamination.task_violates_gates(planted, self.fixtures), "file_contents_match")
+
+    def test_post_hoc_guard_sees_a_planted_sibling_via_the_row_files_key(self):
+        row = _corpus_row(
+            "t1",
+            CLEAN_GOAL,
+            CLEAN_TARGET,
+            CLEAN_CONTENTS,
+            CLEAN_SEARCH,
+            files={CLEAN_TARGET: CLEAN_CONTENTS, "sidecar.py": self.gate_contents},
+        )
+        report = contamination.check_corpus([row], self.fixtures)
+        self.assertFalse(report.clean, "a gate fixture file planted as a sibling must be flagged")
+        self.assertTrue(any(v["rule"] == "file_contents_match" for v in report.violations), report.violations)
+
+    def test_a_legacy_row_without_a_files_key_still_has_its_target_checked(self):
+        row = _corpus_row("t1", CLEAN_GOAL, CLEAN_TARGET, self.gate_contents, CLEAN_SEARCH)
+        self.assertNotIn("files", row["meta"], "this row must be the legacy shape for the fallback to be exercised")
+        report = contamination.check_corpus([row], self.fixtures)
+        self.assertTrue(any(v["rule"] == "file_contents_match" for v in report.violations), report.violations)
 
 
 class JaccardHelperTest(unittest.TestCase):

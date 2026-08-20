@@ -258,6 +258,40 @@ class ContaminationGuardStillCatchesPlantedViolationTest(unittest.TestCase):
             self.assertTrue(any(v["rule"] == "goal_match" for v in report["violations"]))
 
 
+class CorpusRowsCarryEveryTaskFileTest(unittest.TestCase):
+    """The post-hoc guard can only screen a task's SIBLING files if the
+    corpus row exposes them: `_row_meta`/`refusal_row_meta` write a `files`
+    map (path -> contents) covering every file the task carries. Without it
+    the CLI falls back to target-only (`_corpus_tasks_from_rows`'s legacy
+    branch) and a planted sibling would be invisible post-hoc."""
+
+    def test_every_row_carries_a_files_map_consistent_with_its_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            out, report = tmp / "out.jsonl", tmp / "report.json"
+            result = run_generate(
+                [
+                    "--seed", "11", "--count", "6", "--refusal-count", "4",
+                    "--tool", str(STUB_TOOL), "--out", str(out), "--report", str(report),
+                ]
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines() if line.strip()]
+            self.assertTrue(rows)
+            for row in rows:
+                meta = row["meta"]
+                files = meta.get("files")
+                self.assertIsInstance(files, dict, f"row {meta['task_id']}/{meta['pair']} carries no files map")
+                self.assertTrue(files, f"row {meta['task_id']}/{meta['pair']} carries an empty files map")
+                if meta["target"] in files:
+                    self.assertEqual(files[meta["target"]], meta["target_contents"])
+                else:
+                    # The only shape with a target absent from files is a
+                    # missing-target refusal, whose target_contents is "".
+                    self.assertEqual(meta["expect"], "refuse")
+                    self.assertEqual(meta["target_contents"], "")
+
+
 class FingerprintGateFieldsTest(unittest.TestCase):
     def test_gate_fields_present_and_populated_when_a_gate_is_given(self):
         with tempfile.TemporaryDirectory() as tmp:

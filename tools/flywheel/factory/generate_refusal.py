@@ -109,6 +109,11 @@ def refusal_row_meta(task_id: str, task: RefusalTask, pair_name: str) -> dict:
         "goal": task.goal,
         "target": task.target,
         "target_contents": target_contents,
+        # Same reason as `generate._row_meta`'s `files`: the post-hoc guard
+        # screens every file. For a missing-target refusal this is the ONLY
+        # way its real sibling files reach the guard at all — `target` is
+        # by construction absent from `files`, so `target_contents` is "".
+        "files": dict(task.files),
         "search": "",
     }
 

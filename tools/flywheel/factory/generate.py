@@ -188,6 +188,9 @@ def _row_meta(task_id: str, task: AnyTask, pair_name: str) -> dict:
         "goal": task.goal,
         "target": task.target,
         "target_contents": target_contents,
+        # Every file the task carries, not just the target: the post-hoc
+        # guard screens siblings and can only see them through this key.
+        "files": dict(task.files),
         "search": task.search,
     }
 

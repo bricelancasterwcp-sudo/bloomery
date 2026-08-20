@@ -35,15 +35,22 @@ Each surviving task yields exactly 3 JSONL lines (`read`, `patch`,
 {"prompt": "...", "completion": "...", "meta": {
   "task_id": "s20260816-000000", "template": "py_inverted_boolean",
   "lens": "python", "pair": "read",
-  "goal": "...", "target": "...", "target_contents": "...", "search": "..."
+  "goal": "...", "target": "...", "target_contents": "...",
+  "files": {"<path>": "<contents>"}, "search": "..."
 }}
 ```
 
-`meta.goal`/`target`/`target_contents`/`search` are a superset of the
-brief's required `meta` fields (`task_id`/`template`/`lens`/`pair`) —
+`meta.goal`/`target`/`target_contents`/`files`/`search` are a superset of
+the brief's required `meta` fields (`task_id`/`template`/`lens`/`pair`) —
 `contamination.py` needs the raw pre-tool task data to compare against
 the gate set without re-parsing rendered prompts (which would recreate
 the exact prompt-drift risk the design spec's §2 rules out).
+
+`meta.files` is EVERY file the task carries, not just the target, so the
+post-hoc guard screens sibling files too; `target_contents` stays as the
+target's own contents (`""` for a missing-target refusal, whose target is
+by construction absent from `files`). A row written before `files`
+existed is treated as a legacy row and falls back to the target alone.
 
 `fingerprint.json`:
 
@@ -90,8 +97,9 @@ python3 -m tools.flywheel.factory.contamination \
   --out contamination-report.json
 ```
 
-Exits nonzero if the corpus shares an exact/normalized goal, file
-contents, target filename, or search string with any gate fixture, or if
+Exits nonzero if the corpus shares an exact/normalized goal, the contents
+of ANY file a task carries (target or sibling), target filename, or
+search string with any gate fixture, or if
 any corpus goal is a >= 0.8 Jaccard token-set near-duplicate of a gate
 goal. Must be run — and reported clean — before any training step (design
 spec §6: this report is part of the pre-registration record).

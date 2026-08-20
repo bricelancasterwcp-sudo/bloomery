@@ -15,10 +15,8 @@ from __future__ import annotations
 import random
 
 from tools.flywheel.factory import goal_phrasing
-from tools.flywheel.factory.task import DEFECT_ABSENT, MISSING_TARGET, RefusalTask
+from tools.flywheel.factory.task import CHECK_INSTRUCTION, DEFECT_ABSENT, MISSING_TARGET, RefusalTask
 from tools.flywheel.factory.wordlists import CONFIG_KEY_BASES, MONTH_NAMES, THEMES
-
-CHECK_INSTRUCTION = "Check first, and only patch if it is genuinely wrong; then emit done."
 
 
 # ---------------------------------------------------------------------

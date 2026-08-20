@@ -17,10 +17,8 @@ from __future__ import annotations
 import random
 
 from tools.flywheel.factory import goal_phrasing
-from tools.flywheel.factory.task import DEFECT_ABSENT, MISSING_TARGET, RefusalTask
+from tools.flywheel.factory.task import CHECK_INSTRUCTION, DEFECT_ABSENT, MISSING_TARGET, RefusalTask
 from tools.flywheel.factory.wordlists import THEMES, Theme
-
-CHECK_INSTRUCTION = "Check first, and only patch if it is genuinely wrong; then emit done."
 
 
 def _theme_and_target(rng: random.Random, exclude_stem: str | None = None) -> tuple[Theme, str]:

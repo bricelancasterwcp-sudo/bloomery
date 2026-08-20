@@ -2,8 +2,9 @@
 doc §5 for the refusal shape) — split out of `templates.py` so the
 template family modules (`templates_python.py`, `templates_text.py`,
 `templates_refusal_python.py`, `templates_refusal_text.py`) can import
-`Task`/`RefusalTask`/`DONE_INSTRUCTION` without a circular import
-(`templates.py` imports the family modules to build its registries).
+`Task`/`RefusalTask`/`DONE_INSTRUCTION`/`CHECK_INSTRUCTION` without a
+circular import (`templates.py` imports the family modules to build its
+registries).
 """
 
 from __future__ import annotations
@@ -12,6 +13,13 @@ import re
 from typing import NamedTuple
 
 DONE_INSTRUCTION = "Patch the file, then emit done."
+# The refusal shape's counterpart to DONE_INSTRUCTION: every refusal goal
+# ends with it, and `validate_refusal_task` asserts that. Canonical HERE,
+# beside its repair-shape sibling, rather than declared twice in
+# `templates_refusal_python.py`/`templates_refusal_text.py` — two verbatim
+# copies with nothing pinning them together is exactly the drift this
+# module's single `DONE_INSTRUCTION` already prevents for repair goals.
+CHECK_INSTRUCTION = "Check first, and only patch if it is genuinely wrong; then emit done."
 MIN_TARGET_LINES = 5
 MAX_TARGET_LINES = 60
 
@@ -145,6 +153,14 @@ def validate_refusal_task(task: RefusalTask) -> list[str]:
 
     if task.target not in task.goal:
         violations.append(f"goal does not contain the target filename {task.target!r}")
+
+    # The refusal-shape mirror of `validate_task`'s DONE_INSTRUCTION rule.
+    # Load-bearing, not cosmetic: the trailing instruction is the ONLY part
+    # of a refusal goal that tells the model to look before it leaps, so a
+    # family that renders it wrong (or drops it) would teach "weird goal ->
+    # refuse" — the exact failure the plausibility rule above also guards.
+    if not task.goal.endswith(CHECK_INSTRUCTION):
+        violations.append(f"goal does not end with the check-first instruction {CHECK_INSTRUCTION!r}")
 
     if not task.refusal_reason.strip():
         violations.append("refusal_reason is empty")
