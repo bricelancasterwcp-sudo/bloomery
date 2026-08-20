@@ -47,6 +47,14 @@ file over the 800 ceiling)" parenthetical is no longer true of the repo, and
 says so beneath its own unaltered text. The slice's own carry is a new section
 below; nothing else in this file is touched.
 
+**Amended 2026-08-20** (post-slice-3 follow-ups): the swap-candidate section
+gains the live-acceptance arc's debt candidates — the journal wall-clock
+stamp (bA2/F2) and the tight-tier unload-first operator line (bA2/F1), both
+recorded and **delivered on arrival** in the P4-item-8 convention (struck
+through as they land, same commit) — and a *Process lessons* block. Recorded
+here because the evidence docs that found them are records of runs, not a
+registry of debt.
+
 ## Delivered in Phase 2a (2026-08-14)
 
 Struck through, never deleted: the original text stands as recorded, with
@@ -602,6 +610,59 @@ reason as §4 step 1's, and names the two shapes §7 omitted (400
   `registry.rs:172/184`), and a spawn panic on OS thread exhaustion leaves
   claimed state unreleased. Switch both to `thread::Builder::spawn` with a
   finish/cleanup on `Err`.
+
+**From the live-acceptance arc (added 2026-08-20, the post-slice-3
+follow-ups):**
+
+- ~~**Journal rows carry no time field** (bA2/F2). Found investigating a
+  10,933 MiB VRAM dip during acceptance 2: the union of keys over the boot-4
+  journal's 1132 rows held no time at all, and boot4.log carries no clock
+  either, so no row could be wall-clock-correlated with anything outside the
+  journal.~~
+  **DELIVERED on arrival (the same commit that records this)** —
+  `Journal::append` stamps every row with `epoch_ms`: milliseconds since the
+  Unix epoch, the writer's own clock at append time, in the `_ms` naming the
+  schema already uses for durations. A **row** property, never an `Event`
+  field — it records when the writer wrote, not what happened — so `replay`
+  returns events unchanged and the raw JSONL is the correlation surface.
+  Journals written before the stamp keep replaying (pinned per committed
+  journal by `committed_g2_journal_still_replays`), and a stamped line
+  deserializes identically to its unstamped ancestor
+  (`a_stamped_line_and_its_unstamped_ancestor_deserialize_to_the_same_event`;
+  the stamp itself pinned, clock-bounded and mutation-checked, by
+  `an_appended_row_carries_a_bounded_epoch_ms_stamp`, both `journal_test.rs`).
+  Forward-only: the acceptance journals already committed stay stampless —
+  nothing rewrites an append-only record. One proof pattern changes shape
+  under the stamp, noted before anyone pre-registers it: acceptance 2's
+  durable determinism proof was a byte-equal pair of `Degraded` rows, and two
+  identical events appended at different instants now differ in `epoch_ms` —
+  a future row-equality claim compares rows with the stamp stripped
+  (`jq 'del(.epoch_ms)'`), and byte-identical *whole journals* across re-runs
+  are impossible by construction.
+- ~~**Unload-then-swap-candidate on tight tiers had no operator-facing
+  line** (bA2/F1). Acceptance 2a measured the flow live: the pager charges
+  every loaded model's weights to one budget and reclaims only agents' KV,
+  so a candidate cannot fit beside a resident 14B on this tier — the probe's
+  `/v1` requests are refused (`503 residency_refused`) and the job lands as
+  an `infra:` report, not a verdict. The evidence doc recorded the flow;
+  nothing operator-facing did.~~
+  **DELIVERED same commit** — the README's swap-candidate bullet now carries
+  the flow: `POST /models/{m}/unload` first, then the swap-candidate POST.
+  (This is bT3/R1's disposition working as ruled — the residency refusal
+  surfaced through the probe with the pager's real arithmetic. The fact
+  acceptance 2 *added* is that on this tier the happy path is unreachable
+  without the unload, which is exactly the line an operator needed written
+  down.)
+
+**Process lessons (the live-acceptance arc):** amendments to a
+pre-registration are **separate files, never in-place edits** — acceptance 2
+amended its prereg in place (gitignored, mtime overwritten), and the evidence
+had to report both stamps with a caveat where a second file would have carried
+its own proof. And a verify-sweep must enumerate **every file the session
+edited**: the write-discard failure mode (edit passes that raise after logging
+ok, silently discarding applied-but-unwritten fixes) struck twice across two
+files and survived a correctly-built sweep pointed at only one of them —
+scoped re-reviews caught it both times.
 
 ## Phase 2 work items (in recommended order)
 

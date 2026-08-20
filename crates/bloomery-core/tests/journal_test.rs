@@ -22,6 +22,95 @@ fn append_then_replay_round_trips() {
     assert_eq!(replay(&path).unwrap(), vec![e1, e2]);
 }
 
+/// Every appended row carries the writer's own wall-clock stamp (`epoch_ms`,
+/// milliseconds since the Unix epoch — the `_ms` naming the journal already
+/// uses for durations), so a row can be correlated with clocks *outside* the
+/// journal: GPU sample logs, daemon stderr, an operator's notes. Found as
+/// bA2/F2 (swap-candidate acceptance 2): a 10,933 MiB VRAM dip could not be
+/// tied to any journal row because no row said *when* — the union of keys
+/// over 1132 rows held no time at all.
+///
+/// The stamp is a **row** property, not an `Event` field: it records when the
+/// writer wrote, not what happened, so `replay` returns events unchanged and
+/// the raw JSONL is the correlation surface. The row layout keeps the `event`
+/// tag first — rows stay greppable as `{"event":"…`.
+#[test]
+fn an_appended_row_carries_a_bounded_epoch_ms_stamp() {
+    // Pid-suffixed: two concurrent `cargo test` runs (main repo + a worktree)
+    // must not share one append-only file, or `lines.len()` reads 4.
+    let dir = std::env::temp_dir().join(format!("bloomery-journal-stamp-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("j-stamp.jsonl");
+    let _ = std::fs::remove_file(&path);
+    let mut j = Journal::open(&path).unwrap();
+    let e1 = Event::Boot {
+        version: "0.1.0".into(),
+    };
+    let e2 = Event::ModelUnloaded {
+        model: "qwen".into(),
+    };
+    let now_ms = || -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+    };
+    let before = now_ms();
+    j.append(&e1).unwrap();
+    j.append(&e2).unwrap();
+    let after = now_ms();
+
+    let raw = std::fs::read_to_string(&path).unwrap();
+    let lines: Vec<&str> = raw.lines().collect();
+    assert_eq!(lines.len(), 2);
+    for line in &lines {
+        assert!(
+            line.starts_with(r#"{"event":""#),
+            "the event tag must stay first: {line}"
+        );
+        let value: serde_json::Value = serde_json::from_str(line).unwrap();
+        let stamp = value["epoch_ms"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("row carries no numeric epoch_ms: {line}"));
+        // Known flake mode, accepted on purpose: a backwards wall-clock step
+        // (NTP) landing inside this microseconds-wide window fails the bound.
+        // Do NOT widen the bounds — a loose window is exactly what lets a
+        // constant-stamp mutant live. A one-off red here means the clock
+        // stepped, not that the stamp broke; re-run it.
+        assert!(
+            (before..=after).contains(&stamp),
+            "epoch_ms {stamp} outside the append's own clock bounds [{before}, {after}]"
+        );
+    }
+
+    // The stamp never enters the Event schema: replay returns the events
+    // exactly as appended, and the stamp lives only in the row's bytes.
+    assert_eq!(replay(&path).unwrap(), vec![e1, e2]);
+}
+
+/// The narrow-grain compat pin, both directions (the `CodecFixture`/`expect`
+/// precedent): a stamped line and its unstamped ancestor deserialize to the
+/// same `Event`. The unstamped direction is what keeps every journal written
+/// before the stamp existed replaying; the stamped direction is serde's
+/// unknown-key tolerance on the internally-tagged enum — behavior that
+/// predates the stamp but is load-bearing from now on, so it is pinned here
+/// (a `deny_unknown_fields` added to `Event` would fail this test, and would
+/// orphan every stamped journal).
+#[test]
+fn a_stamped_line_and_its_unstamped_ancestor_deserialize_to_the_same_event() {
+    let unstamped = r#"{"event":"ModelUnloaded","model":"qwen"}"#;
+    let stamped = r#"{"event":"ModelUnloaded","model":"qwen","epoch_ms":1787197252123}"#;
+    let from_unstamped: Event = serde_json::from_str(unstamped).unwrap();
+    let from_stamped: Event = serde_json::from_str(stamped).unwrap();
+    assert_eq!(from_unstamped, from_stamped);
+    assert_eq!(
+        from_stamped,
+        Event::ModelUnloaded {
+            model: "qwen".into()
+        }
+    );
+}
+
 #[test]
 fn prompt_hash_is_stable() {
     assert_eq!(sha256_hex("abc").len(), 64);

@@ -341,6 +341,47 @@ pub struct Journal {
     writer: BufWriter<File>,
 }
 
+/// One journal row as written: the event, plus the writer's own wall-clock
+/// stamp. `epoch_ms` is milliseconds since the Unix epoch (the `_ms` naming
+/// the schema already uses for durations), read from the system clock at
+/// append time — it records *when the writer wrote*, not what happened, so it
+/// is a **row** property and never an `Event` field. It exists so a row can
+/// be correlated with clocks outside the journal (GPU sample logs, daemon
+/// stderr, an operator's notes): the swap-candidate acceptance found a VRAM
+/// dip nobody could tie to a row because no row said when (bA2/F2). It is the
+/// writer's clock reading, never a number transcribed from a measured
+/// document, so the no-transcribed-measurements law
+/// ([`Event::Drift`]'s doc) is untouched.
+///
+/// Two properties a correlating reader must know:
+///
+/// - **The stamp is wall clock, not monotonic.** The system clock can step
+///   backwards (NTP), so `epoch_ms` is not guaranteed non-decreasing down the
+///   file — file order is the row order, always; never sort by the stamp or
+///   difference two stamps for an elapsed time. In-journal durations are the
+///   `duration_ms` fields, measured separately and unaffected by clock steps.
+/// - **The stamp is the append instant** — the *end* of whatever the row
+///   describes. A row carrying `duration_ms` covers roughly
+///   `[epoch_ms - duration_ms, epoch_ms]`, not the stamp's instant: a
+///   22-second `ModelLoaded` is stamped 22 seconds after the load began.
+///
+/// Rows written before 2026-08-20 carry no stamp; [`replay`] accepts both,
+/// and returns the events without the stamp either way — the raw JSONL is
+/// the correlation surface. (A Rust consumer that one day needs the stamp
+/// gets a `replay_rows() -> (stamp, event)` beside [`replay`], never a new
+/// `Event` field — the cheap move would put the writer's clock inside the
+/// what-happened record.) `#[serde(flatten)]` makes the row one flat object;
+/// what keeps the `event` tag *first* is field order — `event` is declared
+/// before `epoch_ms` and serde emits in declaration order — so rows stay
+/// greppable as `{"event":"…` (the layout is pinned by
+/// `an_appended_row_carries_a_bounded_epoch_ms_stamp`).
+#[derive(serde::Serialize)]
+struct Row<'a> {
+    #[serde(flatten)]
+    event: &'a Event,
+    epoch_ms: u64,
+}
+
 impl Journal {
     pub fn open(path: &Path) -> std::io::Result<Journal> {
         let file = OpenOptions::new().create(true).append(true).open(path)?;
@@ -349,11 +390,20 @@ impl Journal {
         })
     }
 
-    /// Appends one event as a single JSON line, flushed immediately.
+    /// Appends one event as a single JSON line — the event's fields plus the
+    /// row's `epoch_ms` wall-clock stamp ([`Row`]) — flushed immediately.
     /// Crash-durable enough for Phase 1: the write is flushed to the OS
     /// after every append, so at most the in-flight append can be lost.
     pub fn append(&mut self, e: &Event) -> std::io::Result<()> {
-        let line = serde_json::to_string(e)?;
+        // A clock before 1970 has no honest millisecond count; 0 is visibly
+        // absurd rather than silently plausible, and the row still lands. A
+        // count past u64 milliseconds saturates rather than silently
+        // truncating (the daemon's own `millis` convention).
+        let epoch_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+            .unwrap_or(0);
+        let line = serde_json::to_string(&Row { event: e, epoch_ms })?;
         self.writer.write_all(line.as_bytes())?;
         self.writer.write_all(b"\n")?;
         self.writer.flush()
@@ -364,6 +414,13 @@ impl Journal {
 ///
 /// Any unparseable line is a hard error — a corrupt journal must fail
 /// loudly rather than silently skip events (project law 7).
+///
+/// The row's `epoch_ms` stamp ([`Row`]) is deliberately not returned: replay
+/// reconstructs *what happened*, and the stamp records when the writer wrote.
+/// A consumer correlating rows against wall clocks reads the raw JSONL, where
+/// the stamp lives. Rows written before the stamp existed (2026-08-20) carry
+/// no `epoch_ms` key and replay identically — pinned per committed journal by
+/// `committed_g2_journal_still_replays`.
 pub fn replay(path: &Path) -> std::io::Result<Vec<Event>> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
