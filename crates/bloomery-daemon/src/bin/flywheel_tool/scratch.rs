@@ -101,12 +101,21 @@ impl ScratchId<'_> {
     /// The directory name's stable suffix: the first 16 hex characters of a
     /// SHA-256 over this identity.
     ///
-    /// Every field is fed **length-prefixed**, never concatenated raw —
-    /// otherwise `("ab", "c")` and `("a", "bc")` would hash alike and two
-    /// genuinely different workspaces could land in one directory. `files`
-    /// is fed in order, because order is part of the identity: the entries
-    /// are written in order and a later entry can overwrite an earlier one's
-    /// path.
+    /// Two properties, and only the first is load-bearing:
+    ///
+    /// 1. **Same identity, same digest** — the determinism law. This is what
+    ///    ruling bT7/R1 is about, and what the covering tests pin.
+    /// 2. **Different identity, different digest** — a hygiene property, not
+    ///    a safety one. Two different requests that shared a name would each
+    ///    still get a correct workspace, because [`Scratch::materialize`]
+    ///    clears the directory before writing; they would merely share a
+    ///    path and a lock. It is still worth having, so every field is fed
+    ///    **length-prefixed** rather than concatenated raw — otherwise
+    ///    `("ab", "c")` and `("a", "bc")` would hash alike.
+    ///
+    /// `files` is fed in order, because order is part of the identity: the
+    /// entries are written in order and a later entry can overwrite an
+    /// earlier one's path.
     fn digest(&self) -> String {
         let mut hasher = Sha256::new();
         let mut feed = |bytes: &[u8]| {
@@ -346,4 +355,111 @@ pub(crate) fn run_exit_code(observation: &Observation) -> Result<i32, String> {
                  line, and exec_run's content format has drifted from \"exit {{code}}\\n{{output}}\""
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file(path: &str, contents: &str) -> RequestFile {
+        RequestFile {
+            path: path.to_string(),
+            contents: contents.to_string(),
+        }
+    }
+
+    fn id<'a>(target: &'a str, contents: &'a str, files: &'a [RequestFile]) -> ScratchId<'a> {
+        ScratchId {
+            target,
+            target_contents: contents,
+            find_pattern: None,
+            files,
+        }
+    }
+
+    /// Property 1, the load-bearing one: the digest is a pure function of
+    /// the identity, so the same request always names the same directory.
+    #[test]
+    fn the_same_identity_always_digests_the_same() {
+        let files = [file("a.py", "x = 1\n")];
+        assert_eq!(
+            id("a.py", "x = 1\n", &files).digest(),
+            id("a.py", "x = 1\n", &files).digest()
+        );
+    }
+
+    #[test]
+    fn the_digest_is_sixteen_lowercase_hex_characters() {
+        let d = id("a.py", "x = 1\n", &[]).digest();
+        assert_eq!(d.len(), 16, "{d}");
+        assert!(
+            d.chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+            "{d}"
+        );
+    }
+
+    /// Property 2: every field is part of the identity. Each case below
+    /// differs from the baseline in exactly one field.
+    #[test]
+    fn every_identity_field_changes_the_digest() {
+        let files = [file("a.py", "x = 1\n")];
+        let base = id("a.py", "x = 1\n", &files).digest();
+
+        let other_files = [file("b.py", "x = 1\n")];
+        let other_contents = [file("a.py", "x = 2\n")];
+        let two_files = [file("a.py", "x = 1\n"), file("b.py", "y = 2\n")];
+        let reordered = [file("b.py", "y = 2\n"), file("a.py", "x = 1\n")];
+
+        for (label, other) in [
+            ("target", id("b.py", "x = 1\n", &files).digest()),
+            ("target_contents", id("a.py", "x = 2\n", &files).digest()),
+            ("files path", id("a.py", "x = 1\n", &other_files).digest()),
+            (
+                "files contents",
+                id("a.py", "x = 1\n", &other_contents).digest(),
+            ),
+            ("files length", id("a.py", "x = 1\n", &two_files).digest()),
+            (
+                "find_pattern present",
+                ScratchId {
+                    find_pattern: Some("x"),
+                    ..id("a.py", "x = 1\n", &files)
+                }
+                .digest(),
+            ),
+        ] {
+            assert_ne!(base, other, "{label} does not change the digest");
+        }
+
+        // Order is identity: a later entry can overwrite an earlier one's
+        // path, so the same set in a different order is a different
+        // workspace.
+        assert_ne!(
+            id("a.py", "x = 1\n", &two_files).digest(),
+            id("a.py", "x = 1\n", &reordered).digest(),
+            "files order does not change the digest"
+        );
+    }
+
+    /// The direct pin on length-prefixing: without it these two identities
+    /// feed the hasher the same bytes and collide.
+    #[test]
+    fn fields_are_length_prefixed_so_a_shifted_split_does_not_collide() {
+        assert_ne!(id("ab", "c", &[]).digest(), id("a", "bc", &[]).digest());
+    }
+
+    /// An absent `find_pattern` and an empty one are different requests
+    /// (`""` is a regex that matches every line), so they must not share a
+    /// directory.
+    #[test]
+    fn an_absent_find_pattern_differs_from_an_empty_one() {
+        let absent = id("a.py", "x\n", &[]).digest();
+        let empty = ScratchId {
+            find_pattern: Some(""),
+            ..id("a.py", "x\n", &[])
+        }
+        .digest();
+        assert_ne!(absent, empty);
+    }
 }
