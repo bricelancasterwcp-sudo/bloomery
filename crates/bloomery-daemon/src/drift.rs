@@ -916,7 +916,12 @@ impl DriftGate {
 /// Appends assay's own stderr to an infrastructure detail when there is any.
 /// Its words, verbatim, for the operator — never parsed, and never consulted
 /// for a verdict.
-fn with_stderr(detail: String, stderr: &str) -> String {
+///
+/// `pub(crate)` for [`crate::swap::CoverGate`], which reads `assay cover`'s
+/// exits the way this file reads `assay diff --gate`'s and must report the
+/// tool's words identically — one rule for how assay's prose reaches an
+/// operator, not two.
+pub(crate) fn with_stderr(detail: String, stderr: &str) -> String {
     if stderr.is_empty() {
         detail
     } else {
