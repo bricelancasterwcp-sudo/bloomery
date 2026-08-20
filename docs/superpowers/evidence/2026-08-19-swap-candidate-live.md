@@ -47,8 +47,9 @@ finding, and it is a defect in this slice, not a fact about flywheel1.
 | 5 | confirming repeat of 1–2, well clear of any POST window | **202 → 200** | byte-identical `outcome`, `exit_code: null` |
 
 Both negative controls passed. The two candidate jobs produced the same
-sentence, the same candidate digest and the same floor digest — this is
-deterministic, not flaky, so no third run was made.
+sentence, the same candidate digest and the same floor digest, and
+their two journal rows are byte-equal — this is deterministic, not
+flaky, so no third run was made.
 
 | comparison | reference | current | outcome | exit code |
 |---|---|---|---|---|
@@ -79,7 +80,17 @@ HTTP 202
 ```
 
 Run 2 (POST `03:59:09Z`, done `04:03:29Z`, 4m20s) returned the same
-`report` object, field for field.
+`report` object, field for field. HTTP bodies are ephemeral, so the
+durable form of that claim is in the journal, where both runs left a
+row: lines **558 and 559** of `boot-1787197252.jsonl` are **byte-equal**
+— re-checkable by anyone holding the file, no transcript required:
+
+```
+$ grep '"reason":"swap:' boot-1787197252.jsonl | sort -u | wc -l
+1
+$ grep '"reason":"swap:' boot-1787197252.jsonl | uniq -c
+      2 {"event":"Degraded","reason":"swap: the candidate probe for …
+```
 
 **The two `notes` came back on both runs, whatever the outcome, exactly
 as §4's amendment promises** — this is the operator handover §5 owes,
@@ -115,7 +126,8 @@ Boot 3's drift-relevant rows
 {"event":"Drift","model":"qwen3-14b-flywheel2","comparison":"cumulative","outcome":"instrument-changed (0.12.0/v10 -> 0.13.0/v10)","reference_path":"/home/brice/.local/share/bloomery/drift/data/profiles/qwen3-14b-flywheel2.baseline.json","current_path":"/home/brice/.local/share/bloomery/drift/data/profiles/qwen3-14b-flywheel2.json","exit_code":null,"reference_sha":"f2a2cabc360a7423f5f963975103672cda04242c55fc04897ee0e2aa5a5b1b98","current_sha":"34cc643b1ef321b2f30b3a0a204bdd313b1c33ff724885013c0bf74cdcbc968c"}
 ```
 
-The two candidate jobs, both rows identical:
+The two candidate jobs, at lines 558 and 559 — byte-equal to each
+other, printed once:
 
 ```json
 {"event":"Degraded","reason":"swap: the candidate probe for qwen3-14b-flywheel2 (registered as qwen3-14b-flywheel2!swap-candidate) failed: assay exited 4: assay: infrastructure failure: HTTP 422 from http://127.0.0.1:8399/v1/chat/completions; no coverage verdict was reached — this candidate is unmeasured, not refused"}
@@ -157,28 +169,74 @@ as a derivation, not as the endpoint's verdict.
 
 ## Why the probe failed: the admission gate closes on the scratch identity
 
-The 422 is `PagerError::Unprofiled` — `api_native.rs` renders it as
-`(422, {"error": "unprofiled", "model": …})`. `Pager::admit`
-(`crates/bloomery-daemon/src/pager.rs`) is Law 5's gate, and it admits
-an **unprofiled** model on exactly two paths:
+**Two different `PagerError`s render as 422 on this surface, and this
+boot could plausibly have produced either.** `map_error`
+(`crates/bloomery-daemon/src/api_native.rs`, at this run's HEAD
+`a236de4`) maps both:
 
 ```rust
-let has_profile = self.models.get(model).is_some_and(|e| e.profile.is_some());
-if has_profile { return Ok(()); }
-let posting = self.posting;
-if !posting && !self.allow_unprofiled {
-    return Err(PagerError::Unprofiled(model.to_string()));
-}
+PagerError::Unprofiled(model) => (422, json!({"error": "unprofiled", "model": model})),
+PagerError::DriftBlocked { model, reference } => (
+    422,
+    json!({"error": "drift_blocked", "model": model, "reference": reference}),
+),
 ```
 
-The swap job's scratch identity has no profile — producing one is the
-whole point of the probe. `allow_unprofiled` is not set in the standing
-config. And `posting` is a **daemon-global** flag owned by the boot-time
-POST window, which had closed ~37 seconds before run 1's POST (the
-boot probe's own provenance finishes at `03:53:09Z`; the POST is at
-`03:53:46Z`)
-(`/status` read `"posting": false` immediately before the request, and
-again before run 2). So agent creation for
+`DriftBlocked` is the rival explanation and it is not far-fetched: boot
+3's drift rows read `instrument-changed`, and `Pager::admit` checks the
+standing admission block **first**, before the profile gate. So the
+snippet below starts at that branch rather than after it. Verbatim from
+`crates/bloomery-daemon/src/pager.rs:664-688` **as it stood at
+`a236de4`**, the commit this run's binary was built from (the file has
+since moved — a later fix commit `dc0ae2d` changed `admit`; nothing
+below describes the current tree):
+
+```rust
+    fn admit(&mut self, model: &str) -> Result<(), PagerError> {
+        // Design §2. Checked before the existence gate so a blocked model
+        // reports the reason that actually applies: it HAS a profile, and
+        // that is precisely why a regression against it could be measured.
+        if let Some(block) = self
+            .models
+            .get(model)
+            .and_then(|e| e.admission_block.as_ref())
+        {
+            return Err(PagerError::DriftBlocked {
+                model: model.to_string(),
+                reference: block.reference.clone(),
+            });
+        }
+        let has_profile = self
+            .models
+            .get(model)
+            .is_some_and(|entry| entry.profile.is_some());
+        if has_profile {
+            return Ok(());
+        }
+        let posting = self.posting;
+        if !posting && !self.allow_unprofiled {
+            return Err(PagerError::Unprofiled(model.to_string()));
+        }
+```
+
+**The `DriftBlocked` branch is excluded by observation, not by
+argument.** `/status`, read immediately before run 1's POST, carried
+`"admission_block": null` for `qwen3-14b-flywheel2` — no block stood,
+so that first branch could not have fired. (It could not have fired for
+the scratch identity either, which had just been registered and carried
+no block, but the reading above settles it without needing that
+reasoning.) `instrument-changed` is advisory: it is not one of the
+outcomes that installs an admission block, which is why the row and the
+null block coexist.
+
+That leaves the second refusal, and its three terms are all pinned by
+this run: the swap job's scratch identity has no profile — producing one
+is the whole point of the probe; `allow_unprofiled` is not set in the
+standing config; and `posting` is a **daemon-global** flag owned by the
+boot-time POST window, which had closed ~37 seconds before run 1's POST
+(the boot probe's own provenance finishes at `03:53:09Z`; the POST is at
+`03:53:46Z`) — `/status` read `"posting": false` immediately before the
+request, and again before run 2. So agent creation for
 `qwen3-14b-flywheel2!swap-candidate` is refused 422 at the door, assay
 gets a 422 from `/v1/chat/completions`, exits **4** (its own
 infrastructure-failure code, not one of `cover`'s four), and the job
@@ -220,11 +278,18 @@ not comparable:
 EXIT=2
 ```
 
+The `--json` document, all seven keys, nothing elided:
+
 ```json
 {"comparable": false,
  "identity_notes": ["probe_version must match exactly: '0.12.0' -> '0.13.0'"],
+ "uncovered": [], "covered": [], "incomplete": [], "ignored": [],
  "incomparable": []}
 ```
+
+The four empty cell lists are `cover_profiles`' documented behaviour on
+a refused pair — "A refused pair reports NOTHING beyond the notes" — not
+a coverage result of zero.
 
 **This is a derivation, not the endpoint's verdict** — the candidate
 here is fw2's own current profile, not flywheel1, because flywheel1's
@@ -254,7 +319,27 @@ for flywheel2 is supported by this run, in either direction. The
 candidate's weights were read (digested, 9.0 GB) and never loaded: GPU
 held steady at ~10,020 MiB through both candidate jobs — flywheel2's
 resident weights and nothing else — where a real candidate probe would
-have shown a second multi-GB load. The question the acceptance was
+have shown a second multi-GB load.
+
+GPU readings are ephemeral, so the durable proof is the journal census
+of `boot-1787197252.jsonl`, which anyone holding the file can repeat:
+
+```
+$ grep -c '"event"' boot-1787197252.jsonl                              # 559
+$ grep -c '"event":"AgentCreated"' boot-1787197252.jsonl               # 111
+$ grep -c '"event":"AgentCreated".*"model":"qwen3-14b-flywheel2"' …    # 111
+$ grep -c '"event":"AgentCreated".*swap-candidate' …                   #   0
+$ grep -c 'swap-candidate' boot-1787197252.jsonl                       #   2
+```
+
+**Every one of the 111 agents this boot created named
+`qwen3-14b-flywheel2`; none named the scratch identity.** Only 2 of the
+559 rows mention `swap-candidate` at all, and they are the byte-equal
+`Degraded` pair above. The candidate never got an agent, so it never
+got an inference, so it was never loaded — which is the same fact the
+422 predicts, arrived at from the other side.
+
+The question the acceptance was
 designed to answer is still open, and answering it needs two fixes
 first:
 
@@ -295,6 +380,48 @@ run 1 listed `['qwen3-14b-flywheel2']` only, and no
 `qwen3-14b-flywheel2!swap-candidate.confirm.json` was left behind in
 the profiles directory — design §4's cleanup law held on the failure
 path, which is the path it exists for.
+
+## What boot 3 left in the standing home
+
+Every artifact this document quotes is durable on the box — in the
+standing home, not in the repo and not in a worktree's `target/`, the
+same convention `2026-08-19-standing-v10-baseline.md` established:
+
+```
+/home/brice/.local/share/bloomery/drift/
+├── bloomery-drift.toml                    # unchanged by this run
+├── boot1.log  boot2.log                   # the standing-baseline boots
+├── boot3.log                              # NEW — this run (557,942 bytes)
+└── data/
+    ├── journal/boot-1787149620.jsonl      # boot 1 (556 rows)
+    ├── journal/boot-1787150388.jsonl      # boot 2 (557 rows)
+    ├── journal/boot-1787197252.jsonl      # NEW — boot 3 (559 rows)
+    └── profiles/qwen3-14b-flywheel2.{baseline,previous,}.json
+```
+
+Boot 3 added two files — `boot3.log` (557,942 bytes) and
+`boot-1787197252.jsonl` (559 rows) — and moved the profile documents on
+one rung, the rotation the drift watch runs every boot. State after
+shutdown, read off the files:
+
+| document | sha256 (first 8) | probe_version | its probe started |
+|---|---|---|---|
+| `…baseline.json` | `f2a2cabc` | 0.12.0 | `2026-08-19T14:28:59Z` |
+| `…previous.json` | `179b706e` | 0.12.0 | `2026-08-19T14:41:48Z` |
+| `…json` (current) | `34cc643b` | **0.13.0** | `2026-08-20T03:42:51Z` |
+
+`previous.json` held `f2a2cabc` before this boot and holds `179b706e`
+after it, so the rotation ran; its mtime is boot 2's, inherited because
+rotation renames the file rather than rewriting it. **The blessed
+baseline is byte-identical to what boot 1 blessed** — `f2a2cabc`, the
+same digest the drift-**cumulative** row names as `reference_sha` and
+both swap reports name as `floor_sha` (the drift-step row's
+`reference_sha` is `179b706e`, the previous rung). Nothing in this run
+moved it.
+
+No `qwen3-14b-flywheel2!swap-candidate.confirm.json` exists: the
+candidate profile named in both reports was never written, because the
+probe that would have written it never produced one.
 
 ## What ran, verbatim
 
