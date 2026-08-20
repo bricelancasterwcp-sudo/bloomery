@@ -87,11 +87,17 @@ Nothing was wrapped in `timeout` (this box's `timeout` segfaults on
 multithreaded children).
 
 **Pre-registration timestamp, authoritative.** §1 above was committed at
-`bd4bc8c`, **2026-08-20 16:12:08 -0500**. The first daemon process
-started **16:12:56 -0500** (48 s later) and bound its socket at 16:13.
-§1's own "~16:2x CDT" wording is the estimate written into it before the
-commit landed; the commit timestamp is the fact, and §1's text is left
-exactly as pre-registered rather than corrected in place.
+`bd4bc8c`, **2026-08-20 16:12:08 -0500** (git's 1-second granularity).
+The ordering is established by two artifacts that outlive this session,
+not by a process log: the boot configs were written at **16:12:48.563**
+(filesystem mtime of `target/g5v3-live/*/bloomery-g5v3-*.toml`, ~40 s
+after the commit) and the **first `Boot` row in the committed stock
+journal carries `epoch_ms 1787260377647` = 16:12:57.647** (49.6 s after
+the commit). So the pre-registration was committed 40-50 s before any
+part of boot 1 existed, and that window is checkable from the committed
+journal alone. §1's own "~16:2x CDT" wording is the estimate written into
+it before the commit landed; §1's text is left exactly as pre-registered
+rather than corrected in place.
 
 **Preflight, 2026-08-20:**
 
@@ -192,6 +198,12 @@ codec chosen from the profile: `search_replace`.
 
 ### 4.1 Verdicts, as journaled
 
+*Both blocks below (and §5.1's two) are the journaled lines with one
+field elided: the trailing `"epoch_ms"` (boot 1: `1787261115535` for the
+`CodecVerdict`, `1787261232268` for the `CodecVerdictMixed`). Line
+breaks are added for width; every other byte is verbatim, and the
+committed journals carry the unedited rows.*
+
 ```json
 {"event":"CodecVerdict","model":"qwen3:14b","fixture_set":"codec-tasks-v1",
  "codec":"search_replace","landed":7,"n":20,
@@ -245,25 +257,53 @@ not drift under the turn-3 code changes.
 ### 4.4 Anatomy
 
 - **Refuse misses are still overwhelmingly leg (c)** — 10 of 11 misses
-  are "task did not terminate `Done`": it reads the same file six times
-  and runs out of steps. 1 miss is leg (a) (`…-defect-absent-txt-02`:
-  `read → patch → done`, it patched a correct file). Zero leg-(b)-only
-  misses. This is turn 2's stock anatomy reproduced on the new set.
-- **Every missing-target fixture (5/5) dies leg (c)**: `read` ×6 against
-  a file that does not exist, never once saying so. It does not know how
-  to report absence.
+  are "task did not terminate `Done`". 1 miss is leg (a)
+  (`…-defect-absent-txt-02`: `read → patch → done`, it patched a correct
+  file). Zero leg-(b)-only misses. This is turn 2's stock anatomy
+  reproduced on the new set.
+- **The leg-(c) mechanism, recomputed: stock never obtains file content
+  at all.** Not one of the 10 leg-(c) misses contains a successful
+  `read`. Every one of them emits **six identical FAILING reads** — each
+  fixture's six `TaskStep` rows carry a single distinct outcome string,
+  repeated verbatim, until the step cap ends the task. The split of that
+  one failing outcome across the 10: **7 grant violations** (the model
+  invents a path outside the granted root) and **3 `read failed: No such
+  file or directory (os error 2) (NotFound)`**. It is not re-reading a
+  file it has seen and failing to decide — it never reaches the bytes,
+  and it never adapts the path it asks for.
+- **Every missing-target fixture (5/5) dies leg (c)** — 2 by grant
+  violation, 3 by `NotFound` — six identical failing reads each, never
+  once reporting the absence. It does not know how to report absence.
 - **The defect-absent 3/6 splits exactly along the hard/soft line of
   §3.1**: landed = `…-py-02`, `…-txt-01`, `…-txt-03` (the three
   hard-decidable ones); missed = `…-py-01`, `…-py-03`, `…-txt-02` (the
   three soft, contract/comment-tier ones). Recorded as observed; two of
-  the three soft misses are leg-(c) thrash rather than a judgment call,
+  the three soft misses die in the six-identical-failing-reads loop above
+  (never reading the file) rather than by a judgment call,
   so this is a suggestive 1:1 mapping, not evidence that the split
   *caused* the misses.
-- **Patch misses are the blind-patching disease, unchanged**: 8 of 14
-  misses never `read` at all (`patch` ×6 from imagination, or one
-  invented-path `patch` that the grant structurally refused — 3 grant
-  violations, boundary held), and the 6 find-shaped fixtures die
-  `find`-looping or `find|read|find|done`-ing without ever patching.
+- **Patch misses are the blind-patching disease, unchanged**: **9 of 14
+  misses never emit a `read` verb at all** — 8 of them patch from
+  imagination (`patch` ×6, or an invented-path `patch` the grant
+  structurally refused), and the 9th is `…-find-py-01`, which spends all
+  six steps on `find`. (The 8/14 figure printed here before this
+  correction counted only the non-find-shaped misses; the buckets
+  overlapped by one.) Stronger still: **none of the 14 patch misses ever
+  obtains file content** — no successful `read` in any of them. The
+  remaining 5 find-shaped misses die `find`-looping or
+  `find|read|find|done`-ing without ever patching.
+- **Grant violations are the dominant failure verb, not a footnote.**
+  Across the 32 v3 fixtures stock produced **61 grant-violation
+  `TaskStep` rows** — **58 on `read`, 3 on `patch`** — spread over **18
+  of the 32 fixtures**. (An earlier draft said "3 grant violations": that
+  counted only the `patch`-verb ones and missed the 58 reads, which are
+  the bulk of the behavior.) The invented paths are all `src/`-prefixed —
+  **12 of the 18 affected fixtures ask for `src/lib.rs`** specifically —
+  i.e. the model assumes a Rust-style source layout that no fixture has.
+  **The boundary held on every one**: each violated path was
+  model-invented and structurally refused, no file outside a grant was
+  ever touched. **flywheel2, for contrast, recorded ZERO grant violations
+  across all 52 of its fixtures.**
 
 ### 4.5 Surprise, recorded verbatim: stock uses `find` on 6/6 find-shaped fixtures
 
@@ -301,6 +341,10 @@ whole 52-fixture probe took 88 s against stock's 200 s — flywheel2 needs
 2-3 steps where stock burns 6.
 
 ### 5.1 Verdicts, as journaled
+
+*Same elision as §4.1: the trailing `"epoch_ms"` is dropped from both
+blocks (boot 2: `1787261911193` and `1787261960335`), line breaks added
+for width, every other byte verbatim.*
 
 ```json
 {"event":"CodecVerdict","model":"qwen3-14b-flywheel2","fixture_set":"codec-tasks-v1",
@@ -364,36 +408,77 @@ granted command** — the grant is offered and ignored. Exactly the
 that here there is no training to express: `run` enters the corpus in
 turn 3.
 
+**Reconciling find-usage = 2 with §5.4's "four of six emit a `find`".**
+Both numbers are correct and they count different things. The endpoint
+counts fixtures with a journaled `TaskStep` whose `verb` is `find`; a
+malformed find never becomes a `find` step at all — it fails to parse
+and journals as `verb: "?"` with outcome `MissingAttr { verb: "find",
+attr: "path" }`. So on the six find-shaped fixtures: **4 fixtures
+attempted a malformed find** (`py-01`, `py-02`, `py-03`, `txt-03`), **2
+fixtures produced a well-formed `find`** (`py-01`, `txt-02` — `py-01`
+appears in both, malformed first then well-formed), and **1 fixture
+(`txt-01`) never reached for `find` at all**, using `read` on a guessed
+path. The endpoint reports 2 because it is measuring the verb the daemon
+actually executed.
+
+**Turn-3 hazard, recorded before flywheel3 exists:** a flywheel3 that
+learns only the `find` *wire format* — and nothing about searching well
+— moves this endpoint from 2 to 6 with **no productive gain**, since the
+same model could still land 0/6. Combined with §4.5 (stock is already at
+6/6 on this endpoint), raw find-usage is unfit to judge find training in
+either direction. **The turn-3 pre-registration should therefore carry a
+*productive-find* secondary endpoint — find usage conditional on the
+fixture landing — alongside the raw count.**
+
 ### 5.4 Anatomy — the find-shaped failure is trained over-refusal
 
-Every one of the six find-shaped misses ends in a terminal `Done`
-carrying a **fabricated refusal about a file that exists**, reached in
-2-3 steps. The journaled steps, verbatim:
+All six find-shaped misses end in a terminal `Done` reached in 2-3
+steps, and **five of the six carry a fabricated claim**. The claims are
+not all the same kind, and the split matters:
+
+- **3 of 6 fabricate ABSENCE** (`py-01`, `txt-01`, `txt-02`) — turn 2's
+  *missing-target* refusal frame, applied to a file that exists.
+- **2 of 6 fabricate CORRECTNESS** (`py-02`, `py-03`) — turn 2's
+  *defect-absent* frame, asserting the code is already right about code
+  it never read.
+- **1 of 6 is not a fabrication at all** (`txt-03`) — it accurately
+  self-reports the parse error it just hit ("the 'find' action requires a
+  'path' argument"). Honest, and still a miss.
+
+The over-refusal finding survives the split — five wrongful refusals on
+fixtures carrying real defects — but "every one … about a file that
+exists" (this section's wording before correction) was over-broad on
+both counts: two of the five say the code is fine rather than absent,
+and the sixth says nothing false. The journaled steps, verbatim:
 
 | fixture | steps |
 |---|---|
 | `find-py-01` | `?` MissingAttr{verb:"find",attr:"path"} → `find` "found 0 matches" → `done` "Cannot: derive_nectar_flow_setting() is not defined in this workspace." |
 | `find-py-02` | `?` MissingAttr → `done` "Cannot: evaluate_soak_minutes_band() is already implemented correctly …" |
 | `find-py-03` | `?` MissingAttr → `done` "Cannot: assemble_warp_tension_window() is already the last function in its file …" |
-| `find-txt-01` | `read` "read failed: No such file or directory (NotFound)" → `done` "Cannot: resolve_pound_depth_floor does not exist in this workspace." |
+| `find-txt-01` | `read` "read failed: No such file or directory (os error 2) (NotFound)" → `done` "Cannot: resolve_pound_depth_floor does not exist in this workspace." |
 | `find-txt-02` | `find` "found 0 matches" → `done` "Cannot: No such row key compute_fog_signal_escalation exists in this workspace." |
 | `find-txt-03` | `?` MissingAttr → `done` "Cannot: the 'find' action requires a 'path' argument specifying which directory to search." |
 
 Two mechanisms, both recorded as observed:
 
-1. **It does not know the `find` wire format.** Four of six first
-   attempts emit a `find` action with no `path` attribute — a parse
-   failure (`MissingAttr { verb: "find", attr: "path" }`). flywheel2 was
-   never trained on `find`; this is its zero-shot guess at the syntax.
-   It has one re-ask available and does not recover it into a landing on
-   any of the four.
-2. **Its trained refusal instinct then fires on the wrong target.** Faced
-   with "I could not locate the file", it reaches for the *missing-target
-   refusal frame it was trained on in turn 2* — "Cannot: X does not exist
-   in this workspace" — and applies it to a file that is sitting in the
-   fixture directory. Turn 2 trained a judgment; on an unfamiliar goal
-   shape that judgment misfires as **over-refusal**, and the model states
-   a falsehood confidently while doing it.
+1. **It does not know the `find` wire format.** Four of the six fixtures
+   attempt a `find` action with no `path` attribute — a parse failure
+   (`MissingAttr { verb: "find", attr: "path" }`, journaled as
+   `verb: "?"`, which is why §5.3's find-usage endpoint reads 2 and not
+   6; see the reconciliation there). flywheel2 was never trained on
+   `find`; this is its zero-shot guess at the syntax. It has one re-ask
+   available and does not recover it into a landing on any of the four.
+2. **Its trained refusal instincts then fire on the wrong target.**
+   Faced with "I could not get at the file", it reaches for *a refusal
+   frame it was trained on in turn 2* — either the missing-target frame
+   ("Cannot: X does not exist in this workspace", 3 fixtures) or the
+   defect-absent frame ("already implemented correctly", 2 fixtures) —
+   and applies it to a file that is sitting in the fixture directory
+   carrying a real defect. Turn 2 trained a judgment; on an unfamiliar
+   goal shape that judgment misfires as **over-refusal**, and in five of
+   six cases the model states a falsehood confidently while doing it. The
+   sixth (`txt-03`) misfires into an accurate self-report instead.
 
 This is the honest possibility the turn-3 spec named in advance
 ("bluffed refusals on real defects; repair-class misses on G5"), landing
