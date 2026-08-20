@@ -1275,6 +1275,11 @@ type Seen = Arc<Mutex<Vec<Vec<String>>>>;
 /// the fixture exists (the interesting hooks need the fixture's own pager).
 type Hook = Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
 
+/// Every `/v1/chat/completions` call the fake probe made, as `(model, status)`
+/// — the admission the live acceptance found unreachable, observed rather than
+/// assumed. Only ever non-empty under [`SwapCfg::drive_v1`].
+type V1Calls = Arc<Mutex<Vec<(String, u16)>>>;
+
 /// A daemon serving `qwen` with the swap-candidate surface wired: the profiles
 /// directory `main.rs` wires, a real candidate GGUF on disk, and both of the
 /// job's subprocesses scripted — the probe writing a real document for
@@ -1289,9 +1294,51 @@ struct SwapFixture {
     probes: Seen,
     covers: Seen,
     hook: Hook,
+    /// Fires inside the fake `cover`, i.e. strictly AFTER the probe step and
+    /// while the scratch identity is still registered — the one moment a test
+    /// can ask whether the probe's admission window is still open.
+    cover_hook: Hook,
+    v1: V1Calls,
+}
+
+/// How one fixture's daemon differs from the default. Both knobs exist for the
+/// admission rows at the end of this file, and both default to the shape every
+/// earlier row was written against.
+#[derive(Clone, Copy)]
+struct SwapCfg {
+    /// `false` is the standing production config: `allow_unprofiled` unset, so
+    /// law 5's gate really refuses and the candidate probe's own `/v1` call is
+    /// admitted by the candidate window or not at all. The fixture's default
+    /// `true` is `Pager::new`'s permissive default, which every earlier row in
+    /// this file was written against.
+    allow_unprofiled: bool,
+    /// The fake probe first drives this daemon's real `/v1/chat/completions`
+    /// under the identity it was handed, exactly as assay does, and reports a
+    /// non-200 the way assay reported the live 422 — `exit 4`, no document.
+    /// This is the whole point of the admission rows: with it off, the probe
+    /// seam is scripted end to end and real admission never runs.
+    drive_v1: bool,
+    /// The fake probe exits 4 without writing a document *after* its `/v1`
+    /// call — one job's probe-failure path, driven without touching admission,
+    /// so a row can watch the window open and the job still end badly.
+    probe_fails: bool,
+}
+
+impl Default for SwapCfg {
+    fn default() -> Self {
+        SwapCfg {
+            allow_unprofiled: true,
+            drive_v1: false,
+            probe_fails: false,
+        }
+    }
 }
 
 fn serve_swap(cover_exit: i32) -> SwapFixture {
+    serve_swap_cfg(cover_exit, SwapCfg::default())
+}
+
+fn serve_swap_cfg(cover_exit: i32, cfg: SwapCfg) -> SwapFixture {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
@@ -1301,12 +1348,20 @@ fn serve_swap(cover_exit: i32) -> SwapFixture {
 
     let journal = bloomery_core::journal::Journal::open(&dir.join("j.jsonl")).unwrap();
     let images = bloomery_daemon::agents::ImageStore::new(&dir.join("img")).unwrap();
-    let mut pager = Pager::new(
-        FakeSubstrate::new(),
-        journal,
-        images,
-        Box::new(|| Some(1024 * 1024 * 1024)),
-    );
+    let mut fake = FakeSubstrate::new();
+    // Enough replies that every `/v1` call a probe makes is answered like a
+    // real one: admission is what these rows measure, so an inference that
+    // failed for want of a script would be noise in the status they read.
+    for _ in 0..16 {
+        fake.script_reply(bloomery_substrate::Reply {
+            text: "ok".to_string(),
+            prompt_tokens: Some(4),
+            completion_tokens: Some(2),
+            duration_ms: 1,
+        });
+    }
+    let mut pager = Pager::new(fake, journal, images, Box::new(|| Some(1024 * 1024 * 1024)));
+    pager.set_allow_unprofiled(cfg.allow_unprofiled);
     pager.set_profiles_dir(profiles.clone());
     let serving = dir.join("qwen.gguf");
     write_gguf(&serving, "the-model-in-service");
@@ -1324,25 +1379,81 @@ fn serve_swap(cover_exit: i32) -> SwapFixture {
     let probes: Seen = Seen::default();
     let covers: Seen = Seen::default();
     let hook: Hook = Hook::default();
+    let cover_hook: Hook = Hook::default();
+    let v1: V1Calls = V1Calls::default();
     let (probe_sink, cover_sink, probe_hook) = (probes.clone(), covers.clone(), hook.clone());
+    let (v1_sink, after_probe) = (v1.clone(), cover_hook.clone());
     let factory = Box::new(move || {
-        let (sink, hook) = (probe_sink.clone(), probe_hook.clone());
+        let (sink, hook, v1_sink) = (probe_sink.clone(), probe_hook.clone(), v1_sink.clone());
+        let drive_v1 = cfg.drive_v1;
         let runner = PostRunner::with_runner(Box::new(move |_py, args: &[String]| {
             sink.lock().expect("probe sink").push(args.to_vec());
+            let model = value_of(args, "--model");
+            if drive_v1 {
+                // assay's real first act: drive the endpoint it was pointed at,
+                // under the `--model` it was handed. The base URL comes out of
+                // the argv rather than a captured port, because the argv is
+                // what the job really built.
+                let base = args
+                    .iter()
+                    .find(|a| a.starts_with("http://"))
+                    .cloned()
+                    .expect("the probe argv names an endpoint");
+                let (addr, path) = base
+                    .trim_start_matches("http://")
+                    .split_once('/')
+                    .expect("the endpoint carries assay's /v1 suffix");
+                let (st, _) = http(
+                    addr,
+                    "POST",
+                    &format!("/{path}/chat/completions"),
+                    &serde_json::json!({
+                        "model": model,
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "max_tokens": 8,
+                    })
+                    .to_string(),
+                );
+                v1_sink.lock().expect("v1 sink").push((model.clone(), st));
+                if st != 200 {
+                    // The live run's own words, in the live run's own shape:
+                    // `PostError::NonZeroExit` renders this as `assay exited 4:
+                    // …`, which is exactly what the endpoint reported twice
+                    // against the real daemon.
+                    return Ok(std::process::Output {
+                        status: exited(4),
+                        stdout: Vec::new(),
+                        stderr: format!(
+                            "assay: infrastructure failure: HTTP {st} from {base}/chat/completions"
+                        )
+                        .into_bytes(),
+                    });
+                }
+            }
             // Cloned out from under the lock, so a hook that panics (the
             // wedge row below) cannot poison this mutex on the way past.
             let installed = hook.lock().expect("probe hook").clone();
             if let Some(f) = installed {
                 f();
             }
+            if cfg.probe_fails {
+                return Ok(std::process::Output {
+                    status: exited(4),
+                    stdout: Vec::new(),
+                    stderr: b"assay: scripted probe failure".to_vec(),
+                });
+            }
             let out = PathBuf::from(value_of(args, "--json"));
-            let model = value_of(args, "--model");
             std::fs::write(&out, profile_doc(&model, 2048)).expect("fake probe writes a document");
             Ok(output(exited(0)))
         }));
-        let sink = cover_sink.clone();
+        let (sink, hook) = (cover_sink.clone(), after_probe.clone());
         let gate = CoverGate::with_runner(Box::new(move |_py, args: &[String]| {
             sink.lock().expect("cover sink").push(args.to_vec());
+            let installed = hook.lock().expect("cover hook").clone();
+            if let Some(f) = installed {
+                f();
+            }
             Ok(output(exited(cover_exit)))
         }));
         SwapProbes { runner, gate }
@@ -1370,6 +1481,8 @@ fn serve_swap(cover_exit: i32) -> SwapFixture {
         probes,
         covers,
         hook,
+        cover_hook,
+        v1,
     }
 }
 
@@ -1428,6 +1541,33 @@ impl SwapFixture {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         panic!("the candidate job never left `running`: {last}");
+    }
+
+    /// One `/v1/chat/completions` against this daemon under `model` — the
+    /// request the candidate probe makes, made by hand so a test can ask the
+    /// admission question at a moment of its own choosing.
+    fn chat(&self, model: &str) -> (u16, String) {
+        http(
+            &self.addr(),
+            "POST",
+            "/v1/chat/completions",
+            &serde_json::json!({
+                "model": model,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 8,
+            })
+            .to_string(),
+        )
+    }
+
+    /// Whether the candidate probe's admission window is still open on the
+    /// scratch identity — the window state itself, read off the pager, rather
+    /// than inferred from what `/v1` happened to answer.
+    fn window_open(&self) -> bool {
+        self.pager
+            .lock()
+            .expect("the pager survives every candidate job")
+            .probe_window_open(&scratch_identity(SWAP_MODEL))
     }
 
     fn events(&self) -> Vec<bloomery_core::journal::Event> {
@@ -1834,6 +1974,276 @@ fn a_failed_cleanup_is_journaled_rather_than_dropped() {
             .iter()
             .any(|r| r.contains(&scratch_identity(SWAP_MODEL)) && r.contains("could not")),
         "a failed cleanup is journaled, never dropped: {reasons:?}"
+    );
+    fixture.handle.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// The candidate probe's admission window (bT5/F1). Design §4 step 2 requires
+// the probe to reach the candidate "through the daemon's own `/v1` with the
+// identical POST invocation", and the live acceptance
+// (`docs/superpowers/evidence/2026-08-19-swap-candidate-live.md`) proved that
+// path unreachable in production: the scratch identity has no profile — making
+// one is the point of the probe — so `Pager::admit` refused it `422`, assay
+// exited 4, and `cover` never spawned. Twice, byte-identically.
+//
+// The rows below are the ones the scripted-probe fixture could not fail on:
+// every one runs `SwapCfg::allow_unprofiled = false` (the standing production
+// config) so law 5's gate really refuses, and drives the REAL admission path
+// over real HTTP. The probe SUBPROCESS is still scripted; the admission it
+// exercises is not.
+// ---------------------------------------------------------------------------
+
+/// The production config these rows run under: law 5's gate really refuses,
+/// and the probe really asks.
+fn strict() -> SwapCfg {
+    SwapCfg {
+        allow_unprofiled: false,
+        drive_v1: true,
+        ..SwapCfg::default()
+    }
+}
+
+/// **bT5/F1, the defect itself.** With `allow_unprofiled` unset — the standing
+/// config on the box the live acceptance ran on — the candidate probe's own
+/// `/v1/chat/completions` must be **admitted**, and the job must reach a
+/// coverage verdict.
+///
+/// Before the fix this row reproduces the live failure exactly: `422` at the
+/// door, `assay exited 4: … HTTP 422 …`, `outcome` an `infra:` sentence and
+/// `exit_code: null`, because `cover` never ran.
+#[test]
+fn a_candidate_probe_is_admitted_through_this_daemons_own_v1() {
+    let fixture = serve_swap_cfg(0, strict());
+    fixture.seed_floor();
+    let scratch = scratch_identity(SWAP_MODEL);
+
+    let (st, body) = fixture.post(&fixture.body());
+    assert_eq!(st, 202, "{body}");
+    let done = fixture.poll_until_done();
+
+    let calls = fixture.v1.lock().unwrap().clone();
+    assert_eq!(
+        calls,
+        vec![(scratch.clone(), 200)],
+        "the probe's own request must be admitted under the scratch identity, \
+         not refused 422 at the door: {done}"
+    );
+    assert_eq!(
+        done["report"]["outcome"], "covered",
+        "an admitted probe reaches a real verdict: {done}"
+    );
+    assert_eq!(done["report"]["exit_code"], 0, "{done}");
+
+    // And the window went with the job: closed, and the scratch identity is not
+    // registered any more, so nothing is addressable under it at all.
+    assert!(
+        !fixture.window_open(),
+        "the window is back to closed once the job ends: {done}"
+    );
+    let (st, body) = fixture.chat(&scratch);
+    assert_eq!(
+        st, 404,
+        "the scratch identity never outlives the job: {body}"
+    );
+    fixture.handle.shutdown();
+}
+
+/// **The window admits the scratch identity and nothing else.** The near-miss
+/// the live evidence names is worse than the failure: a candidate POST fired
+/// *inside* the boot POST window would have been admitted by a daemon-global
+/// flag, for a reason with nothing to do with this endpoint. So the fix is
+/// scoped per identity, and this row is what says so — mid-probe, with the
+/// window demonstrably open for the candidate, the configured-but-unprofiled
+/// `qwen` is still refused `422`.
+#[test]
+fn the_candidate_window_admits_the_scratch_identity_and_nothing_else() {
+    let fixture = serve_swap_cfg(0, strict());
+    fixture.seed_floor();
+    let neighbour: Arc<Mutex<Option<(u16, String)>>> = Arc::new(Mutex::new(None));
+
+    let addr = fixture.addr();
+    let seen = Arc::clone(&neighbour);
+    // Runs inside the probe, i.e. inside the window: the candidate's own call
+    // has already been admitted by the time this fires.
+    *fixture.hook.lock().unwrap() = Some(Arc::new(move || {
+        let answer = http(
+            &addr,
+            "POST",
+            "/v1/chat/completions",
+            r#"{"model":"qwen","messages":[{"role":"user","content":"hi"}],"max_tokens":8}"#,
+        );
+        *seen.lock().expect("neighbour slot") = Some(answer);
+    }));
+
+    let (st, body) = fixture.post(&fixture.body());
+    assert_eq!(st, 202, "{body}");
+    let done = fixture.poll_until_done();
+    assert_eq!(done["report"]["outcome"], "covered", "{done}");
+    assert_eq!(
+        fixture.v1.lock().unwrap().clone(),
+        vec![(scratch_identity(SWAP_MODEL), 200)],
+        "the candidate itself was admitted: {done}"
+    );
+
+    let (st, body) = neighbour
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("the hook ran inside the probe");
+    assert_eq!(
+        st, 422,
+        "the window is the candidate's alone — an unprofiled configured model \
+         must stay refused while it is open: {body}"
+    );
+    fixture.handle.shutdown();
+}
+
+/// **The window closes with the probe step, not with the job.** Nothing past
+/// the probe drives `/v1`, so by the time `cover` runs — with the scratch
+/// identity still registered, which is the only moment this is observable —
+/// the window must already be shut.
+#[test]
+fn the_candidate_window_is_closed_before_the_verdict_is_reached() {
+    let fixture = serve_swap_cfg(0, strict());
+    fixture.seed_floor();
+    let scratch = scratch_identity(SWAP_MODEL);
+    let after: Arc<Mutex<Option<(u16, String)>>> = Arc::new(Mutex::new(None));
+
+    let addr = fixture.addr();
+    let (seen, named) = (Arc::clone(&after), scratch.clone());
+    *fixture.cover_hook.lock().unwrap() = Some(Arc::new(move || {
+        let answer = http(
+            &addr,
+            "POST",
+            "/v1/chat/completions",
+            &serde_json::json!({
+                "model": named,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 8,
+            })
+            .to_string(),
+        );
+        *seen.lock().expect("after-probe slot") = Some(answer);
+    }));
+
+    let (st, body) = fixture.post(&fixture.body());
+    assert_eq!(st, 202, "{body}");
+    let done = fixture.poll_until_done();
+    assert_eq!(done["report"]["outcome"], "covered", "{done}");
+
+    let (st, body) = after
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("the hook ran inside the cover run");
+    assert_eq!(
+        st, 422,
+        "the scratch identity is still registered here, and must already be \
+         back under law 5's gate: {body}"
+    );
+    fixture.handle.shutdown();
+}
+
+/// **A failed probe still opens the window and still leaves nothing open.**
+/// The job ends on its `infra:` path, and the daemon is back to refusing every
+/// unprofiled model — the scratch identity because it is gone, `qwen` because
+/// nothing daemon-wide was ever suspended for it.
+#[test]
+fn a_failed_candidate_probe_leaves_no_window_open() {
+    let fixture = serve_swap_cfg(
+        0,
+        SwapCfg {
+            probe_fails: true,
+            ..strict()
+        },
+    );
+    fixture.seed_floor();
+    let scratch = scratch_identity(SWAP_MODEL);
+
+    let (st, body) = fixture.post(&fixture.body());
+    assert_eq!(st, 202, "{body}");
+    let done = fixture.poll_until_done();
+    let outcome = done["report"]["outcome"].as_str().unwrap_or_default();
+    assert!(
+        outcome.starts_with("infra:") && outcome.contains("assay exited 4"),
+        "a failed probe is named, never rendered as a verdict: {done}"
+    );
+    assert_eq!(
+        fixture.v1.lock().unwrap().clone(),
+        vec![(scratch.clone(), 200)],
+        "the window opened for the probe even on the path where it failed: {done}"
+    );
+
+    assert!(
+        !fixture.window_open(),
+        "the window is back to closed once the job ends: {done}"
+    );
+    let (st, body) = fixture.chat(&scratch);
+    assert_eq!(
+        st, 404,
+        "the scratch identity never outlives the job: {body}"
+    );
+    let (st, body) = fixture.chat(SWAP_MODEL);
+    assert_eq!(
+        st, 422,
+        "law 5's gate is exactly where the job found it: {body}"
+    );
+    fixture.handle.shutdown();
+}
+
+/// **A panicking worker must not leave the window open either.** The unwind
+/// skips step 7, so the scratch identity really is still registered afterwards
+/// (the spawn site says so and tells the operator to unload it) — and a window
+/// left open on that identity would admit it, unprofiled, through `/v1` for the
+/// life of the process. The spawn site closes it where it catches the panic.
+#[test]
+fn a_panicking_candidate_job_closes_the_admission_window() {
+    let fixture = serve_swap_cfg(
+        0,
+        SwapCfg {
+            allow_unprofiled: false,
+            ..SwapCfg::default()
+        },
+    );
+    fixture.seed_floor();
+    let scratch = scratch_identity(SWAP_MODEL);
+    *fixture.hook.lock().unwrap() = Some(Arc::new(|| panic!("the probe blew up")));
+
+    let (st, body) = fixture.post(&fixture.body());
+    assert_eq!(st, 202, "{body}");
+    let done = fixture.poll_until_done();
+    let outcome = done["report"]["outcome"].as_str().unwrap_or_default();
+    assert!(
+        outcome.starts_with("infra:") && outcome.contains("the probe blew up"),
+        "the caught panic is named: {done}"
+    );
+
+    // The registration survived the unwind — that is the premise, and the
+    // reason this path needs a close of its own.
+    let (st, body) = http(&fixture.addr(), "GET", "/status", "");
+    assert_eq!(st, 200, "{body}");
+    let status: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let names: Vec<&str> = status["models"]
+        .as_array()
+        .expect("models")
+        .iter()
+        .filter_map(|m| m["name"].as_str())
+        .collect();
+    assert!(
+        names.contains(&scratch.as_str()),
+        "an unwind past step 2 leaks the registration; this row is about the \
+         window on it: {names:?}"
+    );
+
+    assert!(
+        !fixture.window_open(),
+        "an unwind skips the job's own close; the spawn site owes this one"
+    );
+    let (st, body) = fixture.chat(&scratch);
+    assert_eq!(
+        st, 422,
+        "a leaked registration must not also be a leaked admission: {body}"
     );
     fixture.handle.shutdown();
 }

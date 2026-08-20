@@ -50,7 +50,11 @@ use crate::post::{with_pager, PostRunner};
 /// 3. Probe it through this daemon's own `/v1` with POST's identical
 ///    invocation ([`PostRunner::probe`], which deletes the target document
 ///    first, so an earlier job's document can never be read back as this
-///    one's).
+///    one's), with the scratch identity's admission window
+///    ([`Pager::open_probe_window`]) held open across that one step and closed
+///    on both ways out of it. Without the window law 5 refuses the probe's own
+///    request `422` and the step is unreachable — which is what the live
+///    acceptance found (`crate::pager::probing`).
 /// 4. Retain the document content-named beside the drift transients, under the
 ///    same bound ([`ProfileStore::retain_transient`]) — design §4 step 3. Every
 ///    later mention of the candidate's profile, the cover invocation included,
@@ -84,7 +88,12 @@ use crate::post::{with_pager, PostRunner};
 ///   process — every later request answered `candidate_probe_in_progress` for a
 ///   job nobody can see. `TaskRegistry::spawn_task` solves the identical
 ///   problem with `std::panic::catch_unwind` at its spawn site, and that
-///   module's "Panic containment" section carries the full reasoning.
+///   module's "Panic containment" section carries the full reasoning. **The
+///   same unwind can escape step 3's admission window**, which is closed
+///   between the probe and the branch on its result and so is skipped by an
+///   unwind through the probe. A leaked registration is refused `422` like any
+///   other unprofiled model; a leaked registration with its window still open
+///   is not, so the catching site closes it too.
 #[allow(clippy::too_many_arguments)]
 pub fn run_candidate_probe<S: Substrate>(
     pager: &Mutex<Pager<S>>,
@@ -323,9 +332,28 @@ fn judge<S: Substrate>(
     scratch: &str,
     evidence: &mut Evidence,
 ) -> Result<SwapOutcomeReport, PagerError> {
+    // Design §4 step 2 probes the candidate through this daemon's own `/v1`,
+    // and law 5 refuses an unprofiled model at that door — which the scratch
+    // identity is, because writing its profile is the whole point of the
+    // probe. `open_probe_window` is the same stated, bounded suspension the
+    // boot POST window is, scoped to this one identity; `pager::probing`
+    // carries the argument and the exposure it accepts.
+    with_pager(pager, |p| p.open_probe_window(scratch))?;
     // POST's identical invocation (design §4 step 2: "the gate's interpreter is
     // the probe's interpreter"), against this daemon's own `/v1`.
-    if let Err(e) = runner.probe(port, scratch, tier, &evidence.candidate_profile) {
+    let probed = runner.probe(port, scratch, tier, &evidence.candidate_profile);
+    // Closed here rather than at the end of the job, and BEFORE the branch on
+    // `probed`: nothing past this step drives `/v1`, so the window spans
+    // exactly the step that needs it, and both ways out of that step share one
+    // close rather than each remembering to make it. The scratch registration
+    // would take the window with it in a few lines either way (step 7 runs
+    // unconditionally, and the window is a field on that entry) — this is what
+    // keeps it shut for the retention and the cover run in between.
+    with_pager(pager, |p| {
+        p.close_probe_window(scratch);
+        Ok(())
+    })?;
+    if let Err(e) = probed {
         // No second document exists, so there is nothing to compare and no
         // verdict row to write — the same shape the drift watch's wedged
         // confirm takes. The row is a `Degraded` naming the model and the

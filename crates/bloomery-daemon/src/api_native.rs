@@ -506,6 +506,21 @@ fn spawn_candidate_probe<S: Substrate + Send + 'static>(
                 ),
             ),
             Err(payload) => {
+                // The job closes the candidate's admission window between its
+                // probe and the branch on that probe's result, and closes it
+                // structurally by unregistering the scratch identity at step
+                // 7. An unwind runs neither: the registration survives (the
+                // detail below tells the operator so) and its window would
+                // survive with it, admitting that identity — unprofiled —
+                // through `/v1` for the life of the process. Best-effort
+                // because the one way this can fail is a poisoned pager, and
+                // that daemon already answers every request with a named 500,
+                // so there is no admission left to gate (`pager::probing`,
+                // and `post::post_with_gate` for the same case at boot).
+                let _ = with_pager(&pager, |p| {
+                    p.close_probe_window(&scratch_identity(&model));
+                    Ok(())
+                });
                 let said = panic_payload_message(payload.as_ref())
                     .unwrap_or_else(|| "no string message on the payload".to_string());
                 let detail = format!(

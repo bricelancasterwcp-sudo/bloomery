@@ -27,6 +27,7 @@ mod drift_watch;
 mod error;
 mod journal;
 mod paging;
+mod probing;
 mod status;
 mod task_config;
 mod tuning;
@@ -134,6 +135,14 @@ struct ModelEntry {
     /// model resets both, because it is a new entry.
     provisional_logged: bool,
     unprofiled_logged: bool,
+    /// True only while a swap-candidate probe is measuring **this** identity —
+    /// see [`Pager::open_probe_window`] (`pager::probing`) for the whole
+    /// argument. The per-model counterpart of the daemon-global
+    /// [`posting`](Pager::posting) flag, and deliberately a field on the entry
+    /// rather than a name held on the pager: a window that lives on the
+    /// registration cannot outlive it, so the swap job's step-7 unregister
+    /// closes it structurally on every path that job can return through.
+    probe_window: bool,
     /// This model's completed G4 codec-gate verdict (`Pager::set_codec_gate`,
     /// Task 9's probe driver), or `None` when it has never completed one —
     /// the state `Pager::model_mutating_verbs` reads as fail-closed
@@ -527,6 +536,11 @@ impl<S: Substrate> Pager<S> {
                 handle: None,
                 provisional_logged: false,
                 unprofiled_logged: false,
+                // Closed. A fresh registration is never mid-probe, and
+                // re-registering a name drops any window the old entry held —
+                // the same "it is a new entry" rule the two `_logged` flags
+                // above follow.
+                probe_window: false,
                 codec_gate: None,
                 refusal_gate: None,
                 drift: None,
@@ -635,17 +649,22 @@ impl<S: Substrate> Pager<S> {
     /// as [`PagerError::DriftBlocked`], before the existence check below
     /// ever runs — see the note on that check for why the order matters.
     ///
-    /// Otherwise, three things can still admit an unprofiled model, and
+    /// Otherwise, four things can still admit an unprofiled model, and
     /// they are not interchangeable:
     ///
     /// 1. **`posting`** — the bounded window while POST probes this daemon,
     ///    which is the only way a profile can ever come to exist
     ///    ([`crate::post`]). Journaled per model.
-    /// 2. **`allow_unprofiled`** — the operator's explicit override.
+    /// 2. **This entry's own [`probe_window`](ModelEntry::probe_window)** —
+    ///    the same suspension, for the same chicken-and-egg, scoped to one
+    ///    identity: a swap candidate registered under a scratch name is
+    ///    probed through this daemon's own `/v1` and has no profile until
+    ///    that probe writes one (`pager::probing`). Journaled per model.
+    /// 3. **`allow_unprofiled`** — the operator's explicit override.
     ///    Journaled per model, naming it, because the daemon is then serving
     ///    a model whose real ceiling and codecs nobody measured.
-    /// 3. Neither: refused as [`PagerError::Unprofiled`], with the model's
-    ///    name, which the HTTP layers render as `422`.
+    /// 4. None of them: refused as [`PagerError::Unprofiled`], with the
+    ///    model's name, which the HTTP layers render as `422`.
     ///
     /// An unprofiled model is never *silently* admitted on any path.
     ///
@@ -683,13 +702,17 @@ impl<S: Substrate> Pager<S> {
             return Ok(());
         }
         let posting = self.posting;
-        if !posting && !self.allow_unprofiled {
+        let probing = self
+            .models
+            .get(model)
+            .is_some_and(|entry| entry.probe_window);
+        if !posting && !probing && !self.allow_unprofiled {
             return Err(PagerError::Unprofiled(model.to_string()));
         }
         let first_time = match self.models.get_mut(model) {
             None => false,
             Some(entry) => {
-                let said = if posting {
+                let said = if posting || probing {
                     &mut entry.provisional_logged
                 } else {
                     &mut entry.unprofiled_logged
@@ -702,6 +725,11 @@ impl<S: Substrate> Pager<S> {
         if first_time {
             let reason = if posting {
                 format!("provisional admission: {model} has no profile yet; POST in progress")
+            } else if probing {
+                format!(
+                    "provisional admission: {model} has no profile yet; a candidate probe \
+                     is measuring it"
+                )
             } else {
                 format!(
                     "admitting agents on {model} with no capability profile \
