@@ -64,6 +64,45 @@ spec owns the final command name, flags, and internal design.
   pair straddling a registered semantic break. A floor and a candidate
   measured under two different rules is the v1.10 lesson, applied here
   from day one.
+
+  > **Amendment (2026-08-19, assay v1.11 spec ruling):** instrument
+  > equality is STRICT — `probe_version` and schema exactly equal,
+  > absence fatal — which subsumes the straddle clause (equal versions
+  > cannot straddle a registered break). Strictness is the honest
+  > choice: v1.10's own record states the semantic-break registry is
+  > not a complete inventory, so a version-tolerant cover would trust
+  > an incomplete table. The registry check survives in `cover` as
+  > defense-in-depth should the gate ever loosen.
+
+  > **Amendment (2026-08-19, assay v1.11 review rulings).** Two rulings
+  > postdate the note above, both recorded as dated amendments in assay's
+  > own spec
+  > (`assay:docs/superpowers/specs/2026-08-19-assay-v1.11-cover-design.md`,
+  > §1 and §3). The second of them corrects the note above's last
+  > sentence.
+  >
+  > 1. **`tier`/`emulated` absent on BOTH sides is also fatal** (assay §1's
+  >    task-1 review amendment) — a deliberate deviation from `diff`'s
+  >    gate, which passes that pair. The bullet above says
+  >    "disagreement"; the shipped rule refuses disagreement, one-sided
+  >    absence, *and* two-sided absence, so only a declared, matching pair
+  >    passes. A coverage claim "for this box" with no box declared on
+  >    either side is exactly the silent pass the gate exists to refuse,
+  >    and cover's own instrument loop already holds that undeclared is
+  >    unknown. `diff` is unchanged.
+  > 2. **The registry check is a LIVE refusal route, not defense-in-depth**
+  >    (assay §3's amendment, which supersedes the note above's closing
+  >    sentence — an earlier wording called the branch unreachable and a
+  >    review probe disproved it). Strict equality does not close one case:
+  >    a `probe_version` equal on both sides but *unparseable* (not three
+  >    decimal components) passes the equality check, and assay's
+  >    `_straddles` fail-safes an unparseable version to straddling for
+  >    registered cells. `cover` refuses that pair — exit 2, naming the
+  >    cells, the fail-safe direction — on a path assay now pins by test.
+  >    Nothing changes on this side of the seam (it is still exit 2, still
+  >    read as a refusal and never a pass); what changes is that the seam
+  >    spec must not leave a reader believing the registry matters only
+  >    hypothetically.
 - **Per-cell rule.** For every cell the floor **measured**, the
   candidate's verdict must rank greater-or-equal on assay's own
   verdict ladder; numeric floors (speed, geometry-derived windows)
@@ -96,6 +135,39 @@ statement, never the merely-latest profile.
    reservation arithmetic. Unplaceable → 409 with the bytes needed,
    free, and reclaimable — the existing refusal shape. The scratch
    identity never outlives the request.
+
+   > **Amendment (2026-08-19, ruling bT3/R1 — the 409 disposition).**
+   > "Unplaceable → 409 with the bytes needed, free, and reclaimable" is
+   > **not honestly implementable at POST time, and is not implemented.**
+   > The pager exposes no pre-probe reservation check.
+   > `PagerError::Refused` — the only source of those three numbers — is
+   > produced in exactly one place, the private `Pager::place`
+   > (`crates/bloomery-daemon/src/pager/paging.rs`), which is keyed on an
+   > agent **already in the table** and whose demand term is that agent's
+   > own window-sized reservation plus, for a cold model, its weights.
+   > Neither call this step actually makes commits anything:
+   > `register_model` inserts a registry entry and runs no residency
+   > arithmetic, and `create_agent` commits no VRAM either (an agent
+   > starts `Fresh` and becomes resident only at its first inference).
+   > At POST time there is no agent and no window, so a 409 here would
+   > have to invent the demand term and print `needed`/`free`/
+   > `reclaimable` figures no real refusal ever produced — fabricated
+   > arithmetic wearing the existing refusal shape, which is worse than
+   > no refusal at all.
+   >
+   > **Ruled disposition:** the reservation refusal surfaces through the
+   > probe's own failure, where it is real. The candidate is probed
+   > through this daemon's own `/v1`, which renders `PagerError::Refused`
+   > as `503 residency_refused` carrying the arithmetic in its message;
+   > the probe then fails, the worker journals `Degraded`, and the report
+   > and its `GET` carry `infra: the candidate probe for {model} …
+   > failed: …` with the probe's own words. Unmeasured, explicitly not a
+   > verdict — §7's rule, unchanged. A POST-time 409 would need a real
+   > pager dry-run (a public "would this place?" that charges nothing),
+   > which is new pager surface this advisory slice deliberately does not
+   > build; named here as what a later enforcement slice would want, not
+   > as a gap in this one. Step 5's "unload the candidate, crediting its
+   > weights back" is unaffected and ships as written.
 2. Probe the candidate through the daemon's own `/v1` with the
    identical POST invocation (same mode, same flags, same
    `probe_timeout_secs` cap). The daemon's environment supplies the
@@ -115,10 +187,69 @@ full-file digest, both profile paths and shas, the exit code, and the
 outcome word. Identity and prose, never a transcribed measurement —
 anyone can re-run the identical `cover` from the row alone.
 
+> **Amendment (2026-08-19, ruling bT1/R2 — as-built).** The outcome word
+> for a *refusal* is not bare. `CoverOutcome::Refused` carries
+> `{ exit, stderr }` (`crates/bloomery-daemon/src/swap.rs`), and both the
+> row and the report's `outcome` spell it `refused: <assay's trimmed
+> stderr>` when there are words to carry and `refused` when there are
+> not — one spelling, so the row and the operator's answer can never
+> disagree. The stderr is **operator detail, never consulted for the
+> verdict**: the verdict is the exit code and nothing else. It rides
+> along because exit 2 is also what `argparse` answers for `invalid
+> choice: 'cover'` — an assay too old to have the subcommand (anything
+> before 0.13.0, under the daemon's `PYTHONPATH` pin) refuses in a way
+> that is indistinguishable *by code alone* from a considered refusal
+> about the candidate, and discarding the one sentence that says "this
+> tool has no cover" would let a stale install masquerade as a verdict.
+> This is the discipline §7 already states for `Infra` ("carrying the
+> code and stderr") extended to the one *reading* that shares an exit
+> code with a missing tool, and it does not touch this paragraph's
+> no-transcribed-measurements law, which is about numbers copied out of
+> profiles. `Incomplete` (exit 3) deliberately carries nothing extra: it
+> has one meaning and no ambiguity to resolve, and *which* floor cells
+> went unmeasured is a measurement that lives in assay's own render of
+> the pair, re-derivable from the row's two paths.
+
 **Response.** The verdict and evidence paths, plus two named gaps:
 done_trust/G4/G5 are unmeasured for the candidate until its first real
 boot with tasks enabled; and the handover (§5) is the operator's next
 step, spelled out.
+
+> **Amendment (2026-08-19, as-built).** This paragraph describes the
+> *verdict's content*, and none of it comes back from the POST. A
+> candidate probe holds VRAM for ~10 minutes (this section's own "One
+> candidate at a time"), so a handler that waited for it would hold one
+> of four HTTP workers for the whole run — the boot watch's own rule,
+> that a probe never rides a request handler, applies here unchanged.
+> The shipped shape is therefore asynchronous, and it is two routes:
+>
+> - `POST /models/{name}/swap-candidate` answers **202**
+>   `{model, candidate, state: "running"}` once it has run the cheap
+>   preconditions, claimed the one slot and spawned the worker. The
+>   refusals stay exactly as this section names them (404 unknown model,
+>   400 `bad_request` for an unparseable body or unreadable candidate
+>   weights, 409 `no_baseline`, 409 `candidate_probe_in_progress`).
+>   Everything above the slot claim is a read — the model's existence,
+>   the body, the candidate's bytes, the floor's existence — and the
+>   claim comes last, so a request that was going to be refused anyway
+>   never takes the slot from a job that would have run, and before the
+>   spawn, so two workers can never both be registering the same scratch
+>   identity.
+> - `GET /models/{name}/swap-candidate` is where the answer appears:
+>   **200** `{model, state: "running"}` while the job runs, **200**
+>   `{model, state: "done", report: {…}}` once it has. The report is the
+>   whole of this paragraph's requirement — `outcome` (the verdict word),
+>   `exit_code`, `candidate_gguf_sha`, `floor_sha`,
+>   `candidate_profile_path`, and both fixed `notes`, carried whatever
+>   the verdict, because both gaps are true of every candidate. A `GET`
+>   for a model whose job never ran — or while a *different* model's job
+>   holds the one slot — is **404** `no_swap_candidate`: that job says
+>   nothing about this name.
+>
+> A daemon served without a swap-candidate context (no interpreter, no
+> profile store, no self-port) answers **501**
+> `swap_candidate_unavailable` on both routes rather than pretending to
+> a refusal about the candidate.
 
 **One candidate at a time.** A probe holds VRAM for ~10 minutes. A
 second request while one runs gets 409 `candidate_probe_in_progress` —
@@ -164,6 +295,20 @@ own words — no verdict invented; `cover`'s four codes are readings and
 anything else is `Infra` carrying the code and stderr (the PR #14
 discipline); pager refusal, unknown model, missing baseline, and busy
 each keep the surface's existing 404/409 idiom.
+
+> **Amendment (2026-08-19, as-built) — the "pager refusal" clause.** Three
+> of that last list ship exactly as written: unknown model 404, missing
+> baseline 409 `no_baseline`, busy 409 `candidate_probe_in_progress`. The
+> fourth, **pager refusal, has no POST-time shape at all** — see §4 step
+> 1's amendment for why the numbers a 409 would have to print do not exist
+> before an agent and a window do. A real residency refusal reaches the
+> operator through the first clause of this very sentence instead: the
+> probe fails, it journals `Degraded`, and the report names the probe's own
+> words as `infra: …`. Also as-built, and not in the list above: a body
+> this route cannot use (unparseable JSON, no `gguf_path`, or weights that
+> cannot be read) is a 400 `bad_request`, answered synchronously before the
+> slot is claimed; and a daemon served with no swap-candidate context
+> answers 501 `swap_candidate_unavailable` on both routes.
 
 ## 8. Testing posture
 

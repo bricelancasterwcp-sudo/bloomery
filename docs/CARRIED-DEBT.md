@@ -41,6 +41,12 @@ discipline, not by type or test), R4 (erratum: spec §5's POST-window
 sentence is false on a multi-model daemon; the precedence it describes is
 still correct).
 
+**Amended 2026-08-19** (swap-candidate, the seam's slice 3): one *Smaller
+items* entry is amended in place — the "`pager_test.rs` is 834 lines (only
+file over the 800 ceiling)" parenthetical is no longer true of the repo, and
+says so beneath its own unaltered text. The slice's own carry is a new section
+below; nothing else in this file is touched.
+
 ## Delivered in Phase 2a (2026-08-14)
 
 Struck through, never deleted: the original text stands as recorded, with
@@ -490,6 +496,108 @@ tests caught):**
   multi-model boot. Per house convention the committed spec is not
   rewritten for this; the erratum stands here with the corrected statement.
 
+## Delivered in swap-candidate (2026-08-19, `swap-candidate-seam` branch)
+
+The capability-vector seam's slice 3, and the first **advisory** one. Slice 1
+measured, slice 2 acted; this slice answers a question — *is candidate Y
+admissible as a substitute for model X?* — and changes nothing about what the
+daemon will serve. `POST`/`GET /models/{name}/swap-candidate` register a
+candidate GGUF under a scratch identity, probe it through this daemon's own
+`/v1`, and cover its profile against `{name}`'s **blessed** baseline via
+`assay cover`'s four exit codes.
+
+**Settled (standing rulings for this slice — do not re-litigate without a
+recorded amendment):**
+
+- **The scratch identity's uniqueness is an assumption, named rather than
+  guarded.** A candidate is probed as `{model}!swap-candidate`
+  (`SCRATCH_SUFFIX`, `crates/bloomery-daemon/src/swap.rs`), and it lives in the
+  same registry as the operator's configured models for the length of one job
+  — it has to, because assay reaches it through `/v1` by name. The `!` is what
+  keeps it out of the operator's namespace: model names are TOML table keys,
+  and a *bare* key is `[A-Za-z0-9_-]` only, so no bare key can collide. A
+  **quoted** key may contain anything, `!` included, so an operator who
+  deliberately writes `"llama!swap-candidate"` as a model name collides with
+  the scratch identity of a model called `llama` — and **nothing refuses that
+  today**. Deliberate: a guard would trade a real line of code for a
+  configuration nobody writes, and the collision is visible the moment it
+  happens (`/status` lists both names). Recorded here because "no configured
+  model can hold this name" is an assumption about operator input, not an
+  enforced invariant, and the next reader should not have to re-derive that.
+- **One slot, daemon-wide — there is no per-model concurrency.** `SwapContext`
+  holds exactly one `SwapSlot`, shared by every HTTP worker
+  (`crates/bloomery-daemon/src/swap/context.rs`), so a candidate probe for
+  model A blocks a candidate probe for model B with `409
+  candidate_probe_in_progress`, and a `GET` for B while A's job holds the slot
+  is a 404 rather than an answer about the wrong model. Design §4's "one
+  candidate at a time … no queue", taken literally. This is the deliberate
+  choice, not an oversight: a probe holds VRAM for ~10 minutes, and two
+  concurrent probes on this box would contend for exactly the residency the
+  probe is measuring. **Revisit only with evidence** — a second slot is only
+  worth building on a box whose budget actually admits two candidates at once,
+  and nothing has measured that.
+- **The verdict is advisory, and the advisory gap is the whole shape of the
+  next slice.** Nothing blocks and nothing auto-swaps (design §4, §6's first
+  non-goal): an operator who gets `not-covered`, `incomplete` or `refused` can
+  still edit `bloomery.toml`, restart, and serve the candidate — the daemon
+  will not know a verdict was ever asked for, let alone what it said. The
+  journal row (`Event::SwapCandidate`) carries the candidate GGUF's full-file
+  digest, so a *replay* can tell that the served weights were the ones a
+  verdict refused; nothing checks it at boot. Enforcement — refusing to serve a
+  swapped GGUF with no admissible verdict on record — is the named future
+  slice, following the slice-1-then-2 pattern this seam has used twice already:
+  measure first, enforce once the measurement has lived.
+
+**Spec amendments recorded this slice** (dated notes in the drift-watch
+convention, originals preserved,
+`docs/superpowers/specs/2026-08-19-swap-candidate-seam-design.md`): §3's
+identity bullet takes two — assay v1.11's strict-instrument-equality ruling,
+and the two assay review rulings that postdate it (both-sides-absent
+`tier`/`emulated` is fatal; the semantic-break registry check is a **live**
+refusal route via an equal-but-unparseable `probe_version`, not the
+defense-in-depth the first note called it). §4 step 1 records the **409
+disposition** — the spec's "Unplaceable → 409 with the bytes needed, free, and
+reclaimable" is not honestly implementable at POST time and is not
+implemented, because `PagerError::Refused` exists only inside the private
+`Pager::place`, keyed on an agent already in the table with a window-sized
+demand term that does not exist at request time; a real residency refusal
+surfaces through the probe's own failure instead (`Degraded` row, `infra:`
+report). §4's journal prose records `Refused { exit, stderr }` — carried as
+operator detail and never consulted for the verdict, because exit 2 is also
+what `argparse` answers for `invalid choice: 'cover'` — and §4's response
+prose records the asynchronous 202/GET shape (a probe cannot ride a request
+handler; the boot watch's own rule). §7's "pager refusal … keeps the
+surface's existing 404/409 idiom" clause takes a fifth note for the same
+reason as §4 step 1's, and names the two shapes §7 omitted (400
+`bad_request`, 501 `swap_candidate_unavailable`).
+
+**Recorded, not fixed:**
+
+- **`api_native.rs` is at 697/800 lines — the next route added there forces a
+  split.** It was 393 before this slice and gained 304 (the two swap-candidate
+  handlers, the spawn site with its `catch_unwind`, and their doc tables), a
+  77% jump against a ceiling with 103 lines of room left. Nothing is wrong with
+  the file today; it simply cannot absorb another surface. `swap.rs` →
+  `swap.rs` + `swap/job.rs` (this slice's own pure-move split, done for exactly
+  this reason) is the shape the split should take: the routes and their error
+  table in one file, a surface's handlers in their own module.
+- **`api_native_test.rs` is at 1839 lines**, having gained 658 this slice by
+  plan-mandated placement (the endpoint tests were specified to land beside the
+  surface's other route tests). It was **already** at 1181 — over the 800
+  ceiling before this slice touched it — and it is one of **eight** test files
+  above that line, counted 2026-08-19: `drift_test.rs` 1980,
+  `api_native_test.rs` 1839, `codec_probe_test.rs` 1559, `pager_test.rs` 1247,
+  `swap_test.rs` 1021, `pager_weights_test.rs` 924, `api_task_test.rs` 923,
+  `task_loop_test.rs` 830. So this is an accumulating project-wide condition
+  rather than a defect this slice introduced, and the honest framing is that
+  the 800-line ceiling is currently enforced on `src/` and not on `tests/`
+  (two src files are over it — `drift.rs` 985 and `pager.rs` 912 — against
+  eight test files). `swap_test.rs` shows the per-seam pattern that would
+  absorb `api_native_test.rs`. Same class as the "`pager_test.rs` is 834
+  lines" note under *Smaller items* below, which this entry supersedes on the
+  facts (that file is now 1247, and it is not "the only file over the 800
+  ceiling").
+
 ## Phase 2 work items (in recommended order)
 
 5. **NVMe-media KV image read is unmeasured** — every recorded
@@ -674,6 +782,11 @@ tests caught):**
   fixtures would end it.
 - `pager_test.rs` is 834 lines (only file over the 800 ceiling); move
   `FailingSubstrate` to a helper module.
+  **Amended 2026-08-19 (swap-candidate):** still open, and the parenthetical
+  is now false — `pager_test.rs` is 1247 lines and **eight** test files are
+  over the ceiling. The original text stands as recorded; the swap-candidate
+  section's *Recorded, not fixed* carries the full count as of 2026-08-19.
+  The remedy is unchanged and now project-wide, not one file's chore.
 - `/v1` 429/503/422 extension rows lack dedicated tests.
 - `probe_each`: an `attach_profile` failure aborts remaining probes and
   is reported as a journal failure (unreachable today).

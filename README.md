@@ -76,10 +76,25 @@ semantic store, appliance boot) is not built. See
 * **Boot-time POST.** The daemon probes *itself* with [assay](https://github.com/bricelancasterwcp-sudo/assay)
   and attaches the resulting capability profile, so admission can be gated on a
   measured verdict rather than a promise.
+* **A swap candidate is answered, not guessed.** `POST
+  /models/{m}/swap-candidate` takes `{"gguf_path": …}` and asks whether that
+  candidate **covers** what `{m}`'s blessed baseline says `{m}` was relied on
+  for — a one-directional comparison of the candidate's freshly probed profile
+  against the floor, run as `assay cover` and read through its four exit codes
+  (`0` covered, `1` not covered, `2` refused, `3` incomplete; an unmeasured
+  floor cell is never a pass). The probe holds VRAM for ~10 minutes, so the
+  POST answers `202` and `GET /models/{m}/swap-candidate` carries the verdict,
+  the exit code, both digests and the retained profile path. One candidate at a
+  time, no queue. **Advisory**: nothing blocks and nothing auto-swaps — the
+  verdict is evidence, journaled, and config stays the operator's. The whole
+  flow is driven in the suite through injected probe and cover seams (no
+  python, no assay, no GPU) — but **not yet exercised live**: there is no GPU
+  acceptance run behind this one as of 2026-08-19.
 * **Two HTTP surfaces.** A native API (`/agents`, `/agents/{id}/infer`,
   `/suspend`, `/resume`, `/models/{m}/unload`, `/models/{m}/bless`,
-  `/models/{m}/unblock`, `/status`) and an OpenAI-compatible shim
-  (`GET /v1/models`, `POST /v1/chat/completions`).
+  `/models/{m}/unblock`, `POST`/`GET /models/{m}/swap-candidate`, `/status`)
+  and an OpenAI-compatible shim (`GET /v1/models`, `POST
+  /v1/chat/completions`).
 * **A journal you can replay.** Every boot writes `boot-<ts>.jsonl`; every
   admission, decision, paging op, refusal and degradation is a line in it. The
   G2 numbers above are computed from nothing else — see
