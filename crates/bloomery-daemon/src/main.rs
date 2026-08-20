@@ -104,10 +104,12 @@ fn run(config: Config, journal: Journal) -> ! {
         run_boot_codec_probe, run_boot_g5_probe, should_run_codec_probe,
         G5_POST_DISABLED_SKIP_REASON, POST_DISABLED_CODEC_SKIP_REASON,
     };
-    use bloomery_daemon::http::serve_shared;
+    use bloomery_daemon::drift::ProfileStore;
+    use bloomery_daemon::http::serve_shared_with_swap;
     use bloomery_daemon::llama_send::SendLlama;
     use bloomery_daemon::pager::Pager;
     use bloomery_daemon::post::{run_post, PostRunner};
+    use bloomery_daemon::swap::SwapContext;
 
     let substrate = SendLlama::new()
         .unwrap_or_else(|e| fail(format!("failed to initialize the llama backend: {e:?}")));
@@ -221,7 +223,20 @@ fn run(config: Config, journal: Journal) -> ! {
     }
 
     let pager = Arc::new(Mutex::new(pager));
-    let (bound_port, _handle) = serve_shared(Arc::clone(&pager), config.port);
+    // The swap-candidate seam's collaborators (design §4), wired
+    // unconditionally for the same reason `set_profiles_dir` above is: the
+    // route runs on a request thread, and with `assay.enabled = false` nothing
+    // ever blesses a baseline, so the endpoint answers `no_baseline` by name
+    // rather than pointing at machinery this daemon was never told about. The
+    // interpreter and the probe cap are POST's own, so a candidate is measured
+    // by exactly the instrument every configured model was.
+    let swap = Arc::new(SwapContext::new(
+        config.assay.python.clone(),
+        std::time::Duration::from_secs(config.assay.probe_timeout_secs),
+        ProfileStore::new(profiles_dir.clone()),
+        config.tier.clone(),
+    ));
+    let (bound_port, _handle) = serve_shared_with_swap(Arc::clone(&pager), config.port, swap);
     println!(
         "bloomery-daemon serving on 127.0.0.1:{bound_port} (data_dir={}; models: {}; tier: {} \
          {}; POST: {})",

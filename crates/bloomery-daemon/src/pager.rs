@@ -27,6 +27,7 @@ mod drift_watch;
 mod error;
 mod journal;
 mod paging;
+mod probing;
 mod status;
 mod task_config;
 mod tuning;
@@ -134,6 +135,14 @@ struct ModelEntry {
     /// model resets both, because it is a new entry.
     provisional_logged: bool,
     unprofiled_logged: bool,
+    /// True only while a swap-candidate probe is measuring **this** identity —
+    /// see [`Pager::open_probe_window`] (`pager::probing`) for the whole
+    /// argument. The per-model counterpart of the daemon-global
+    /// [`posting`](Pager::posting) flag, and deliberately a field on the entry
+    /// rather than a name held on the pager: a window that lives on the
+    /// registration cannot outlive it, so the swap job's step-7 unregister
+    /// closes it structurally on every path that job can return through.
+    probe_window: bool,
     /// This model's completed G4 codec-gate verdict (`Pager::set_codec_gate`,
     /// Task 9's probe driver), or `None` when it has never completed one —
     /// the state `Pager::model_mutating_verbs` reads as fail-closed
@@ -446,6 +455,28 @@ impl<S: Substrate> Pager<S> {
         jrnl::degraded(&mut self.journal, reason)
     }
 
+    /// Journals one swap-candidate coverage verdict (swap-candidate seam
+    /// design §4's row) — same single-writer reason as
+    /// [`Pager::journal_post`]: the job runs outside the pager, on a request
+    /// thread, and must not open a second writer onto this journal.
+    ///
+    /// The row is built by `swap::swap_candidate_event` from the reading
+    /// itself rather than from arguments spelled out here, so it cannot come
+    /// to describe different documents — or different bytes — than the cover
+    /// run actually compared. The same discipline (and the same reason)
+    /// [`Pager::journal_drift`] follows.
+    ///
+    /// [`Pager::journal_drift`]: crate::pager::Pager::journal_drift
+    pub fn journal_swap_candidate(
+        &mut self,
+        reading: &crate::swap::CandidateReading,
+    ) -> Result<(), PagerError> {
+        jrnl::append(
+            &mut self.journal,
+            &crate::swap::swap_candidate_event(reading),
+        )
+    }
+
     /// Read-only view of the substrate, for inspection and tests.
     pub fn substrate(&self) -> &S {
         &self.substrate
@@ -505,6 +536,11 @@ impl<S: Substrate> Pager<S> {
                 handle: None,
                 provisional_logged: false,
                 unprofiled_logged: false,
+                // Closed. A fresh registration is never mid-probe, and
+                // re-registering a name drops any window the old entry held —
+                // the same "it is a new entry" rule the two `_logged` flags
+                // above follow.
+                probe_window: false,
                 codec_gate: None,
                 refusal_gate: None,
                 drift: None,
@@ -613,17 +649,22 @@ impl<S: Substrate> Pager<S> {
     /// as [`PagerError::DriftBlocked`], before the existence check below
     /// ever runs — see the note on that check for why the order matters.
     ///
-    /// Otherwise, three things can still admit an unprofiled model, and
+    /// Otherwise, four things can still admit an unprofiled model, and
     /// they are not interchangeable:
     ///
     /// 1. **`posting`** — the bounded window while POST probes this daemon,
     ///    which is the only way a profile can ever come to exist
     ///    ([`crate::post`]). Journaled per model.
-    /// 2. **`allow_unprofiled`** — the operator's explicit override.
+    /// 2. **This entry's own [`probe_window`](ModelEntry::probe_window)** —
+    ///    the same suspension, for the same chicken-and-egg, scoped to one
+    ///    identity: a swap candidate registered under a scratch name is
+    ///    probed through this daemon's own `/v1` and has no profile until
+    ///    that probe writes one (`pager::probing`). Journaled per model.
+    /// 3. **`allow_unprofiled`** — the operator's explicit override.
     ///    Journaled per model, naming it, because the daemon is then serving
     ///    a model whose real ceiling and codecs nobody measured.
-    /// 3. Neither: refused as [`PagerError::Unprofiled`], with the model's
-    ///    name, which the HTTP layers render as `422`.
+    /// 4. None of them: refused as [`PagerError::Unprofiled`], with the
+    ///    model's name, which the HTTP layers render as `422`.
     ///
     /// An unprofiled model is never *silently* admitted on any path.
     ///
@@ -661,13 +702,17 @@ impl<S: Substrate> Pager<S> {
             return Ok(());
         }
         let posting = self.posting;
-        if !posting && !self.allow_unprofiled {
+        let probing = self
+            .models
+            .get(model)
+            .is_some_and(|entry| entry.probe_window);
+        if !posting && !probing && !self.allow_unprofiled {
             return Err(PagerError::Unprofiled(model.to_string()));
         }
         let first_time = match self.models.get_mut(model) {
             None => false,
             Some(entry) => {
-                let said = if posting {
+                let said = if posting || probing {
                     &mut entry.provisional_logged
                 } else {
                     &mut entry.unprofiled_logged
@@ -680,6 +725,11 @@ impl<S: Substrate> Pager<S> {
         if first_time {
             let reason = if posting {
                 format!("provisional admission: {model} has no profile yet; POST in progress")
+            } else if probing {
+                format!(
+                    "provisional admission: {model} has no profile yet; a candidate probe \
+                     is measuring it"
+                )
             } else {
                 format!(
                     "admitting agents on {model} with no capability profile \
@@ -825,6 +875,71 @@ impl<S: Substrate> Pager<S> {
             entry.handle = None;
         }
         jrnl::model_unloaded(&mut self.journal, name)
+    }
+
+    /// Unloads `name`'s weights and forgets its registration entirely — the
+    /// exact inverse of [`Pager::register_model`].
+    ///
+    /// Exists for the swap-candidate seam (design §4: "the scratch identity
+    /// never outlives the request"), which registers a candidate GGUF under a
+    /// scratch name so assay can probe it through `/v1`, then must leave the
+    /// registry exactly as it found it. The weights go back through
+    /// [`Pager::unload_model`] — the same call `POST /models/{name}/unload`
+    /// makes, so a scratch model's bytes are credited back by the one path
+    /// that already knows how, including suspending anything still holding a
+    /// context on it.
+    ///
+    /// **The registration survives an unload that failed**, deliberately. The
+    /// placement budget subtracts every *loaded* model's weights
+    /// (`loaded_weights_bytes`), so forgetting an entry whose weights the
+    /// substrate still holds would silently under-count the pool by exactly
+    /// those bytes — law 1's pre-checked memory pressure, quietly wrong. A
+    /// named error with the entry still standing is the honest failure.
+    ///
+    /// **Every agent bound to `name` is evicted, not merely suspended** —
+    /// [`Pager::remove_agent`], id, context and image, before the unload.
+    ///
+    /// Suspending them is not enough, and the reason is specific to what this
+    /// call is for. A suspended agent keeps its `model` *string*, and its next
+    /// request is refused only because no model of that name is registered any
+    /// more (`paging::place`'s `UnknownModel`). For a scratch identity that
+    /// refusal is temporary by construction: the next candidate job for the
+    /// same model registers exactly that name again, and law 5 is checked at
+    /// agent **creation**, never per inference — so a survivor would come back
+    /// usable, against a *different* candidate's weights, without passing any
+    /// gate at all. Design §4's "the scratch identity never outlives the
+    /// request" has to mean the agents on it too, or it means nothing.
+    ///
+    /// **Before the unload, not after**, for two reasons. [`Pager::suspend`]
+    /// saves a KV image on the way out, and [`Pager::remove_agent`] would drop
+    /// it again a moment later — the wasted work that method's doc exists to
+    /// avoid. And an eviction that has already emptied the table leaves
+    /// [`Pager::unload_model`]'s suspend loop nothing that can fail.
+    ///
+    /// An unknown model is refused before anything is evicted, so a refused
+    /// unregister still changes nothing.
+    pub fn unregister_model(&mut self, name: &str) -> Result<(), PagerError> {
+        if !self.models.contains_key(name) {
+            return Err(PagerError::UnknownModel(name.to_string()));
+        }
+        let bound: Vec<String> = self
+            .table
+            .iter()
+            .filter(|a| a.model == name)
+            .map(|a| a.id.clone())
+            .collect();
+        for id in bound {
+            self.remove_agent(
+                &id,
+                &format!(
+                    "{name} was unregistered; an agent bound to it cannot outlive the \
+                     registration, because re-registering that name would revive it"
+                ),
+            )?;
+        }
+        self.unload_model(name)?;
+        self.models.remove(name);
+        Ok(())
     }
 
     /// Removes `id` from the agent table entirely: destroys its resident

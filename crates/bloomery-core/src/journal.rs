@@ -264,6 +264,62 @@ pub enum Event {
         reference_sha: Option<String>,
         current_sha: Option<String>,
     },
+    /// One coverage verdict on a candidate GGUF offered as a substitute for
+    /// `model` (swap-candidate seam design §4). Advisory: nothing in this
+    /// daemon reads it back, and no admission decision derives from it — the
+    /// row IS the deliverable.
+    ///
+    /// Built to be **re-runnable and verifiable from the row alone**, and to
+    /// carry no transcribed measurement, the same two rules
+    /// [`Event::Drift`] is built to:
+    ///
+    /// - `candidate_gguf_sha` is the full-file sha256 of the candidate's
+    ///   **weights**, the same digest the pager's model registry keeps (and
+    ///   `/status` renders), so the row names *which* file was measured and
+    ///   not merely which path it sat at.
+    /// - `floor_path`/`floor_sha` and
+    ///   `candidate_profile_path`/`candidate_profile_sha` are the two
+    ///   documents `assay cover` was handed and the sha256 of each one's
+    ///   **bytes** — so `sha256sum` on either path checks the row, and
+    ///   `assay cover <floor_path> <candidate_profile_path>` re-runs exactly
+    ///   the comparison this row reports — and keeps doing so, because the
+    ///   candidate's document is *retained content-named* (design §4 step 3)
+    ///   rather than left at the one staging path every candidate for this
+    ///   model would share, so a later job cannot overwrite the evidence an
+    ///   earlier row points at. `candidate_profile_sha` is `None` only when
+    ///   those bytes could not be re-read after they were retained; `None`,
+    ///   never an empty string.
+    /// - `exit_code` is what `assay cover` reported, `None` when it never
+    ///   answered (spawn failure, or a child killed by a signal, which leaves
+    ///   no code at all). `None`, not `-1` and not `0`.
+    /// - `outcome` is a named verdict, never a score and never a number
+    ///   copied out of either document. Like [`Event::Blessed::provenance`]
+    ///   and [`Event::Drift::outcome`] it is read by **prefix**, not by
+    ///   equality against a closed set: `"covered"`, `"not-covered"`,
+    ///   `"incomplete"`, `"refused"` — which carries assay's own reason after
+    ///   a colon when it gave one, because exit 2 is also what `argparse`
+    ///   answers for `invalid choice: 'cover'` and a stale assay must not
+    ///   read as a considered refusal about the candidate — and `"infra: …"`
+    ///   for a cover that could not answer at all.
+    ///
+    /// **A row exists only where a comparison was really attempted.** A probe
+    /// that failed produces no second document, so there is nothing to
+    /// compare and nothing to record here: that path journals
+    /// [`Event::Degraded`] naming the model and the probe's own words, and no
+    /// verdict is invented.
+    SwapCandidate {
+        /// The configured model whose role the candidate would take — never
+        /// the scratch identity the probe ran under, which exists only for
+        /// the length of the job.
+        model: String,
+        candidate_gguf_sha: String,
+        floor_path: String,
+        floor_sha: String,
+        candidate_profile_path: String,
+        candidate_profile_sha: Option<String>,
+        exit_code: Option<i32>,
+        outcome: String,
+    },
 }
 
 /// `Event::CodecFixture::expect`'s serde default (G5 design doc §4): every

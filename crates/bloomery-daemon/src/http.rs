@@ -23,6 +23,7 @@ use crate::api_native;
 use crate::api_task;
 use crate::api_v1::{self, V1Body, V1Result};
 use crate::pager::Pager;
+use crate::swap::SwapContext;
 use crate::task::TaskRegistry;
 
 /// One GPU, one pager, serialized inference: Phase 1's coarse lock (see the
@@ -117,6 +118,30 @@ pub fn serve_shared<S: Substrate + Send + 'static>(
     pager: Arc<Mutex<Pager<S>>>,
     port: u16,
 ) -> (u16, ServerHandle) {
+    serve_inner(pager, port, None)
+}
+
+/// [`serve_shared`] for a daemon that also serves the swap-candidate routes
+/// (`main.rs`, and the endpoint's own tests).
+///
+/// The context is handed in already built but **its port is set here**: a
+/// candidate is probed through this daemon's own `/v1`, and the bound port is
+/// not knowable until `tiny_http` has bound it (`config.port = 0` lets the OS
+/// pick). Set before the first worker is spawned, so no request can observe
+/// the unset value.
+pub fn serve_shared_with_swap<S: Substrate + Send + 'static>(
+    pager: Arc<Mutex<Pager<S>>>,
+    port: u16,
+    swap: Arc<SwapContext>,
+) -> (u16, ServerHandle) {
+    serve_inner(pager, port, Some(swap))
+}
+
+fn serve_inner<S: Substrate + Send + 'static>(
+    pager: Arc<Mutex<Pager<S>>>,
+    port: u16,
+    swap: Option<Arc<SwapContext>>,
+) -> (u16, ServerHandle) {
     let server = tiny_http::Server::http(("127.0.0.1", port))
         .unwrap_or_else(|e| panic!("bloomery-daemon: failed to bind 127.0.0.1:{port}: {e}"));
     let bound_port = server
@@ -130,13 +155,19 @@ pub fn serve_shared<S: Substrate + Send + 'static>(
     // task surface needs a place to look up an in-flight task's status
     // regardless of which of the `WORKER_COUNT` workers services the poll.
     let registry = Arc::new(TaskRegistry::new());
+    // Before any worker exists, so no request can read a port this daemon is
+    // not actually listening on — see `serve_shared_with_swap`.
+    if let Some(swap) = &swap {
+        swap.set_port(bound_port);
+    }
 
     let workers = (0..WORKER_COUNT)
         .map(|_| {
             let server = Arc::clone(&server);
             let pager = Arc::clone(&pager);
             let registry = Arc::clone(&registry);
-            std::thread::spawn(move || worker_loop(&server, &pager, &registry))
+            let swap = swap.clone();
+            std::thread::spawn(move || worker_loop(&server, &pager, &registry, swap.as_ref()))
         })
         .collect();
 
@@ -164,6 +195,7 @@ fn worker_loop<S: Substrate + Send + 'static>(
     server: &tiny_http::Server,
     pager: &Arc<Mutex<Pager<S>>>,
     registry: &Arc<TaskRegistry>,
+    swap: Option<&Arc<SwapContext>>,
 ) {
     loop {
         let mut request = match server.recv() {
@@ -199,7 +231,7 @@ fn worker_loop<S: Substrate + Send + 'static>(
                         None => respond_empty(request, status),
                     }
                 } else {
-                    match api_native::dispatch(pager, &method, &segments, &body) {
+                    match api_native::dispatch(pager, swap, &method, &segments, &body) {
                         (status, Some(value)) => respond_json(request, status, &value),
                         (status, None) => respond_empty(request, status),
                     }

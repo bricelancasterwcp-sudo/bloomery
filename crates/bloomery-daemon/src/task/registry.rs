@@ -84,12 +84,24 @@ type Entries = Arc<Mutex<HashMap<String, TaskResult>>>;
 /// mutex-poisoning reason this module documents — one shared extractor, not
 /// two spellings of the same message.
 pub(crate) fn panic_message(payload: &(dyn Any + Send + 'static)) -> String {
+    match panic_payload_message(payload) {
+        Some(said) => format!("task worker panicked: {said}"),
+        None => "task worker panicked (no string message on the payload)".to_string(),
+    }
+}
+
+/// The words a caught panic's payload carries, when it carries any — the
+/// reading half of [`panic_message`], without its subject.
+///
+/// `pub(crate)` for the swap-candidate spawn site (`api_native`), which
+/// catches a panic from a *different* worker: describing that one as a "task
+/// worker" would name the wrong subsystem in an operator's only record of it.
+/// One extractor, three subjects.
+pub(crate) fn panic_payload_message(payload: &(dyn Any + Send + 'static)) -> Option<String> {
     if let Some(s) = payload.downcast_ref::<&str>() {
-        format!("task worker panicked: {s}")
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        format!("task worker panicked: {s}")
+        Some((*s).to_string())
     } else {
-        "task worker panicked (no string message on the payload)".to_string()
+        payload.downcast_ref::<String>().cloned()
     }
 }
 
