@@ -567,7 +567,7 @@ operator detail and never consulted for the verdict, because exit 2 is also
 what `argparse` answers for `invalid choice: 'cover'` — and §4's response
 prose records the asynchronous 202/GET shape (a probe cannot ride a request
 handler; the boot watch's own rule). §7's "pager refusal … keeps the
-surface's existing 404/409 idiom" clause takes a fifth note for the same
+surface's existing 404/409 idiom" clause takes another dated note for the same
 reason as §4 step 1's, and names the two shapes §7 omitted (400
 `bad_request`, 501 `swap_candidate_unavailable`).
 
@@ -597,6 +597,11 @@ reason as §4 step 1's, and names the two shapes §7 omitted (400
   lines" note under *Smaller items* below, which this entry supersedes on the
   facts (that file is now 1247, and it is not "the only file over the 800
   ceiling").
+- **`std::thread::spawn` panic exposure on request/registry paths.** Both sites
+  claim state before spawning (swap-slot at `api_native.rs:481`, Running status at
+  `registry.rs:172/184`), and a spawn panic on OS thread exhaustion leaves
+  claimed state unreleased. Switch both to `thread::Builder::spawn` with a
+  finish/cleanup on `Err`.
 
 ## Phase 2 work items (in recommended order)
 

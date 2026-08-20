@@ -178,7 +178,9 @@ pub fn run_candidate_probe<S: Substrate>(
         // for the life of the process. The evidence this job *did* gather is
         // still named — only the verdict is missing, and the outcome says so.
         Err(e) => SwapOutcomeReport {
-            outcome: format!("infra: the swap-candidate verdict could not be recorded: {e}"),
+            outcome: format!(
+                "infra: the swap-candidate verdict could not be reached or recorded: {e}"
+            ),
             exit_code: None,
             candidate_gguf_sha: evidence.candidate_gguf_sha.clone(),
             floor_sha: evidence.floor_sha.clone(),

@@ -144,7 +144,6 @@ pub struct CoverReading {
 pub struct CoverGate {
     python: String,
     run: CommandRunner,
-    timeout: Duration,
 }
 
 impl CoverGate {
@@ -162,7 +161,6 @@ impl CoverGate {
             run: Box::new(|program: &str, args: &[String]| {
                 crate::post::run_bounded(program, args, COVER_TIMEOUT)
             }),
-            timeout: COVER_TIMEOUT,
         }
     }
 
@@ -175,13 +173,7 @@ impl CoverGate {
             // rather than retyped so the two cannot drift.
             python: crate::config::default_python(),
             run: f,
-            timeout: COVER_TIMEOUT,
         }
-    }
-
-    /// The cap this gate's subprocess runs under.
-    pub fn timeout(&self) -> Duration {
-        self.timeout
     }
 
     /// Asks whether `candidate` covers `floor`, and reports only what the
