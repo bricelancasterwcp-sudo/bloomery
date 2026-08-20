@@ -54,17 +54,63 @@
 //!   — the exact `NotFound` wording is OS/errno-sourced text this binary
 //!   discovers by actually calling the real executor, never hand-formats
 //!   (see [`real_missing_target_read`]).
+//!
+//! **Turn 3 (flywheel task-6 brief,
+//! `docs/superpowers/specs/2026-08-20-flywheel3-turn3-design.md` §2) adds
+//! two more patch-mode trajectory shapes**, again additively — a request
+//! carrying none of turn 3's new fields renders byte-identically to turn 1
+//! (pinned by `tests/flywheel_tool_test.rs`'s turn-1 golden). Both extend
+//! the same rule the refusal families established, to two more executors:
+//! every observation in a rendered trajectory comes from a REAL executor
+//! call against a throwaway scratch directory this binary materializes from
+//! the request's `files`, never from a hand-written format string here.
+//!
+//! - **find-shaped** (`"find_pattern"` set): 4 pairs, `find` -> `read` ->
+//!   `patch` -> `done`, the first two observations from the real
+//!   [`exec_find`] and [`exec_read`] (see [`handle_find_trajectory`]).
+//! - **run-verified** (`"run_argv"` set): 4 pairs, `read` -> `patch` ->
+//!   `run` -> `done`, the run executed for real by [`exec_run`] against the
+//!   PATCHED file under a grant carrying the request's `commands` (see
+//!   [`handle_run_trajectory`]). **A non-zero exit is a hard error
+//!   response, never a rendered trajectory**: an ideal whose own
+//!   verification fails is not an ideal, and the factory must abort that
+//!   task as structural rather than train on it.
+//!
+//! One consequence worth stating, because it is the reason the turn-3 gate
+//! protocol calls `find` observations *format*-faithful rather than
+//! byte-faithful: `exec_find`'s per-hit line embeds a canonicalized,
+//! absolute path, so a find observation rendered here carries this
+//! binary's scratch-dir path bytes. That is recorded, pre-registered
+//! instrument behavior (`docs/superpowers/evidence/2026-08-20-g5v3-protocol.md`
+//! §6.2), not drift.
 
 use std::io::{BufRead, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
 
-use bloomery_core::action::lens::{land, Landing, LandingLens, PlainText};
+use bloomery_core::action::lens::{land, Landing};
 use bloomery_core::action::{PatchBody, PatchCodec};
-use bloomery_core::grant::Grant;
 use bloomery_daemon::config::EnvelopeLens;
-use bloomery_daemon::task::lens_py::PythonLens;
 use bloomery_daemon::task::task_loop::{render_task_prompt, transcript_entry};
-use bloomery_daemon::task::{exec_read, ExecBounds};
+use bloomery_daemon::task::{exec_find, exec_read, exec_run, ExecBounds};
+
+// `src/bin/flywheel_tool.rs` is a crate ROOT (Cargo's `[[bin]] path`
+// names it directly), and a crate root resolves a bare `mod foo;` to a
+// SIBLING `src/bin/foo.rs` — not to `src/bin/flywheel_tool/foo.rs`, which
+// is the rule for a non-root `foo.rs`. `#[path]` says where these two
+// actually live, keeping them namespaced under this binary's own
+// directory instead of loose in `src/bin/` where Cargo's autobin scan
+// looks for other binaries.
+#[path = "flywheel_tool/render.rs"]
+mod render;
+#[path = "flywheel_tool/scratch.rs"]
+mod scratch;
+
+use render::{
+    describe_landing_failure, done_completion, find_completion, land_reference_patch, lens_for,
+    patch_completion, read_completion, run_completion, Pair, Trajectory, FIND_PATH,
+};
+use scratch::{
+    files_to_materialize, real_target_read, run_exit_code, safe_relative, RequestFile, Scratch,
+};
 
 /// One request line's `"cmd"` discriminator. Only `trajectory` exists
 /// today (task-1 brief: "the only one the factory needs") — declared as a
@@ -122,13 +168,28 @@ struct TrajectoryRequest {
     refusal_reason: Option<String>,
     #[serde(default)]
     target_missing: bool,
-}
-
-/// One (prompt, completion) SFT pair.
-#[derive(serde::Serialize)]
-struct Pair {
-    prompt: String,
-    completion: String,
+    /// Turn 3: the whole workspace this task's trajectory happens in —
+    /// `target` plus whatever siblings the fixture carries. Materialized
+    /// into a throwaway scratch dir whenever a shape needs a real
+    /// `find`/`read`/`run` to happen ([`files_to_materialize`] falls back
+    /// to `target`/`target_contents` alone when it is empty, so a
+    /// single-file run-verified request need not restate its target here).
+    #[serde(default)]
+    files: Vec<RequestFile>,
+    /// Turn 3: set => render the find-shaped 4-pair trajectory
+    /// ([`handle_find_trajectory`]). Mutually exclusive with `run_argv`.
+    #[serde(default)]
+    find_pattern: Option<String>,
+    /// Turn 3: set => render the run-verified 4-pair trajectory
+    /// ([`handle_run_trajectory`]). Mutually exclusive with `find_pattern`.
+    #[serde(default)]
+    run_argv: Option<Vec<String>>,
+    /// Turn 3: the granted command prefixes the scratch grant carries —
+    /// the same `commands` shape a fixture's grant carries, so `run_argv`
+    /// is checked against the real [`bloomery_core::grant::Grant`]
+    /// allowlist rather than trusted.
+    #[serde(default)]
+    commands: Vec<Vec<String>>,
 }
 
 /// The `trajectory` response body — task-1 brief's wire format, extended
@@ -200,58 +261,6 @@ fn parse_envelope(raw: &str) -> Result<EnvelopeLens, String> {
     }
 }
 
-/// Chooses the landing lens for `target` by extension — see this module's
-/// docs for why duplicating this one-line check (and not the landing logic
-/// itself) is acceptable.
-fn lens_for(target: &str) -> Box<dyn LandingLens> {
-    if target.ends_with(".py") {
-        Box::new(PythonLens)
-    } else {
-        Box::new(PlainText)
-    }
-}
-
-/// Describes a non-`Lands` [`Landing`] outcome for the response's
-/// `landing_detail` field, mirroring `exec_patch`'s own outcome-string
-/// shape (`task/exec.rs:~357-377`) — reporting only, not a second landing
-/// implementation: the `Landing` value itself came straight out of the
-/// real [`land`] call.
-fn describe_landing_failure(landing: &Landing) -> String {
-    match landing {
-        Landing::Lands { .. } => unreachable!("Lands is handled by the caller before this runs"),
-        Landing::DidNotApply { reason, lens } => {
-            format!("did not apply (lens: {lens}): {reason:?}")
-        }
-        Landing::DidNotParse { detail, lens } => format!("did not parse (lens: {lens}): {detail}"),
-        Landing::Unparsed { language, lens } => {
-            format!("lens {lens} cannot judge language {language}")
-        }
-    }
-}
-
-/// Builds pair 1's completion: `<action verb="read" path="{target}">` with
-/// an empty body — no trailing newline after the closing tag (task-1
-/// brief, pinned).
-fn read_completion(target: &str) -> String {
-    format!("<action verb=\"read\" path=\"{target}\">\n</action>")
-}
-
-/// Builds pair 2's completion: the `SearchReplace` conflict-marker body,
-/// matching `bloomery_core::action::card`'s worked example grammar exactly
-/// (`<<<<<<< SEARCH` / `=======` / `>>>>>>> REPLACE`).
-fn patch_completion(target: &str, search: &str, replace: &str) -> String {
-    format!(
-        "<action verb=\"patch\" path=\"{target}\">\n<<<<<<< SEARCH\n{search}\n=======\n\
-         {replace}\n>>>>>>> REPLACE\n</action>"
-    )
-}
-
-/// Builds pair 3's completion: `<action verb="done">` with `summary` as
-/// its one-line body.
-fn done_completion(summary: &str) -> String {
-    format!("<action verb=\"done\">\n{summary}\n</action>")
-}
-
 /// Reads a request field required for `expect = "{expect_name}"`,
 /// returning a named parse error (not a silent `None` a downstream branch
 /// discovers) when the factory omitted it for that mode — the same
@@ -267,17 +276,229 @@ fn require<'a>(
     })
 }
 
-/// Dispatches on `req.expect` (task-3 brief). `patch_codec`/`envelope` are
-/// parsed once, up front, since both modes render prompts through the same
-/// [`render_task_prompt`] and need them regardless of `expect`.
+/// Dispatches on `req.expect` (task-3 brief), then — inside patch mode — on
+/// which of turn 3's two shape selectors the request carries.
+/// `patch_codec`/`envelope` are parsed once, up front, since every mode
+/// renders prompts through the same [`render_task_prompt`] and needs them
+/// regardless.
+///
+/// `find_pattern` and `run_argv` name two *different* 4-pair shapes, so a
+/// request carrying both is a named error rather than a silent pick-one:
+/// there is no defined trajectory that is both, and guessing one would hand
+/// the factory training data it did not ask for. Both are equally a named
+/// error under `expect = "refuse"`, which renders exactly 2 pairs and never
+/// patches anything — there is nothing for a `find` or a verification `run`
+/// to attach to.
 fn handle_trajectory(req: &TrajectoryRequest) -> Result<TrajectoryResponse, String> {
     let codec = parse_patch_codec(&req.patch_codec)?;
     let envelope = parse_envelope(&req.envelope)?;
 
-    match req.expect {
-        TrajectoryExpect::Patch => handle_patch_trajectory(req, codec, envelope),
-        TrajectoryExpect::Refuse => handle_refuse_trajectory(req, codec, envelope),
+    match (
+        req.expect,
+        req.find_pattern.as_deref(),
+        req.run_argv.as_deref(),
+    ) {
+        (TrajectoryExpect::Patch, None, None) => handle_patch_trajectory(req, codec, envelope),
+        (TrajectoryExpect::Patch, Some(pattern), None) => {
+            handle_find_trajectory(req, codec, envelope, pattern)
+        }
+        (TrajectoryExpect::Patch, None, Some(argv)) => {
+            handle_run_trajectory(req, codec, envelope, argv)
+        }
+        (TrajectoryExpect::Patch, Some(_), Some(_)) => Err(
+            "trajectory request carries both \"find_pattern\" and \"run_argv\": they select two \
+             different 4-pair shapes (find/read/patch/done and read/patch/run/done) and there is \
+             no trajectory that is both — send exactly one"
+                .to_string(),
+        ),
+        (TrajectoryExpect::Refuse, Some(_), _) | (TrajectoryExpect::Refuse, _, Some(_)) => Err(
+            "trajectory request with expect=\"refuse\" carries \"find_pattern\" or \"run_argv\": \
+             a refusal renders exactly 2 pairs (read, done) and never patches anything, so \
+             neither shape selector applies"
+                .to_string(),
+        ),
+        (TrajectoryExpect::Refuse, None, None) => handle_refuse_trajectory(req, codec, envelope),
     }
+}
+
+/// Handles a find-shaped (`find_pattern` set) patch trajectory: 4 pairs,
+/// `find` -> `read` -> `patch` -> `done`, over a scratch dir materialized
+/// from the request's `files`.
+///
+/// Both of the first two observations are REAL executor output — the whole
+/// point of the shape. Two conditions are hard errors rather than rendered
+/// data, because each means the *ideal itself* is broken, which is always a
+/// factory bug and never something to train on:
+///
+/// - a `find` that matches nothing (the trajectory's opening move would
+///   teach the model to search and find nothing, then read the right file
+///   anyway — a step that carries no information);
+/// - a `target` that is not among `files` (there is nothing to read, so
+///   there is no trajectory).
+///
+/// A reference patch that does not land is NOT one of them: that answers
+/// with the pairs built so far plus `landed: false` and `landing_detail`,
+/// exactly as patch mode does.
+fn handle_find_trajectory(
+    req: &TrajectoryRequest,
+    codec: PatchCodec,
+    envelope: EnvelopeLens,
+    pattern: &str,
+) -> Result<TrajectoryResponse, String> {
+    let search = require(&req.search, "search", "patch")?;
+    let replace = require(&req.replace, "replace", "patch")?;
+    let summary = require(&req.summary, "summary", "patch")?;
+
+    let scratch = Scratch::materialize("find", &files_to_materialize(req))?;
+    let grant = scratch.grant(&req.commands)?;
+
+    // `exec_find` takes no cwd: a relative prefix would silently fall back
+    // to this process's own cwd, so the scratch dir is passed absolute —
+    // the same absolutize-first obligation `task_loop.rs`'s dispatch
+    // discharges before its own `exec_find` call.
+    let find = exec_find(
+        &grant,
+        pattern,
+        &scratch.path().to_string_lossy(),
+        &ExecBounds::default(),
+    );
+    if find.failed {
+        return Err(format!("the find step did not run: {}", find.outcome));
+    }
+    if find.content.is_empty() {
+        return Err(format!(
+            "find_pattern {pattern:?} found 0 matches across the request's \"files\" — a \
+             find-shaped ideal whose opening find finds nothing is not an ideal; this is a \
+             factory bug, not a tool bug"
+        ));
+    }
+    let read = real_target_read(&scratch, &grant, req)?;
+
+    let mut trajectory = Trajectory::new(&req.goal, codec, envelope);
+    trajectory.emit(find_completion(pattern, FIND_PATH));
+    trajectory.observe("find", &find.outcome, &find.content);
+    trajectory.emit(read_completion(&req.target));
+    trajectory.observe("read", &read.outcome, &read.content);
+    trajectory.emit(patch_completion(&req.target, search, replace));
+
+    let (new_contents, lens_name) =
+        match land_reference_patch(&read.content, &req.target, search, replace) {
+            Ok(landed) => landed,
+            Err(detail) => {
+                return Ok(TrajectoryResponse {
+                    pairs: trajectory.pairs,
+                    landed: false,
+                    patched_contents: None,
+                    landing_detail: Some(detail),
+                    verified: None,
+                })
+            }
+        };
+    trajectory.observe(
+        "patch",
+        &format!("patched (lens: {lens_name})"),
+        &new_contents,
+    );
+    trajectory.emit(done_completion(summary));
+
+    Ok(TrajectoryResponse {
+        pairs: trajectory.pairs,
+        landed: true,
+        patched_contents: Some(new_contents),
+        landing_detail: None,
+        verified: None,
+    })
+}
+
+/// Handles a run-verified (`run_argv` set) patch trajectory: 4 pairs,
+/// `read` -> `patch` -> `run` -> `done`, with the run executed for real
+/// against the PATCHED file.
+///
+/// The order matters and is the whole content of the shape: the reference
+/// patch is landed in memory, **written to the scratch copy of `target`**,
+/// and only then is `run_argv` executed there under a grant carrying the
+/// request's `commands`. A trajectory that ran the verification against the
+/// unpatched file would be a trajectory whose final `done` is a lie.
+///
+/// **A run that does not exit 0 is a hard error response**, never a
+/// rendered trajectory: an ideal whose own verification fails is not an
+/// ideal, and the factory's contract is to abort that task as structural
+/// rather than train on it. So is a run that never ran at all (a grant
+/// violation, a spawn failure, a timeout — `exec_run`'s `failed: true`
+/// cases, which are exactly the ones where the verb was not carried out).
+fn handle_run_trajectory(
+    req: &TrajectoryRequest,
+    codec: PatchCodec,
+    envelope: EnvelopeLens,
+    argv: &[String],
+) -> Result<TrajectoryResponse, String> {
+    let search = require(&req.search, "search", "patch")?;
+    let replace = require(&req.replace, "replace", "patch")?;
+    let summary = require(&req.summary, "summary", "patch")?;
+
+    let scratch = Scratch::materialize("run", &files_to_materialize(req))?;
+    let grant = scratch.grant(&req.commands)?;
+    let read = real_target_read(&scratch, &grant, req)?;
+
+    let mut trajectory = Trajectory::new(&req.goal, codec, envelope);
+    trajectory.emit(read_completion(&req.target));
+    trajectory.observe("read", &read.outcome, &read.content);
+    trajectory.emit(patch_completion(&req.target, search, replace));
+
+    let (new_contents, lens_name) =
+        match land_reference_patch(&read.content, &req.target, search, replace) {
+            Ok(landed) => landed,
+            Err(detail) => {
+                return Ok(TrajectoryResponse {
+                    pairs: trajectory.pairs,
+                    landed: false,
+                    patched_contents: None,
+                    landing_detail: Some(detail),
+                    verified: None,
+                })
+            }
+        };
+    trajectory.observe(
+        "patch",
+        &format!("patched (lens: {lens_name})"),
+        &new_contents,
+    );
+    trajectory.emit(run_completion(argv));
+
+    let target_path = scratch.path().join(safe_relative(&req.target)?);
+    std::fs::write(&target_path, &new_contents).map_err(|e| {
+        format!("failed to write the patched {target_path:?} before verifying: {e}")
+    })?;
+
+    let run = exec_run(&grant, scratch.path(), argv, &ExecBounds::default());
+    if run.failed {
+        return Err(format!(
+            "the run verification {argv:?} never ran: {} — a run-verified ideal must be able to \
+             execute its own verification (check the request's \"commands\" grant)",
+            run.outcome
+        ));
+    }
+    let code = run_exit_code(&run)?;
+    if code != 0 {
+        return Err(format!(
+            "the run verification {argv:?} did not pass against the patched {t:?} — an ideal \
+             whose own verification fails is not an ideal, so no trajectory is rendered. The \
+             real observation was: {o} / {c:?}",
+            t = req.target,
+            o = run.outcome,
+            c = run.content
+        ));
+    }
+    trajectory.observe("run", &run.outcome, &run.content);
+    trajectory.emit(done_completion(summary));
+
+    Ok(TrajectoryResponse {
+        pairs: trajectory.pairs,
+        landed: true,
+        patched_contents: Some(new_contents),
+        landing_detail: None,
+        verified: None,
+    })
 }
 
 /// Handles a patch-mode (`expect` absent or `"patch"`) `trajectory`
@@ -455,23 +676,19 @@ fn handle_refuse_trajectory(
 /// on the specific path bytes (see `tests/flywheel_tool_test.rs`'s
 /// missing-target anti-drift pin, which proves this independently against
 /// a real `run_task`).
+///
+/// Turn 3 moved the directory and the grant onto the shared [`Scratch`]
+/// type — the empty-`files` case of the very same materialize-and-tear-down
+/// the find/run shapes use. That retires this function's hand-built grant
+/// JSON, which interpolated a raw path into a string literal and would have
+/// produced invalid JSON for any temp dir whose name contained a quote or a
+/// backslash; [`Scratch::grant`] builds the same wire object through
+/// `serde_json::json!`, which escapes it.
 fn real_missing_target_read(target: &str) -> Result<(String, String), String> {
-    static SCRATCH_COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = SCRATCH_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "flywheel-tool-missing-target-{}-{n}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("failed to create the missing-target scratch dir: {e}"))?;
-    let grant = Grant::from_json(&format!(
-        r#"{{"read_roots":["{d}"],"write_roots":[],"commands":[]}}"#,
-        d = dir.display()
-    ))
-    .map_err(|e| format!("failed to build the missing-target scratch grant: {e}"))?;
+    let scratch = Scratch::materialize("missing-target", &[])?;
+    let grant = scratch.grant(&[])?;
 
-    let observation = exec_read(&grant, &dir, target, None, &ExecBounds::default());
-    let _ = std::fs::remove_dir_all(&dir);
+    let observation = exec_read(&grant, scratch.path(), target, None, &ExecBounds::default());
 
     if !observation.failed {
         return Err(format!(
