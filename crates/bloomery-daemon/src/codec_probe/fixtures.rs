@@ -66,6 +66,19 @@ pub struct Fixture {
     /// `reference`, mirrored).
     #[serde(default)]
     pub refusal_reason: Option<String>,
+    /// Command prefixes this fixture's grant should permit, threaded
+    /// verbatim into `fixture_grant`'s `Grant` (`codec_probe/mod.rs`).
+    /// Defaults empty — the whole-history shape, and what every fixture up
+    /// to and including `codec-tasks-v1` and `codec-tasks-v2-mixed` still
+    /// carries: read+write only, no commands, so those frozen files parse
+    /// unchanged. Non-empty only for a *run-granted* gate fixture (flywheel
+    /// turn-3 Task 8), whose goal cannot be scored by bytes alone and
+    /// instead needs to actually run a command (e.g. `python3 -m
+    /// py_compile`) to prove the fix works — see `grant/command.rs`'s
+    /// `check_command` for the prefix-match semantics this list is checked
+    /// against.
+    #[serde(default)]
+    pub commands: Vec<Vec<String>>,
 }
 
 /// One file's starting contents, keyed by its path relative to the task's
@@ -490,5 +503,62 @@ replace = "goodbye"
         );
         assert!(set.fixtures.iter().any(|f| f.expect == Expect::Patch));
         assert!(set.fixtures.iter().any(|f| f.expect == Expect::Refuse));
+    }
+
+    // -----------------------------------------------------------------
+    // flywheel turn-3 Task 2: `commands` (instrument delta 1)
+    // -----------------------------------------------------------------
+
+    /// The exact shape Task 8's run-granted gate fixtures will author
+    /// (Task 2 brief: `commands = [["python3", "-m", "py_compile"]]`) —
+    /// pinned at the parser level so that TOML has a guaranteed parse
+    /// target before Task 8 exists.
+    #[test]
+    fn fixture_with_commands_parses_into_commands_field() {
+        let toml_text = r#"
+set = "codec-tasks-test"
+
+[[fixture]]
+name = "py-mean-off-by-one"
+lens = "python"
+target = "stats.py"
+goal = "fix mean() in stats.py"
+commands = [["python3", "-m", "py_compile"]]
+
+[[fixture.file]]
+path = "stats.py"
+contents = "def mean(values):\n    return sum(values) / (len(values) + 1)\n"
+
+[fixture.reference]
+search = "    return sum(values) / (len(values) + 1)"
+replace = "    return sum(values) / len(values)"
+"#;
+        let set = parse_fixture_set(toml_text).expect("should parse");
+        assert_eq!(
+            set.fixtures[0].commands,
+            vec![vec![
+                "python3".to_string(),
+                "-m".to_string(),
+                "py_compile".to_string()
+            ]]
+        );
+    }
+
+    /// Compat pin: both frozen shipped sets predate `commands` and must
+    /// still parse — with it defaulting empty for every fixture — since
+    /// neither TOML file is touched by this task (brief interface: "serde
+    /// default empty").
+    #[test]
+    fn shipped_fixture_sets_parse_with_empty_commands() {
+        let v1 = shipped_fixture_set().expect("v1 must still parse");
+        assert!(
+            v1.fixtures.iter().all(|f| f.commands.is_empty()),
+            "codec-tasks-v1 predates commands; every fixture's list must be empty"
+        );
+        let v2 = shipped_fixture_set_v2_mixed().expect("v2-mixed must still parse");
+        assert!(
+            v2.fixtures.iter().all(|f| f.commands.is_empty()),
+            "codec-tasks-v2-mixed predates commands; every fixture's list must be empty"
+        );
     }
 }
