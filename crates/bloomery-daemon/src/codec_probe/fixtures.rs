@@ -194,61 +194,43 @@ pub fn shipped_fixture_set() -> Result<FixtureSet, String> {
     parse_fixture_set(include_str!("../../fixtures/codec-tasks-v1.toml"))
 }
 
-/// The name `boot::run_boot_g5_probe` checks the parsed G5 mixed set
-/// against before running any model: while this name is what
-/// [`shipped_fixture_set_v2_mixed`] parses, the set is a placeholder that
-/// must never take a measurement (Task 2 ships the file; Task 4 lands the
-/// real 20-fixture content and drops this suffix — see that function's doc
-/// comment).
+/// The name `boot::run_boot_g5_probe` checks parsed mixed sets against
+/// before running any model. This const exists so the boot guard can refuse
+/// a placeholder fixture set if one ever returns — a guard that is
+/// independent of which era's placeholder may exist. The placeholder era
+/// for v2 ended when the real frozen set landed (commit 474b565).
 pub const V2_MIXED_PLACEHOLDER_SET_NAME: &str = "codec-tasks-v2-mixed-PLACEHOLDER";
 
-/// Parses the G5 mixed fixture set embedded at
-/// `fixtures/codec-tasks-v2-mixed.toml` (G5 design doc §3: 10
-/// `expect="patch"` + 10 `expect="refuse"`, both lenses in both classes,
-/// held out from every training corpus).
+/// Parses the real, frozen G5 mixed fixture set (the G5 design doc §3:
+/// 20-fixture set with 10 `expect="patch"` + 10 `expect="refuse"`, both
+/// lenses in both classes, held out from every training corpus).
 ///
-/// **Task 2 ships this file as a MINIMAL VALID PLACEHOLDER** (2 fixtures — 1
-/// patch, 1 refuse — `set = "codec-tasks-v2-mixed-PLACEHOLDER"`), the
-/// smaller-diff choice named in the Task 2 brief: it lets every other G5
-/// wiring piece (scoring, the mixed verdict, `/status`, the boot opt-in) be
-/// implemented and tested for real now, with the boot path's own
-/// placeholder-name check ([`V2_MIXED_PLACEHOLDER_SET_NAME`],
-/// `boot::run_boot_g5_probe`) refusing to take a measurement against it in
-/// the meantime — rather than `cfg(test)`-gating this function, which would
-/// leave the production boot path with nothing to call at all. Task 4
-/// overwrites this file's CONTENT in place with the real, frozen set (`set
-/// = "codec-tasks-v2-mixed"`, no suffix) — same path, same function
-/// signature, so no caller changes when that lands.
+/// The placeholder era for this set (which shipped a minimal 2-fixture
+/// proof-of-concept to unblock wiring, before the real frozen set landed)
+/// ended when commit 474b565 landed the real frozen content in
+/// `fixtures/codec-tasks-v2-mixed.toml` (`set = "codec-tasks-v2-mixed"`,
+/// no suffix). This function parses that real frozen set.
 pub fn shipped_fixture_set_v2_mixed() -> Result<FixtureSet, String> {
     parse_fixture_set(include_str!("../../fixtures/codec-tasks-v2-mixed.toml"))
 }
 
-/// The name `boot::run_boot_g5_probe` checks the parsed v3 mixed set
-/// against before running any model: while this name is what
-/// [`shipped_fixture_set_v3_mixed`] parses, the set is a placeholder that
-/// must never take a measurement (same mechanism
-/// [`V2_MIXED_PLACEHOLDER_SET_NAME`] used during v2's own placeholder era,
-/// reused rather than redesigned) — Task 3 ships the file; Task 8 lands the
-/// real 32-fixture content and drops this suffix — see that function's doc
-/// comment.
+/// The name `boot::run_boot_g5_probe` checks parsed mixed sets against
+/// before running any model. This const exists so the boot guard can refuse
+/// a placeholder fixture set if one ever returns — a guard that is
+/// independent of which era's placeholder may exist. The placeholder era
+/// for v3 ended when the real frozen set landed (commit e6c7637).
 pub const V3_MIXED_PLACEHOLDER_SET_NAME: &str = "codec-tasks-v3-mixed-PLACEHOLDER";
 
-/// Parses the flywheel turn-3 G5 mixed fixture set embedded at
-/// `fixtures/codec-tasks-v3-mixed.toml` (design doc §3: 16
-/// `expect="patch"` + 16 `expect="refuse"`, both lenses in both classes,
-/// held out from every training corpus).
+/// Parses the real, frozen flywheel turn-3 G5 mixed fixture set (32-fixture
+/// set with 16 `expect="patch"` + 16 `expect="refuse"`, both lenses in both
+/// classes, held out from every training corpus), embedded at
+/// `fixtures/codec-tasks-v3-mixed.toml`.
 ///
-/// **Task 3 ships this file as a MINIMAL VALID PLACEHOLDER** (2 fixtures — 1
-/// patch, 1 refuse — `set = "codec-tasks-v3-mixed-PLACEHOLDER"`), the same
-/// smaller-diff choice Task 2 made for `codec-tasks-v2-mixed` before it was
-/// frozen: it lets `boot::run_boot_g5_probe`'s call site swap to v3 now,
-/// with the boot path's own placeholder-name check
-/// ([`V3_MIXED_PLACEHOLDER_SET_NAME`]) refusing to take a measurement
-/// against it in the meantime — rather than `cfg(test)`-gating this
-/// function, which would leave the production boot path with nothing to
-/// call at all. Task 8 overwrites this file's CONTENT in place with the
-/// real, frozen set (`set = "codec-tasks-v3-mixed"`, no suffix) — same
-/// path, same function signature, so no caller changes when that lands.
+/// The placeholder era for this set (which shipped a minimal 2-fixture
+/// proof-of-concept to unblock wiring, before the real frozen set landed)
+/// ended when commit e6c7637 landed the real frozen content in
+/// `fixtures/codec-tasks-v3-mixed.toml` (`set = "codec-tasks-v3-mixed"`,
+/// no suffix). This function parses that real frozen set.
 pub fn shipped_fixture_set_v3_mixed() -> Result<FixtureSet, String> {
     parse_fixture_set(include_str!("../../fixtures/codec-tasks-v3-mixed.toml"))
 }

@@ -112,34 +112,26 @@ byte-identical `corpus.jsonl` and an identical `fingerprint.json`. This
 is a machine-checked property (`tests/test_generate.py`'s
 `DeterminismTest`), not just documentation.
 
-### One known exception: find-shaped rows carry a scratch path
+### The determinism law holds without exception
 
-Turn 3's find shape has a **bounded** deviation from the rule above, and
-it only appears against the real binary (never the stub, which
-materializes nothing — which is why `DeterminismTest` cannot see it).
+The determinism law above extends end-to-end to every task shape,
+including the find shape. Ruling bT7/R1 (2026-08-20) fixed the tool's
+`Scratch::materialize` to name its scratch directory from a content hash
+of the request identity, rather than the tool's PID. Identical requests
+now materialize at identical paths, so two same-seed runs of the factory
+produce byte-identical corpora with zero differing rows.
 
-`exec_find` renders each hit as `{canonicalized absolute path}:{lineno}:
-{line}`, and the path is the throwaway scratch directory `flywheel-tool`
-names with its own PID. So the three post-`find` rows of every
-find-shaped task — `read`, `patch`, `done`, the ones whose prompt carries
-the find observation in their transcript — differ byte-for-byte between
-two same-seed runs, and `corpus_sha256` differs with them. Measured on a
-999+300 run: exactly 999 of 4263 rows (= 333 find tasks × 3), and
-**nothing else**.
+Find-shaped rows still carry real, unmodified absolute paths in their
+observations — `exec_find` emits `{canonicalized absolute path}:{lineno}:
+{line}` exactly as rendered by the executor. Those paths are deterministic
+because the executor's inputs are reproducible; the factory never rewrites
+observation text.
 
 `tests/test_generate_trajectories.py`'s `RealToolDeterminismBoundaryTest`
-pins the exception at exactly that size: the two corpora must be
-byte-identical once the scratch path is normalized, and plain/run rows
-must be byte-identical without any normalization. If anything else ever
-becomes nondeterministic, that test fails rather than this paragraph
-quietly becoming a licence.
-
-This is a consequence of the observation format the turn-3 gate protocol
-recorded (`docs/superpowers/evidence/2026-08-20-g5v3-protocol.md` §6.2 —
-`find` observations are *format*-faithful, not byte-faithful). Making the
-corpus fully byte-reproducible would mean rendering find hits relative to
-the scratch root in `flywheel_tool/render.rs`, i.e. changing an
-already-recorded observation format — a decision above this package.
+enforces this against the real binary: two runs at the same seed must
+produce byte-identical corpora (zero differing rows), and find rows must
+still embed a real absolute scratch path. If anything ever becomes
+nondeterministic, that test fails.
 
 ## Verify contamination
 
