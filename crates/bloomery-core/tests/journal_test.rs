@@ -36,7 +36,9 @@ fn append_then_replay_round_trips() {
 /// tag first — rows stay greppable as `{"event":"…`.
 #[test]
 fn an_appended_row_carries_a_bounded_epoch_ms_stamp() {
-    let dir = std::env::temp_dir().join("bloomery-journal-stamp");
+    // Pid-suffixed: two concurrent `cargo test` runs (main repo + a worktree)
+    // must not share one append-only file, or `lines.len()` reads 4.
+    let dir = std::env::temp_dir().join(format!("bloomery-journal-stamp-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("j-stamp.jsonl");
     let _ = std::fs::remove_file(&path);
@@ -70,6 +72,11 @@ fn an_appended_row_carries_a_bounded_epoch_ms_stamp() {
         let stamp = value["epoch_ms"]
             .as_u64()
             .unwrap_or_else(|| panic!("row carries no numeric epoch_ms: {line}"));
+        // Known flake mode, accepted on purpose: a backwards wall-clock step
+        // (NTP) landing inside this microseconds-wide window fails the bound.
+        // Do NOT widen the bounds — a loose window is exactly what lets a
+        // constant-stamp mutant live. A one-off red here means the clock
+        // stepped, not that the stamp broke; re-run it.
         assert!(
             (before..=after).contains(&stamp),
             "epoch_ms {stamp} outside the append's own clock bounds [{before}, {after}]"

@@ -353,10 +353,28 @@ pub struct Journal {
 /// document, so the no-transcribed-measurements law
 /// ([`Event::Drift`]'s doc) is untouched.
 ///
+/// Two properties a correlating reader must know:
+///
+/// - **The stamp is wall clock, not monotonic.** The system clock can step
+///   backwards (NTP), so `epoch_ms` is not guaranteed non-decreasing down the
+///   file — file order is the row order, always; never sort by the stamp or
+///   difference two stamps for an elapsed time. In-journal durations are the
+///   `duration_ms` fields, measured separately and unaffected by clock steps.
+/// - **The stamp is the append instant** — the *end* of whatever the row
+///   describes. A row carrying `duration_ms` covers roughly
+///   `[epoch_ms - duration_ms, epoch_ms]`, not the stamp's instant: a
+///   22-second `ModelLoaded` is stamped 22 seconds after the load began.
+///
 /// Rows written before 2026-08-20 carry no stamp; [`replay`] accepts both,
 /// and returns the events without the stamp either way — the raw JSONL is
-/// the correlation surface. `#[serde(flatten)]` keeps the `event` tag first,
-/// so rows stay greppable as `{"event":"…`.
+/// the correlation surface. (A Rust consumer that one day needs the stamp
+/// gets a `replay_rows() -> (stamp, event)` beside [`replay`], never a new
+/// `Event` field — the cheap move would put the writer's clock inside the
+/// what-happened record.) `#[serde(flatten)]` makes the row one flat object;
+/// what keeps the `event` tag *first* is field order — `event` is declared
+/// before `epoch_ms` and serde emits in declaration order — so rows stay
+/// greppable as `{"event":"…` (the layout is pinned by
+/// `an_appended_row_carries_a_bounded_epoch_ms_stamp`).
 #[derive(serde::Serialize)]
 struct Row<'a> {
     #[serde(flatten)]
@@ -378,10 +396,12 @@ impl Journal {
     /// after every append, so at most the in-flight append can be lost.
     pub fn append(&mut self, e: &Event) -> std::io::Result<()> {
         // A clock before 1970 has no honest millisecond count; 0 is visibly
-        // absurd rather than silently plausible, and the row still lands.
+        // absurd rather than silently plausible, and the row still lands. A
+        // count past u64 milliseconds saturates rather than silently
+        // truncating (the daemon's own `millis` convention).
         let epoch_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
+            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
             .unwrap_or(0);
         let line = serde_json::to_string(&Row { event: e, epoch_ms })?;
         self.writer.write_all(line.as_bytes())?;

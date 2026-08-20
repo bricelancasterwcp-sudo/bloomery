@@ -632,7 +632,13 @@ follow-ups):**
   the stamp itself pinned, clock-bounded and mutation-checked, by
   `an_appended_row_carries_a_bounded_epoch_ms_stamp`, both `journal_test.rs`).
   Forward-only: the acceptance journals already committed stay stampless —
-  nothing rewrites an append-only record.
+  nothing rewrites an append-only record. One proof pattern changes shape
+  under the stamp, noted before anyone pre-registers it: acceptance 2's
+  durable determinism proof was a byte-equal pair of `Degraded` rows, and two
+  identical events appended at different instants now differ in `epoch_ms` —
+  a future row-equality claim compares rows with the stamp stripped
+  (`jq 'del(.epoch_ms)'`), and byte-identical *whole journals* across re-runs
+  are impossible by construction.
 - ~~**Unload-then-swap-candidate on tight tiers had no operator-facing
   line** (bA2/F1). Acceptance 2a measured the flow live: the pager charges
   every loaded model's weights to one budget and reclaims only agents' KV,

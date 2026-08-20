@@ -89,8 +89,9 @@ semantic store, appliance boot) is not built. See
   verdict is evidence, journaled, and config stays the operator's. The whole
   flow is driven in the suite through injected probe and cover seams (no
   python, no assay, no GPU), and **live-verified end-to-end 2026-08-20**: a
-  real candidate reached a real `covered` verdict against the standing
-  baseline —
+  real candidate reached a real `covered` verdict — weak by construction
+  (34/34 quick-mode cells within noise, silent on G4/G5) — against the
+  standing baseline:
   [the evidence](docs/superpowers/evidence/2026-08-20-swap-candidate-live-2.md).
   **On a tier where the candidate cannot fit beside the resident model,
   unload first.** The pager charges every loaded model's weights to one
@@ -108,9 +109,11 @@ semantic store, appliance boot) is not built. See
   admission, decision, paging op, refusal and degradation is a line in it, and
   every row carries its writer's wall-clock stamp (`epoch_ms`) so a row can be
   correlated with clocks *outside* the journal — GPU sample logs, daemon
-  stderr, an operator's notes. (Rows written before 2026-08-20 predate the
-  stamp; they replay unchanged.) The
-  G2 numbers above are computed from nothing else — see
+  stderr, an operator's notes. The stamp is the append instant (a row with a
+  `duration_ms` spans roughly `epoch_ms − duration_ms` to `epoch_ms`) and is
+  wall clock, not monotonic — file order is the row order. Rows written
+  before 2026-08-20 predate the stamp; they replay unchanged. The G2 numbers
+  above are computed from nothing else — see
   [the evidence](docs/superpowers/evidence/2026-08-14-g2-agent-switch.md), whose
   journals are committed beside it.
 
