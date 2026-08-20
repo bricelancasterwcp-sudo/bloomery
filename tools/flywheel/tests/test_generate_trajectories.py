@@ -249,10 +249,11 @@ class RealToolTrajectoryShapesTest(unittest.TestCase):
 
 
 # The scratch directory `flywheel-tool` materializes per request, as it
-# appears inside a real `exec_find` hit line. `Scratch::materialize` names
-# it `flywheel-tool-{tag}-{pid}-{counter}`, so the bytes differ between two
-# runs of the binary.
-_SCRATCH_PATH_RE = re.compile(r"/tmp/flywheel-tool-[a-z-]+-\d+-\d+/")
+# appears inside a real `exec_find` hit line. Under ruling bT7/R1
+# `Scratch::materialize` names it `flywheel-tool-scratch-{16 hex}`, where the
+# hex is a digest of the request's content identity -- so the bytes are the
+# same for the same request, on any run, in any process.
+_SCRATCH_PATH_RE = re.compile(r"/tmp/flywheel-tool-scratch-[0-9a-f]{16}/")
 
 
 @unittest.skipUnless(
@@ -260,29 +261,36 @@ _SCRATCH_PATH_RE = re.compile(r"/tmp/flywheel-tool-[a-z-]+-\d+-\d+/")
     "flywheel-tool binary not built; run cargo build --release -p bloomery-daemon --bin flywheel-tool",
 )
 class RealToolDeterminismBoundaryTest(unittest.TestCase):
-    """**A known, bounded deviation from the determinism law** (design spec
-    rule 3: same seed -> byte-identical corpus), introduced by the find
-    shape and pinned here rather than left to be discovered.
+    """**The determinism law holds end to end** (design spec rule 3: same
+    seed -> byte-identical corpus), including the find shape, and this is
+    where that is proven against the REAL binary.
 
-    `exec_find` renders each hit as `{canonicalized absolute path}:{lineno}:
-    {line}`, and the path it canonicalizes is the throwaway scratch dir the
-    tool names with its own PID. So the three post-`find` rows of every
-    find-shaped task (`read`/`patch`/`done` — the ones whose prompt carries
-    the find observation in their transcript) contain bytes that change
-    between two runs of the binary at the SAME seed. `corpus_sha256`
-    changes with them.
+    History, because this class used to say the opposite. `exec_find`
+    renders each hit as `{canonicalized absolute path}:{lineno}: {line}`,
+    and the path it canonicalizes is the throwaway scratch dir the tool
+    materializes. The tool originally named that dir from its own PID plus a
+    counter, so the three post-`find` rows of every find-shaped task
+    (`read`/`patch`/`done` -- the ones carrying the find observation in
+    their transcript) differed between two same-seed runs, and
+    `corpus_sha256` differed with them: 999 differing rows of 4263 measured.
+    This class pinned that as a bounded exception and referred the fix up.
 
-    `DeterminismTest` in `test_generate.py` cannot see this: it drives the
-    stub, which materializes nothing. This test drives the REAL binary and
-    states the true property — everything else is byte-identical, and the
-    ONLY thing that varies is the scratch path. If any other
-    nondeterminism ever enters the factory, the normalized comparison below
-    fails and this stops being a bounded exception.
+    **Ruling bT7/R1 (2026-08-20) fixed it in the tool, not the factory.**
+    `Scratch::materialize` now names the directory from a digest of the
+    request's own content identity, so identical requests materialize at
+    identical paths. What was explicitly NOT done: no post-processing of
+    rendered observation text, and no factory-side rewriting. The find hit
+    is still exactly what the real executor emitted, absolute path and all
+    -- determinism comes from the executor's input being reproducible, which
+    is the only kind of fix that leaves the observation real. That is why
+    `test_the_find_rows_still_embed_a_real_absolute_scratch_path` sits
+    beside the equality assertion: an "erase the path" regression would
+    satisfy determinism and quietly destroy the property determinism was
+    protecting.
 
-    The tool-side fix (render find hits relative to the scratch root) lives
-    in `flywheel_tool/render.rs` and changes an observation format the
-    turn-3 gate protocol already recorded, so it is a controller decision,
-    not something to take silently here."""
+    `DeterminismTest` in `test_generate.py` cannot see any of this: it
+    drives the stub, which materializes nothing. This class drives the real
+    binary twice at the same seed and asserts ZERO differing rows."""
 
     @classmethod
     def setUpClass(cls):
@@ -304,39 +312,42 @@ class RealToolDeterminismBoundaryTest(unittest.TestCase):
     def tearDownClass(cls):
         cls._tmp.cleanup()
 
-    @staticmethod
-    def _normalized(row):
-        return {
-            **row,
-            "prompt": _SCRATCH_PATH_RE.sub("<SCRATCH>/", row["prompt"]),
-            "completion": _SCRATCH_PATH_RE.sub("<SCRATCH>/", row["completion"]),
-        }
-
-    def test_only_find_shaped_post_find_rows_differ_between_identical_seeds(self):
+    def test_zero_rows_differ_between_two_runs_at_the_same_seed(self):
         a, b = self.corpora
         self.assertEqual(len(a), len(b))
-        differing = [x for x, y in zip(a, b) if x != y]
-        self.assertTrue(differing, "expected the scratch-path deviation; did the tool change?")
+        differing = [
+            (x["meta"]["trajectory"], x["meta"]["pair"]) for x, y in zip(a, b) if x != y
+        ]
         self.assertEqual(
-            sorted({(r["meta"]["trajectory"], r["meta"]["pair"]) for r in differing}),
-            [("find", "done"), ("find", "patch"), ("find", "read")],
-            "something OTHER than the find observation's scratch path is nondeterministic",
+            differing,
+            [],
+            "the determinism law is broken: same seed, different corpus. Before ruling bT7/R1 "
+            "this was the find shape's scratch path leaking into the rendered bytes; if it is "
+            "that again, check Scratch::materialize's content-derived name.",
         )
 
-    def test_the_corpora_are_byte_identical_once_the_scratch_path_is_normalized(self):
-        a, b = self.corpora
-        self.assertEqual(
-            [self._normalized(r) for r in a],
-            [self._normalized(r) for r in b],
-            "a same-seed difference survives scratch-path normalization -- the determinism law "
-            "is broken by something other than the known, bounded exec_find path exception",
-        )
+    def test_the_find_shape_is_covered_by_that_claim(self):
+        # Guards the assertion above from going vacuous: zero differing rows
+        # proves nothing about find if no find row was generated.
+        shapes = {r["meta"]["trajectory"] for r in self.corpora[0]}
+        self.assertIn("find", shapes, f"no find-shaped rows in this corpus: {sorted(shapes)}")
 
-    def test_plain_and_run_shapes_are_still_byte_identical_across_runs(self):
-        a, b = self.corpora
-        for x, y in zip(a, b):
-            if x["meta"]["trajectory"] != "find":
-                self.assertEqual(x, y, f"{x['meta']['task_id']}/{x['meta']['pair']}")
+    def test_the_find_rows_still_embed_a_real_absolute_scratch_path(self):
+        # Determinism must NOT have been bought by rewriting the observation.
+        # `exec_find` emits an absolute canonicalized path per hit; that is
+        # real executor output and it must still be there verbatim.
+        find_rows = [
+            r
+            for r in self.corpora[0]
+            if r["meta"]["trajectory"] == "find" and r["meta"]["pair"] != "find"
+        ]
+        self.assertTrue(find_rows, "no post-find rows to check")
+        self.assertTrue(
+            any(_SCRATCH_PATH_RE.search(r["prompt"]) for r in find_rows),
+            "no post-find prompt carries an absolute /tmp/flywheel-tool-scratch-<hex>/ path -- "
+            "the find observation is no longer real executor output, or the tool renamed its "
+            "scratch dir",
+        )
 
 
 if __name__ == "__main__":

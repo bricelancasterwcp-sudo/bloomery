@@ -12,12 +12,32 @@
 //! observation can only be real if there is a real directory to observe, so
 //! [`Scratch`] builds one per request, hands out the [`Grant`] the
 //! executors run under, and removes it again however the handler exits.
+//!
+//! **The directory's NAME is part of the trained bytes** (controller ruling
+//! bT7/R1, 2026-08-20). `exec_find` renders each hit as
+//! `{canonicalized absolute path}:{lineno}: {line}`, so whatever this module
+//! calls its scratch directory ends up verbatim inside every find-shaped
+//! trajectory's transcript. The first implementation named it from the pid
+//! plus a counter, which made two same-seed factory runs differ in exactly
+//! the find rows (999 of 4263 measured) and broke the factory's determinism
+//! law — same seed, byte-identical corpus.
+//!
+//! The ruled fix is [`ScratchId`]: the name is a digest of the directory's
+//! own *content identity*, so two identical requests materialize at
+//! identical paths and render identical bytes. Note what this deliberately
+//! does NOT do — it does not post-process the rendered observation, and it
+//! does not ask the factory to rewrite anything. The find hit stays exactly
+//! what the real executor emitted, absolute path and all; determinism comes
+//! from making the input to that executor reproducible, which is the only
+//! kind of fix that leaves the observation real.
 
+use std::fs::File;
+use std::os::fd::AsRawFd;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use bloomery_core::grant::Grant;
 use bloomery_daemon::task::{exec_read, ExecBounds, Observation};
+use sha2::{Digest, Sha256};
 
 use super::TrajectoryRequest;
 
@@ -54,30 +74,157 @@ pub(crate) fn safe_relative(path: &str) -> Result<PathBuf, String> {
     Ok(p.to_path_buf())
 }
 
-/// A throwaway directory this binary owns end to end: created fresh per
-/// call, populated from a request's `files`, and removed on drop (including
-/// on every early-return error path below, which is why this is a `Drop`
-/// type rather than a pair of function calls).
+/// Everything about a request that determines what its scratch directory
+/// will contain — and therefore, under ruling bT7/R1, everything the
+/// directory's name is derived from.
+///
+/// `target`/`target_contents`/`find_pattern` are named by the ruling and
+/// carried even though `files` already implies the directory's bytes: they
+/// cost nothing and they keep two requests that merely *happen* to
+/// materialize the same files from sharing a name.
+///
+/// Deliberately absent: `run_argv`, `search`, `replace`. The run shape
+/// rewrites the scratch copy of `target` mid-flight, so a directory's
+/// contents at the *end* of a run request are not what this identifies —
+/// but they need not be. The stdin protocol is strictly sequential and
+/// [`Scratch`] removes the directory on drop, so the next request always
+/// starts from a clean materialize, and [`Scratch::materialize`] removes any
+/// leftover first in case a previous process died before its `Drop` ran.
+pub(crate) struct ScratchId<'a> {
+    pub(crate) target: &'a str,
+    pub(crate) target_contents: &'a str,
+    pub(crate) find_pattern: Option<&'a str>,
+    pub(crate) files: &'a [RequestFile],
+}
+
+impl ScratchId<'_> {
+    /// The directory name's stable suffix: the first 16 hex characters of a
+    /// SHA-256 over this identity.
+    ///
+    /// Every field is fed **length-prefixed**, never concatenated raw —
+    /// otherwise `("ab", "c")` and `("a", "bc")` would hash alike and two
+    /// genuinely different workspaces could land in one directory. `files`
+    /// is fed in order, because order is part of the identity: the entries
+    /// are written in order and a later entry can overwrite an earlier one's
+    /// path.
+    fn digest(&self) -> String {
+        let mut hasher = Sha256::new();
+        let mut feed = |bytes: &[u8]| {
+            hasher.update((bytes.len() as u64).to_le_bytes());
+            hasher.update(bytes);
+        };
+        feed(self.target.as_bytes());
+        feed(self.target_contents.as_bytes());
+        match self.find_pattern {
+            // An absent pattern and an empty one are different requests, so
+            // they get different tags rather than both feeding "".
+            Some(pattern) => {
+                feed(b"find_pattern");
+                feed(pattern.as_bytes());
+            }
+            None => feed(b"no_find_pattern"),
+        }
+        feed(&(self.files.len() as u64).to_le_bytes());
+        for file in self.files {
+            feed(file.path.as_bytes());
+            feed(file.contents.as_bytes());
+        }
+        let full = hasher.finalize();
+        full.iter().take(8).map(|b| format!("{b:02x}")).collect()
+    }
+}
+
+/// A throwaway directory this binary owns end to end: named from its own
+/// content identity, populated from a request's `files`, and removed on drop
+/// (including on every early-return error path below, which is why this is a
+/// `Drop` type rather than a pair of function calls).
+///
+/// `_lock` is an exclusive `flock` held for the directory's whole lifetime —
+/// see [`lock_for`] for why a content-derived name needs one.
 pub(crate) struct Scratch {
     dir: PathBuf,
+    _lock: File,
+}
+
+/// Takes an exclusive advisory lock covering the scratch directory at `dir`,
+/// blocking until it is available, and returns the handle whose drop
+/// releases it.
+///
+/// **Why this exists.** Ruling bT7/R1 makes the directory's name a function
+/// of the request, which is what buys determinism — and which also means two
+/// `flywheel-tool` processes handling the *identical* request want the
+/// identical directory at the identical moment. Without a lock that is not a
+/// clean error: one process's `remove_dir_all` lands between the other's
+/// write and its `exec_find`, and the loser renders a trajectory built on a
+/// half-deleted workspace. A wrong observation that still looks like a valid
+/// one is the worst failure this binary can have, so the collision is
+/// serialized rather than documented away. (Measured, not hypothesized: with
+/// the content-derived name and no lock, `cargo test`'s parallel threads —
+/// each spawning a tool process on the same fixture — failed 3 runs out of 5.)
+///
+/// `flock` and not a lock*file*-as-mutex on purpose: the kernel releases a
+/// `flock` when the holding process dies, so a crashed run cannot wedge
+/// every later run at the same request. The lock file itself is a 0-byte
+/// sibling of the directory and is deliberately never unlinked — unlinking
+/// it while another process is blocked on it would hand that process a lock
+/// on a detached inode, which is exactly the race this is here to remove.
+fn lock_for(dir: &Path) -> Result<File, String> {
+    let path = dir.with_extension("lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|e| format!("failed to open the scratch lock {path:?}: {e}"))?;
+    // SAFETY: `fd` is a valid, open descriptor owned by `file` for the whole
+    // call, and `flock` neither takes ownership of it nor retains it past
+    // return. `LOCK_EX` blocks rather than failing, which is the intent.
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+    if rc != 0 {
+        return Err(format!(
+            "failed to lock the scratch dir {dir:?}: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(file)
 }
 
 impl Scratch {
-    /// Creates the directory and writes every entry of `files` into it.
-    /// `tag` only distinguishes concurrent scratch dirs by shape in a
-    /// process listing; uniqueness comes from the pid plus a monotonic
-    /// counter.
-    pub(crate) fn materialize(tag: &str, files: &[RequestFile]) -> Result<Scratch, String> {
-        static SCRATCH_COUNTER: AtomicU64 = AtomicU64::new(0);
-        let n = SCRATCH_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir =
-            std::env::temp_dir().join(format!("flywheel-tool-{tag}-{}-{n}", std::process::id()));
+    /// Creates the directory at the content-derived path and writes every
+    /// entry of `id.files` into it.
+    ///
+    /// The `remove_dir_all` before `create_dir_all` is **load-bearing**, not
+    /// hygiene: under a content-derived name a leftover directory from a
+    /// process that died before its `Drop` ran sits at exactly the path this
+    /// request wants, and any stale file in it would show up in this
+    /// request's `exec_find` results as a real hit. Clearing first is what
+    /// makes the observation a function of the request alone.
+    ///
+    /// Two *concurrent* processes fed the identical request derive the
+    /// identical path by construction; [`lock_for`] serializes them rather
+    /// than letting them corrupt each other's workspace. The factory drives
+    /// this binary as a single sequential stdin/stdout pipe, so in the
+    /// production regime the lock is uncontended.
+    pub(crate) fn materialize(id: &ScratchId<'_>) -> Result<Scratch, String> {
+        // Validate every path BEFORE creating anything, so a request that
+        // was going to be refused never leaves a directory behind.
+        let targets: Vec<PathBuf> = id
+            .files
+            .iter()
+            .map(|file| safe_relative(&file.path))
+            .collect::<Result<_, _>>()?;
+
+        let dir = std::env::temp_dir().join(format!("flywheel-tool-scratch-{}", id.digest()));
+        // Locked BEFORE the directory is touched: the clear-and-recreate
+        // below is precisely the window another process must not be reading
+        // through.
+        let lock = lock_for(&dir)?;
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir)
-            .map_err(|e| format!("failed to create the {tag} scratch dir: {e}"))?;
-        let scratch = Scratch { dir };
-        for file in files {
-            let path = scratch.dir.join(safe_relative(&file.path)?);
+            .map_err(|e| format!("failed to create the scratch dir {dir:?}: {e}"))?;
+        let scratch = Scratch { dir, _lock: lock };
+        for (file, relative) in id.files.iter().zip(targets) {
+            let path = scratch.dir.join(relative);
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent)
                     .map_err(|e| format!("failed to create {parent:?} in the scratch dir: {e}"))?;

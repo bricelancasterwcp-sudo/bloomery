@@ -110,6 +110,7 @@ use render::{
 };
 use scratch::{
     files_to_materialize, real_target_read, run_exit_code, safe_relative, RequestFile, Scratch,
+    ScratchId,
 };
 
 /// One request line's `"cmd"` discriminator. Only `trajectory` exists
@@ -349,7 +350,13 @@ fn handle_find_trajectory(
     let replace = require(&req.replace, "replace", "patch")?;
     let summary = require(&req.summary, "summary", "patch")?;
 
-    let scratch = Scratch::materialize("find", &files_to_materialize(req))?;
+    let files = files_to_materialize(req);
+    let scratch = Scratch::materialize(&ScratchId {
+        target: &req.target,
+        target_contents: &req.target_contents,
+        find_pattern: Some(pattern),
+        files: &files,
+    })?;
     let grant = scratch.grant(&req.commands)?;
 
     // `exec_find` takes no cwd: a relative prefix would silently fall back
@@ -436,7 +443,13 @@ fn handle_run_trajectory(
     let replace = require(&req.replace, "replace", "patch")?;
     let summary = require(&req.summary, "summary", "patch")?;
 
-    let scratch = Scratch::materialize("run", &files_to_materialize(req))?;
+    let files = files_to_materialize(req);
+    let scratch = Scratch::materialize(&ScratchId {
+        target: &req.target,
+        target_contents: &req.target_contents,
+        find_pattern: None,
+        files: &files,
+    })?;
     let grant = scratch.grant(&req.commands)?;
     let read = real_target_read(&scratch, &grant, req)?;
 
@@ -684,8 +697,20 @@ fn handle_refuse_trajectory(
 /// produced invalid JSON for any temp dir whose name contained a quote or a
 /// backslash; [`Scratch::grant`] builds the same wire object through
 /// `serde_json::json!`, which escapes it.
+///
+/// Ruling bT7/R1 made the scratch name content-derived, so this path's
+/// directory is now named from `target` too. That was never part of the
+/// determinism breakage — a failed `exec_read`'s message text carries no
+/// path, which is exactly what the missing-target anti-drift pin proves by
+/// reconstructing it in a *different* directory — but sharing one naming
+/// scheme keeps `Scratch` a single story rather than two.
 fn real_missing_target_read(target: &str) -> Result<(String, String), String> {
-    let scratch = Scratch::materialize("missing-target", &[])?;
+    let scratch = Scratch::materialize(&ScratchId {
+        target,
+        target_contents: "",
+        find_pattern: None,
+        files: &[],
+    })?;
     let grant = scratch.grant(&[])?;
 
     let observation = exec_read(&grant, scratch.path(), target, None, &ExecBounds::default());

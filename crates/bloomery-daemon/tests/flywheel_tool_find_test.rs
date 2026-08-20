@@ -381,6 +381,75 @@ fn bin_find_shaped_pair_3_prompt_carries_the_real_read_of_the_found_target() {
     );
 }
 
+/// **The determinism law, at the tool boundary** (controller ruling bT7/R1).
+/// The factory's rule 3 is "same seed -> byte-identical corpus", and the find
+/// shape breaks it the moment the scratch directory's name varies between
+/// runs, because `exec_find` embeds that absolute path in every hit and the
+/// hit lands verbatim in three of the four rendered prompts.
+///
+/// `run_flywheel_tool` spawns a fresh process per call, so the two responses
+/// compared here come from two separate `flywheel-tool` invocations — the
+/// exact cross-process case a pid-derived directory name failed. Byte
+/// equality of the whole response is the assertion; nothing is normalized
+/// away, which is the point.
+#[test]
+fn bin_find_shaped_request_renders_byte_identically_across_two_tool_processes() {
+    let first = run_flywheel_tool(&find_request("v3"));
+    let second = run_flywheel_tool(&find_request("v3"));
+
+    assert_eq!(
+        first, second,
+        "two runs of the same find-shaped request differ — the scratch directory's name is \
+         reaching the rendered bytes again, which breaks the factory's same-seed determinism law"
+    );
+}
+
+/// The companion to the determinism pin above, and the reason it must be a
+/// *separate* assertion: determinism could also be "achieved" by rewriting
+/// the rendered observation (stripping the path, or making it relative),
+/// and that would silently turn a real executor observation into
+/// post-processed text — the thing this whole binary exists not to do.
+///
+/// So: the find hits must STILL embed a real, absolute, canonicalized
+/// scratch path. Determinism comes from the path being reproducible, never
+/// from it being erased.
+#[test]
+fn bin_find_shaped_observation_still_embeds_a_real_absolute_scratch_path() {
+    let response = run_flywheel_tool(&find_request("v1"));
+    let pairs = response["pairs"].as_array().expect("pairs array");
+    let transcript = v1_transcript_of(FIND_GOAL, pairs[1]["prompt"].as_str().unwrap());
+
+    let scratch_prefix = std::env::temp_dir().join("flywheel-tool-scratch-");
+    let scratch_prefix = scratch_prefix.to_string_lossy().into_owned();
+    let hit_lines: Vec<&str> = transcript
+        .lines()
+        .filter(|line| line.starts_with(&scratch_prefix))
+        .collect();
+    assert!(
+        !hit_lines.is_empty(),
+        "no find hit in pair 2's transcript starts with {scratch_prefix:?} — either the \
+         observation is no longer real executor output, or the scratch dir moved: {transcript:?}"
+    );
+    // Every hit line is still `{absolute path}:{lineno}: {text}`, and the
+    // digest segment is the fixed-width hex the ruling specified.
+    for line in &hit_lines {
+        let digest = line[scratch_prefix.len()..]
+            .split('/')
+            .next()
+            .expect("the scratch dir name precedes the first '/'");
+        assert_eq!(digest.len(), 16, "expected a 16-hex-char digest: {line:?}");
+        assert!(
+            digest.chars().all(|c| c.is_ascii_hexdigit()),
+            "expected a hex digest: {line:?}"
+        );
+    }
+    assert_eq!(
+        hits(&hit_lines.join("\n")).len(),
+        hit_lines.len(),
+        "every hit line still parses as {{absolute path}}:{{lineno}}: {{text}}"
+    );
+}
+
 #[test]
 fn bin_find_shaped_request_whose_pattern_matches_nothing_is_a_named_error() {
     let mut request = find_request("v1");
