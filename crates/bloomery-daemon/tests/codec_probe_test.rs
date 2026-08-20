@@ -1518,9 +1518,9 @@ fn run_boot_g5_probe_runs_the_real_shipped_set_not_a_placeholder_skip() {
 fn g5_placeholder_skip_reason_wording_is_pinned() {
     assert_eq!(
         g5_placeholder_skip_reason("codec-tasks-v3-mixed-PLACEHOLDER"),
-        "G5 refusal probe skipped: fixture set codec-tasks-v3-mixed-PLACEHOLDER is a Task-2 \
-         placeholder (the real codec-tasks-v2-mixed set has not landed yet); no model measured \
-         — done_trust stays unmeasured"
+        "G5 refusal probe skipped: fixture set codec-tasks-v3-mixed-PLACEHOLDER is a \
+         placeholder, not the frozen instrument; no model measured — done_trust stays \
+         unmeasured"
     );
 }
 

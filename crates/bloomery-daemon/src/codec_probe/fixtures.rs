@@ -224,11 +224,12 @@ pub fn shipped_fixture_set_v2_mixed() -> Result<FixtureSet, String> {
 }
 
 /// The name `boot::run_boot_g5_probe` checks the parsed v3 mixed set
-/// against while this name is what [`shipped_fixture_set_v3_mixed`] parses:
-/// flywheel turn-3 Task 3 ships the file as a placeholder (same mechanism
+/// against before running any model: while this name is what
+/// [`shipped_fixture_set_v3_mixed`] parses, the set is a placeholder that
+/// must never take a measurement (same mechanism
 /// [`V2_MIXED_PLACEHOLDER_SET_NAME`] used during v2's own placeholder era,
-/// reused rather than redesigned) and Task 8 lands the real, frozen
-/// 32-fixture content and drops this suffix — see that function's doc
+/// reused rather than redesigned) — Task 3 ships the file; Task 8 lands the
+/// real 32-fixture content and drops this suffix — see that function's doc
 /// comment.
 pub const V3_MIXED_PLACEHOLDER_SET_NAME: &str = "codec-tasks-v3-mixed-PLACEHOLDER";
 
