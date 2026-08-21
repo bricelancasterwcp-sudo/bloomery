@@ -13,6 +13,7 @@
 
 pub mod exec;
 pub mod exec_run;
+pub mod grant_line;
 pub mod lens_py;
 pub mod registry;
 mod run_capture;
@@ -20,6 +21,7 @@ pub mod task_loop;
 
 pub use exec::{exec_find, exec_patch, exec_read};
 pub use exec_run::exec_run;
+pub use grant_line::grant_line;
 pub use registry::TaskRegistry;
 pub use task_loop::{run_task, TaskResult, TaskSpec, TaskStatus, TaskStepRecord};
 

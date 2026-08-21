@@ -12,11 +12,24 @@ obvious home.
 
 Turn 3's additive fields (`flywheel_tool.rs`'s `TrajectoryRequest`; names
 exact): `files` (the whole workspace as `{"path", "contents"}` objects),
-`find_pattern` (presence selects the find shape), `run_argv` (presence
-selects the run shape) and `commands` (the grant that permits the run).
-They are sent ONLY for the shape that owns them, so a plain task's request
-is byte-identical to turn 1's — which is what keeps the tool's turn-1
-golden green.
+`find_pattern` (presence selects the find shape) and `run_argv` (presence
+selects the run shape). Each is sent ONLY for the shape that owns it, so
+presence keeps meaning "this shape", never "this field happens to be
+empty".
+
+Turn 4 (spec §2) makes `commands` the exception, and deliberately: under
+envelope-v4 the tool RENDERS the grant into every prompt, so `commands` is
+no longer a run-shape input — it is what every task says about itself,
+including the tasks that say "nothing". A plain, find-shaped or refuse
+request therefore sends `commands: []` explicitly and gets
+`Granted commands: none — run is not available in this task`; only a
+run-verified request sends a prefix. The empty list is sent rather than the
+key omitted because the two are indistinguishable to the tool's
+deserializer but not to a reader: the explicit form says the factory
+decided, which is the property that matters for a field whose value becomes
+prompt text the model acts on. `envelope` and `commands` are both stamped
+in `build_trajectory_request`, the one function that builds EVERY request
+of either class, so there is exactly one place either can be wrong.
 """
 
 from __future__ import annotations
@@ -31,7 +44,12 @@ from tools.flywheel.factory.task import (
     Task,
 )
 
-ENVELOPE = "v3"
+# envelope-v4: the rendered prompt carries the grant line (turn-4 spec §2).
+# A prompt change is a new envelope under the lens-travels-with-verdict
+# rule, so every turn-4 measurement is per-(model, v4) — which is exactly
+# why this is a single constant stamped onto every request rather than a
+# per-shape default.
+ENVELOPE = "v4"
 PATCH_CODEC = "search_replace"
 
 AnyTask = Union[Task, RefusalTask]
@@ -60,7 +78,6 @@ def _patch_request(task: Task) -> dict:
         "cmd": "trajectory",
         "goal": task.goal,
         "patch_codec": PATCH_CODEC,
-        "envelope": ENVELOPE,
         "target": task.target,
         "target_contents": task.files[task.target],
         "search": task.search,
@@ -73,16 +90,29 @@ def _patch_request(task: Task) -> dict:
         request["files"] = _wire_files(task)
         request["find_pattern"] = task.find_pattern
     elif task.trajectory == RUN_TRAJECTORY:
+        # `files` carries the planted test alongside the target -- an
+        # ordinary sibling, materialized by the same code path as any
+        # other, which is what lets the tool's real run find it.
         request["files"] = _wire_files(task)
         request["run_argv"] = list(task.run_argv)
-        request["commands"] = [list(prefix) for prefix in task.commands]
     return request
 
 
 def build_trajectory_request(task: AnyTask) -> dict:
+    """The one function that builds every request of either class, and
+    therefore the one place `envelope` and `commands` are stamped (see this
+    module's docstring). A refuse task has no `commands` field at all —
+    `RefusalTask` grants nothing by construction — so it renders the `none`
+    line for a structural reason, not a defaulted one."""
     if isinstance(task, RefusalTask):
-        return generate_refusal.build_refusal_trajectory_request(task)
-    return _patch_request(task)
+        request = generate_refusal.build_refusal_trajectory_request(task)
+        commands: tuple[tuple[str, ...], ...] = ()
+    else:
+        request = _patch_request(task)
+        commands = task.commands
+    request["envelope"] = ENVELOPE
+    request["commands"] = [list(prefix) for prefix in commands]
+    return request
 
 
 def expected_pair_names(task: AnyTask) -> tuple[str, ...]:

@@ -9,7 +9,12 @@ G5's extensions to this guard (refuse-fixture handling, multiple `--gate`
 arguments, the `codec-tasks-v2-mixed` vs `codec-tasks-v1` disjointness
 proof) live in `test_contamination_g5.py` — split out to keep this file
 under the 400-line house cap, same reasoning turn 1 used for
-`templates_python.py`/`templates_text.py`.
+`templates_python.py`/`templates_text.py`. Turn 4 made the same split
+again along a different seam: the two rules that read a task's WHOLE
+`files` map (contents, and now filenames) moved to
+`test_contamination_siblings.py`, leaving this file the rules that read one
+field of a task. The `CLEAN_*` constants and `_corpus_row` below are shared
+with it.
 """
 
 import json
@@ -17,7 +22,6 @@ import unittest
 from pathlib import Path
 
 from tools.flywheel.factory import contamination
-from tools.flywheel.factory.task import MISSING_TARGET, RefusalTask, Task
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 GATE_PATH = REPO_ROOT / "crates" / "bloomery-daemon" / "fixtures" / "codec-tasks-v1.toml"
@@ -230,74 +234,6 @@ CLEAN_CONTENTS = (
     "        total += r\n    return total / (len(readings) + 3)\n"
 )
 CLEAN_SEARCH = "    return total / (len(readings) + 3)"
-
-
-class SiblingFileScreeningTest(unittest.TestCase):
-    """CARRIED-DEBT fast-follow: the guard compared only the DECLARED
-    target's contents, so a task whose sibling file was a verbatim copy of a
-    gate fixture file passed both the draw-time screen and the post-hoc CLI.
-    Task 7's multi-file repair tasks render siblings into real training
-    pairs, which makes this a correctness precondition, not hygiene. Each
-    test plants a gate fixture file as a SIBLING (never as the target) so it
-    can only be caught by screening every file."""
-
-    def setUp(self):
-        self.fixtures = contamination.load_gate_fixtures(GATE_PATH)
-        self.gate_contents = next(f for f in self.fixtures if f.name == "py-mean-off-by-one").files["stats.py"]
-
-    def _patch_task(self, files):
-        return Task(
-            name="unit_test_family",
-            lens="python",
-            target=CLEAN_TARGET,
-            files=files,
-            goal=CLEAN_GOAL,
-            search=CLEAN_SEARCH,
-            replace="    return total / len(readings)",
-            summary="fix the divisor",
-        )
-
-    def test_the_same_task_without_the_plant_is_clean(self):
-        # Pins that the tests below catch the PLANT and not something
-        # incidental about the task's goal/target/search.
-        clean = self._patch_task({CLEAN_TARGET: CLEAN_CONTENTS})
-        self.assertIsNone(contamination.task_violates_gates(clean, self.fixtures))
-
-    def test_draw_time_screen_rejects_a_planted_sibling(self):
-        planted = self._patch_task({CLEAN_TARGET: CLEAN_CONTENTS, "sidecar.py": self.gate_contents})
-        self.assertEqual(contamination.task_violates_gates(planted, self.fixtures), "file_contents_match")
-
-    def test_draw_time_screen_rejects_a_planted_refusal_sibling(self):
-        planted = RefusalTask(
-            name="unit_test_family",
-            lens="python",
-            family=MISSING_TARGET,
-            target=CLEAN_TARGET,
-            target_missing=True,
-            files={"sidecar.py": self.gate_contents},
-            goal=CLEAN_GOAL,
-            refusal_reason=f"Cannot: {CLEAN_TARGET} does not exist in this workspace.",
-        )
-        self.assertEqual(contamination.task_violates_gates(planted, self.fixtures), "file_contents_match")
-
-    def test_post_hoc_guard_sees_a_planted_sibling_via_the_row_files_key(self):
-        row = _corpus_row(
-            "t1",
-            CLEAN_GOAL,
-            CLEAN_TARGET,
-            CLEAN_CONTENTS,
-            CLEAN_SEARCH,
-            files={CLEAN_TARGET: CLEAN_CONTENTS, "sidecar.py": self.gate_contents},
-        )
-        report = contamination.check_corpus([row], self.fixtures)
-        self.assertFalse(report.clean, "a gate fixture file planted as a sibling must be flagged")
-        self.assertTrue(any(v["rule"] == "file_contents_match" for v in report.violations), report.violations)
-
-    def test_a_legacy_row_without_a_files_key_still_has_its_target_checked(self):
-        row = _corpus_row("t1", CLEAN_GOAL, CLEAN_TARGET, self.gate_contents, CLEAN_SEARCH)
-        self.assertNotIn("files", row["meta"], "this row must be the legacy shape for the fallback to be exercised")
-        report = contamination.check_corpus([row], self.fixtures)
-        self.assertTrue(any(v["rule"] == "file_contents_match" for v in report.violations), report.violations)
 
 
 class JaccardHelperTest(unittest.TestCase):

@@ -11,6 +11,13 @@ Each shape renders a different number of pairs -- 3 plain, 4 find, 4 run
 Split out of `test_generate.py` (already at the 400-line house cap) the
 same way `test_generate_gates.py` and `test_generate_refusal.py` were; it
 imports the shared `STUB_TOOL`/`REAL_TOOL`/`run_generate` helpers from it.
+
+Turn 4 split the same way again: the ENVELOPE those shapes are rendered
+under — envelope-v4's grant line, on every shape and both classes — lives
+in `test_generate_envelope_v4.py`, which imports this file's `_generate`
+and `_rows_by_task`. The seam is the subject: this file is about which
+shape a slot renders and what it returns; that one is about what the
+rendered prompt says.
 """
 
 import json
@@ -172,8 +179,9 @@ class LandingFailureAbortsEveryShapeTest(unittest.TestCase):
     def test_run_shape_returns_two_pairs_so_far_and_aborts_the_run(self):
         task = self._task(
             trajectory="run",
-            run_argv=("python3", "-m", "py_compile", "mathy.py"),
-            commands=(("python3", "-m", "py_compile"),),
+            run_argv=("python3", "-m", "unittest", "test_mathy.py"),
+            commands=(("python3", "-m", "unittest"),),
+            test_file="test_mathy.py",
         )
         response = self._partial_pairs(task)
         self.assertFalse(response["landed"])
@@ -191,7 +199,7 @@ class RealToolTrajectoryShapesTest(unittest.TestCase):
     """The brief's end-to-end row through the REAL binary, one per new
     shape. The stub can only echo canned text; only the real tool proves
     the `find` observation came from a real `exec_find` walk and the `run`
-    observation from a real `exec_run` of `py_compile` against the PATCHED
+    observation from a real `exec_run` of the planted `unittest` against the PATCHED
     file."""
 
     @classmethod
@@ -231,18 +239,24 @@ class RealToolTrajectoryShapesTest(unittest.TestCase):
     def test_run_verified_rows_verify_the_patched_file_before_done(self):
         for rows in self._tasks_of_shape("run"):
             run_row, done_row = rows[2], rows[3]
+            stem = run_row["meta"]["target"].removesuffix(".py")
             self.assertIn('<action verb="run"', run_row["completion"])
-            self.assertIn('"py_compile"', run_row["completion"])
-            self.assertIn(run_row["meta"]["target"], run_row["completion"])
+            self.assertIn('"unittest"', run_row["completion"])
+            self.assertIn(f'"test_{stem}.py"', run_row["completion"])
             # The done prompt's transcript carries the real exec_run
-            # observation of the verification passing.
-            self.assertIn("exit 0", done_row["prompt"])
+            # observation of the planted unittest passing against the
+            # PATCHED file.
+            self.assertIn("ran python3 exit 0", done_row["prompt"])
             self.assertIn('<action verb="done">', done_row["completion"])
 
     def test_plain_rows_are_unchanged_three_pair_read_patch_done(self):
         for rows in self._tasks_of_shape("plain"):
             self.assertEqual([r["meta"]["pair"] for r in rows], ["read", "patch", "done"])
             self.assertIn("<<<<<<< SEARCH", rows[1]["completion"])
+
+    def test_every_shape_still_renders_its_own_pair_count(self):
+        counts = {shape: len(self._tasks_of_shape(shape)[0]) for shape in PAIRS_BY_SHAPE}
+        self.assertEqual(counts, {"plain": 3, "find": 4, "run": 4})
 
     def test_the_fingerprint_records_the_slice_counts(self):
         self.assertEqual(self.fingerprint["tasks_by_trajectory"], {"find": 4, "plain": 4, "run": 4})
@@ -326,11 +340,13 @@ class RealToolDeterminismBoundaryTest(unittest.TestCase):
             "that again, check Scratch::materialize's content-derived name.",
         )
 
-    def test_the_find_shape_is_covered_by_that_claim(self):
+    def test_the_find_and_run_shapes_are_covered_by_that_claim(self):
         # Guards the assertion above from going vacuous: zero differing rows
-        # proves nothing about find if no find row was generated.
+        # proves nothing about find (or, since turn 4, about the run shape's
+        # real `unittest` output) if no such row was generated.
         shapes = {r["meta"]["trajectory"] for r in self.corpora[0]}
         self.assertIn("find", shapes, f"no find-shaped rows in this corpus: {sorted(shapes)}")
+        self.assertIn("run", shapes, f"no run-verified rows in this corpus: {sorted(shapes)}")
 
     def test_the_find_rows_still_embed_a_real_absolute_scratch_path(self):
         # Determinism must NOT have been bought by rewriting the observation.

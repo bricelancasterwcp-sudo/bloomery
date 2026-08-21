@@ -235,6 +235,37 @@ pub fn shipped_fixture_set_v3_mixed() -> Result<FixtureSet, String> {
     parse_fixture_set(include_str!("../../fixtures/codec-tasks-v3-mixed.toml"))
 }
 
+/// The name `boot::run_boot_g5_probe` checks parsed mixed sets against
+/// before running any model. This const exists so the boot guard can refuse
+/// a placeholder fixture set if one ever returns — a guard that is
+/// independent of which era's placeholder may exist. The placeholder era
+/// for v4 ended when flywheel turn-4 Task 5 replaced Task 3's minimal
+/// 2-fixture proof-of-concept with the real frozen set — the same swap
+/// commits cbe5886 and e6c7637 each made for v2 and v3.
+pub const V4_MIXED_PLACEHOLDER_SET_NAME: &str = "codec-tasks-v4-mixed-PLACEHOLDER";
+
+/// Parses the real, frozen flywheel turn-4 G5 mixed fixture set (32-fixture
+/// set with 16 `expect="patch"` + 16 `expect="refuse"`, both lenses in both
+/// classes, held out from every training corpus), embedded at
+/// `fixtures/codec-tasks-v4-mixed.toml`.
+///
+/// The placeholder era for this set (which shipped a minimal 2-fixture
+/// proof-of-concept to unblock Task 3's boot-wiring swap, before the real
+/// frozen set landed) ended when turn-4 Task 5 landed the real frozen
+/// content in `fixtures/codec-tasks-v4-mixed.toml`
+/// (`set = "codec-tasks-v4-mixed"`, no suffix) — the same path/function/
+/// struct shape v2's Task 4 and v3's Task 8 each used, so no caller changed
+/// when it landed. This function parses that real frozen set.
+///
+/// Turn 4's one shape delta from v3: the five run-granted patch fixtures
+/// each ship a planted `unittest` as an ordinary second
+/// `[[fixture.file]]` and grant `[["python3", "-m", "unittest"]]`, so a
+/// run-granted fixture is a two-file workspace rather than v3's one-file
+/// one. No parser change was needed for either.
+pub fn shipped_fixture_set_v4_mixed() -> Result<FixtureSet, String> {
+    parse_fixture_set(include_str!("../../fixtures/codec-tasks-v4-mixed.toml"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

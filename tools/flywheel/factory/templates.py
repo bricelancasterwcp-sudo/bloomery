@@ -16,6 +16,7 @@ from tools.flywheel.factory import (
     templates_multifile_text,
     templates_python,
     templates_refusal,
+    templates_run_verified,
     templates_text,
 )
 from tools.flywheel.factory.contamination import GATE_VOCABULARY
@@ -38,7 +39,7 @@ __all__ = [
     "TEXT_TEMPLATES",
     "FIND_TEMPLATES",
     "RUN_TEMPLATES",
-    "PY_COMPILE_PREFIX",
+    "UNITTEST_PREFIX",
     "RUN_FAMILY_SUFFIX",
     "REFUSAL_TEMPLATES",
     "REFUSAL_GROUPS",
@@ -70,12 +71,15 @@ FIND_TEMPLATES: tuple[tuple[str, TemplateFn], ...] = tuple(
 ) + tuple(sorted(templates_multifile_text.FAMILIES.items(), key=lambda item: item[0]))
 
 # Run-verified wrappers over the plain python families (there is no
-# plaintext run slice — see `templates_python.py`'s note on why).
+# plaintext run slice — see `templates_python.py`'s note on why). Turn 4
+# rebuilt what they verify: a planted `unittest` that fails before the
+# reference patch, in place of turn 3's `py_compile`, which could not fail
+# at all (turn-4 spec §3 — `templates_run_verified.py`).
 RUN_TEMPLATES: tuple[tuple[str, TemplateFn], ...] = tuple(
-    sorted(templates_python.RUN_FAMILIES.items(), key=lambda item: item[0])
+    sorted(templates_run_verified.RUN_FAMILIES.items(), key=lambda item: item[0])
 )
-PY_COMPILE_PREFIX = templates_python.PY_COMPILE_PREFIX
-RUN_FAMILY_SUFFIX = templates_python.RUN_FAMILY_SUFFIX
+UNITTEST_PREFIX = templates_run_verified.UNITTEST_PREFIX
+RUN_FAMILY_SUFFIX = templates_run_verified.RUN_FAMILY_SUFFIX
 
 # G5 design doc §5's refusal registry (`templates_refusal.py`'s own module
 # doc explains the (family, lens) group split): re-exported here so callers

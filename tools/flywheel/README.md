@@ -44,6 +44,27 @@ TRAJECTORY SHAPE renders them (turn 3; `generate_request.PAIR_NAMES`):
 `trajectory`). The repair slice cycles the three shapes by slot position,
 333 of each at `--count 999`.
 
+Everything is rendered under **envelope-v4** (turn-4 spec §2): the prompt
+carries a grant line above the verb card, rendered by the tool from the
+request's own `commands`. A run-verified task sends
+`[["python3","-m","unittest"]]` and reads
+`Granted commands: python3 -m unittest`; every other shape and both refusal
+classes send `[]` and read
+`Granted commands: none — run is not available in this task`. That line is
+the whole reason turn 4 exists — through v3 the post-patch decision point
+was token-identical between a run-granted task and a plain one, and the
+model trained on it emitted zero `run` verbs.
+
+The **run slice verifies with a planted `unittest`** (turn-4 spec §3), not
+turn 3's `py_compile`, which could not fail on a semantic defect. Each
+run-verified task ships `test_<stem>.py` beside its target as an ordinary
+sibling in `files`, and the proof that the verification means something is
+split in two: the factory executes the test against the UNPATCHED workspace
+and requires a nonzero exit (`planted_test.py`'s fails-before rule, part of
+`validate_task`), and the tool executes the same argv against the PATCHED
+file and refuses to render a trajectory on any nonzero exit. Either failing
+is a structural rejection, never a rendered row.
+
 ```json
 {"prompt": "...", "completion": "...", "meta": {
   "task_id": "s20260816-000000", "template": "py_inverted_boolean",
@@ -63,11 +84,14 @@ the brief's required `meta` fields (`task_id`/`template`/`lens`/`pair`) —
 the gate set without re-parsing rendered prompts (which would recreate
 the exact prompt-drift risk the design spec's §2 rules out).
 
-`meta.files` is EVERY file the task carries, not just the target, so the
-post-hoc guard screens sibling files too; `target_contents` stays as the
-target's own contents (`""` for a missing-target refusal, whose target is
-by construction absent from `files`). A row written before `files`
-existed is treated as a legacy row and falls back to the target alone.
+`meta.files` is EVERY file the task carries, not just the target — a
+find-shaped task's siblings and a run-verified task's planted test
+included — so the post-hoc guard screens both their CONTENTS and (since
+turn 4) their FILENAMES against every gate target. `target_contents` stays
+as the target's own contents (`""` for a missing-target refusal, whose
+target is by construction absent from `files`). A row written before
+`files` existed is treated as a legacy row and falls back to the target
+alone.
 
 `fingerprint.json`:
 
@@ -159,7 +183,11 @@ factory/
   task.py             Task NamedTuple + structural validator (brief rule 2)
   wordlists.py         Domain vocabulary (10 unrelated themes + shared pools),
                         verified disjoint from the gate set's vocabulary
-  templates_python.py  8 python-lens families + their run-verified wrappers
+  templates_python.py  8 python-lens families (the defects themselves)
+  templates_run_verified.py  their run-verified wrappers: the per-family
+                        PROBE table, the planted unittest, the grant
+  planted_test.py      Running a planted test the way exec_run will, and
+                        the fails-before rule built on it
   templates_text.py    5 plaintext-lens template families
   templates_multifile_python.py  3 find-shaped, multi-file python families
   templates_multifile_text.py    2 find-shaped, multi-file text families
@@ -177,7 +205,10 @@ tests/
   test_templates_multifile.py  the find-shaped families + the run wrappers
   test_generate.py       rules 3-6 (+ one real-binary integration test)
   test_generate_trajectories.py  the three-shape slice cycle, end to end
+  test_generate_envelope_v4.py   the grant line, on every shape and class
   test_contamination.py  rule 7, including the planted-disguised-copy test
+  test_contamination_siblings.py  the two rules that read the whole
+                        `files` map: sibling contents and sibling filenames
   fixtures/               canned stub tools used by test_generate.py
 ```
 

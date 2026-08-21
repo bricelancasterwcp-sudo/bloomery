@@ -159,6 +159,17 @@ pub const ENVELOPE_LENS_V2: &str = EnvelopeLens::V2.lens_name();
 /// model.
 pub const ENVELOPE_LENS_V3: &str = EnvelopeLens::V3.lens_name();
 
+/// The fourth envelope lens (turn-4 spec §2,
+/// `docs/superpowers/specs/2026-08-21-flywheel4-turn4-design.md`, 2026-08-21):
+/// equal to [`ENVELOPE_LENS_V3`] plus the grant line the rendered task
+/// prompt now carries between the goal and the verb card, built from the
+/// task's real `Grant` (`task::grant_line::grant_line`). A prompt change is
+/// a new lens under the lens-travels-with-the-verdict rule, so every turn-4
+/// measurement is per-(model, v4) with its own baselines; selected per model
+/// by `envelope = "v4"`, and never mixed into the same rung as a v1, v2 or
+/// v3 verdict for the same model.
+pub const ENVELOPE_LENS_V4: &str = EnvelopeLens::V4.lens_name();
+
 /// Journaled on every ephemeral probe agent's removal.
 const AGENT_REMOVED_REASON: &str = "codec probe fixture complete";
 

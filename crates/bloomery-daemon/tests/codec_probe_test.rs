@@ -27,7 +27,8 @@ use bloomery_daemon::codec_probe::fixtures::{parse_fixture_set, FixtureSet};
 use bloomery_daemon::codec_probe::{
     fixture_set_unparseable_reason, gate_decision, is_provisional, probe_aborted_reason,
     run_boot_codec_probe, run_codec_probe, should_run_codec_probe, ENVELOPE_LENS, ENVELOPE_LENS_V2,
-    ENVELOPE_LENS_V3, FIXTURE_BUDGET_TOKENS, FIXTURE_MAX_STEPS, POST_DISABLED_CODEC_SKIP_REASON,
+    ENVELOPE_LENS_V3, ENVELOPE_LENS_V4, FIXTURE_BUDGET_TOKENS, FIXTURE_MAX_STEPS,
+    POST_DISABLED_CODEC_SKIP_REASON,
 };
 use bloomery_daemon::config::EnvelopeLens;
 use bloomery_daemon::pager::Pager;
@@ -314,6 +315,9 @@ fn instrument_parameters_match_the_pre_registered_protocol() {
     assert_eq!(ENVELOPE_LENS_V2, "bloomery-task-envelope-v2");
     // Protocol §11, Amendment 3 — the third envelope lens's pinned name.
     assert_eq!(ENVELOPE_LENS_V3, "bloomery-task-envelope-v3");
+    // Turn-4 spec §2 — the fourth envelope lens's pinned name (the visible
+    // grant); every turn-4 verdict travels under this spelling.
+    assert_eq!(ENVELOPE_LENS_V4, "bloomery-task-envelope-v4");
 }
 
 // ---------------------------------------------------------------------------
@@ -1461,10 +1465,10 @@ fn a_set_with_no_refuse_fixtures_aborts_rather_than_a_vacuous_refuse_keep() {
 }
 
 /// `run_boot_g5_probe` no longer refuses to run against the shipped set:
-/// flywheel turn-3 Task 8 replaced the Task-3 placeholder in place with the
-/// real, frozen 32-fixture `codec-tasks-v3-mixed` set — see
-/// `fixtures::shipped_fixture_set_v3_mixed`'s doc comment. This restores
-/// the shape Task 4 gave this test during v2's own freeze, and proves the
+/// flywheel turn-4 Task 5 replaced the Task-3 placeholder in place with the
+/// real, frozen 32-fixture `codec-tasks-v4-mixed` set — see
+/// `fixtures::shipped_fixture_set_v4_mixed`'s doc comment. This restores
+/// the shape Task 8 gave this test during v3's own freeze, and proves the
 /// inverse cheaply, without needing to script all 32 fixtures' worth of
 /// replies: [`MODEL`] is never registered on this pager, so `create_agent`
 /// is refused on the very first fixture the probe attempts — an
@@ -1529,18 +1533,18 @@ fn run_boot_g5_probe_runs_the_real_shipped_set_not_a_placeholder_skip() {
 
 /// The placeholder-skip branch itself stays correct and reachable in
 /// principle — it just cannot be exercised through the shipped file
-/// anymore (see the test above), exactly as during v2's frozen era.
-/// `g5_placeholder_skip_reason`'s exact wording is therefore still pinned
-/// directly, so an accidental wording change is caught even though the
-/// shipped-file integration path no longer covers it. The set name below is
-/// a literal, not a read of the shipped file: this pin is about the
-/// helper's format string, and it must keep biting whichever era the
+/// anymore (see the test above), exactly as during v2's and v3's frozen
+/// eras. `g5_placeholder_skip_reason`'s exact wording is therefore still
+/// pinned directly, so an accidental wording change is caught even though
+/// the shipped-file integration path no longer covers it. The set name
+/// below is a literal, not a read of the shipped file: this pin is about
+/// the helper's format string, and it must keep biting whichever era the
 /// shipped file is in.
 #[test]
 fn g5_placeholder_skip_reason_wording_is_pinned() {
     assert_eq!(
-        g5_placeholder_skip_reason("codec-tasks-v3-mixed-PLACEHOLDER"),
-        "G5 refusal probe skipped: fixture set codec-tasks-v3-mixed-PLACEHOLDER is a \
+        g5_placeholder_skip_reason("codec-tasks-v4-mixed-PLACEHOLDER"),
+        "G5 refusal probe skipped: fixture set codec-tasks-v4-mixed-PLACEHOLDER is a \
          placeholder, not the frozen instrument; no model measured — done_trust stays \
          unmeasured"
     );

@@ -125,17 +125,29 @@ pub(crate) struct Trajectory<'a> {
     goal: &'a str,
     codec: PatchCodec,
     envelope: EnvelopeLens,
+    /// The request's granted argv prefixes — what envelope-v4 renders its
+    /// grant line from (turn-4 spec §2). Carried here, unmodified, so a
+    /// trajectory's prompts state the same capability boundary the real
+    /// executor calls in `flywheel_tool.rs` run under (both read
+    /// `req.commands`).
+    commands: &'a [Vec<String>],
     transcript: String,
     step: u32,
     pub(crate) pairs: Vec<Pair>,
 }
 
 impl<'a> Trajectory<'a> {
-    pub(crate) fn new(goal: &'a str, codec: PatchCodec, envelope: EnvelopeLens) -> Self {
+    pub(crate) fn new(
+        goal: &'a str,
+        codec: PatchCodec,
+        envelope: EnvelopeLens,
+        commands: &'a [Vec<String>],
+    ) -> Self {
         Trajectory {
             goal,
             codec,
             envelope,
+            commands,
             transcript: String::new(),
             step: 0,
             pairs: Vec::new(),
@@ -147,7 +159,13 @@ impl<'a> Trajectory<'a> {
     /// it.
     pub(crate) fn emit(&mut self, completion: String) {
         self.pairs.push(Pair {
-            prompt: render_task_prompt(self.goal, self.codec, self.envelope, &self.transcript),
+            prompt: render_task_prompt(
+                self.goal,
+                self.codec,
+                self.envelope,
+                self.commands,
+                &self.transcript,
+            ),
             completion,
         });
     }

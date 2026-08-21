@@ -15,9 +15,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// The three task-loop prompt envelopes a model can be configured for
+/// The four task-loop prompt envelopes a model can be configured for
 /// (`docs/superpowers/evidence/2026-08-15-g4-protocol.md` §10/§11,
-/// Amendments 2 and 3).
+/// Amendments 2 and 3; turn-4 spec §2 for `V4`).
 ///
 /// - `V1`: the raw completion prompt, no pre-seed, no stop sequence
 ///   (`bloomery-task-envelope-v1`).
@@ -26,15 +26,26 @@ use std::path::{Path, PathBuf};
 /// - `V3`: `V2` plus a stop sequence at the first `</action>` occurrence in
 ///   the completion (`bloomery-task-envelope-v3`, Amendment 3) — the
 ///   law-3 ruling: termination, not constraint.
+/// - `V4`: `V3` plus the grant line — one line rendered from the task's real
+///   [`bloomery_core::grant::Grant`], between the goal and the verb card
+///   (`bloomery-task-envelope-v4`, `docs/superpowers/specs/2026-08-21-flywheel4-turn4-design.md`
+///   §2). Its reason: before it, a run-granted task and a plain one were
+///   token-indistinguishable at the post-patch decision point, so training
+///   on both collapsed to the majority label (§1). `V4` inherits everything
+///   `V3` does — the pre-seed AND the stop — and adds only that line.
 ///
 /// `Default` is `V1` — an unconfigured model gets today's behavior,
-/// byte-for-byte.
+/// byte-for-byte. Every earlier lens is byte-frozen: `V1`/`V2`/`V3` render
+/// exactly what they rendered before `V4` existed (pinned by
+/// `tests/task_render_test.rs`'s goldens), because every G4/G5 verdict the
+/// ledger carries was measured against those bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EnvelopeLens {
     #[default]
     V1,
     V2,
     V3,
+    V4,
 }
 
 impl EnvelopeLens {
@@ -48,32 +59,47 @@ impl EnvelopeLens {
             EnvelopeLens::V1 => "bloomery-task-envelope-v1",
             EnvelopeLens::V2 => "bloomery-task-envelope-v2",
             EnvelopeLens::V3 => "bloomery-task-envelope-v3",
+            EnvelopeLens::V4 => "bloomery-task-envelope-v4",
         }
     }
 
     /// Whether this lens appends the `THINK_PRESEED` literal
-    /// (`task::task_loop::THINK_PRESEED`) to the rendered prompt — `V2` and
-    /// `V3` both do (`V3` = `V2` + the action stop).
+    /// (`task::task_loop::THINK_PRESEED`) to the rendered prompt — `V2`,
+    /// `V3` and `V4` all do (`V3` = `V2` + the action stop; `V4` = `V3` +
+    /// the grant line).
     pub const fn think_preseed(&self) -> bool {
-        matches!(self, EnvelopeLens::V2 | EnvelopeLens::V3)
+        matches!(self, EnvelopeLens::V2 | EnvelopeLens::V3 | EnvelopeLens::V4)
     }
 
     /// Whether this lens stops task-loop generation at the first
-    /// `</action>` occurrence (protocol §11, Amendment 3) — `V3` only.
+    /// `</action>` occurrence (protocol §11, Amendment 3) — `V3`, and `V4`
+    /// which is defined as `V3` plus the grant line (turn-4 spec §2: v4's
+    /// only delta is the rendered line, so dropping the stop here would be
+    /// a silent regression against the lens turn 4 succeeds).
     pub const fn action_stop(&self) -> bool {
-        matches!(self, EnvelopeLens::V3)
+        matches!(self, EnvelopeLens::V3 | EnvelopeLens::V4)
     }
 
-    /// Parses the TOML `envelope = "v1" | "v2" | "v3"` string value. Any
-    /// other value is a named config error listing the valid set — never a
-    /// silent fallback to a default.
+    /// Whether this lens renders the grant line
+    /// (`task::grant_line::grant_line`) between the goal and the verb card
+    /// — `V4` only (turn-4 spec §2). The one predicate `render_prompt`
+    /// branches on, so "which lenses show the grant" is stated here rather
+    /// than spelled out at the render site.
+    pub const fn grant_line(&self) -> bool {
+        matches!(self, EnvelopeLens::V4)
+    }
+
+    /// Parses the TOML `envelope = "v1" | "v2" | "v3" | "v4"` string value.
+    /// Any other value is a named config error listing the valid set —
+    /// never a silent fallback to a default.
     fn parse(raw: &str) -> Result<EnvelopeLens, String> {
         match raw {
             "v1" => Ok(EnvelopeLens::V1),
             "v2" => Ok(EnvelopeLens::V2),
             "v3" => Ok(EnvelopeLens::V3),
+            "v4" => Ok(EnvelopeLens::V4),
             other => Err(format!(
-                "invalid envelope {other:?}: valid values are \"v1\", \"v2\", \"v3\""
+                "invalid envelope {other:?}: valid values are \"v1\", \"v2\", \"v3\", \"v4\""
             )),
         }
     }
@@ -130,7 +156,8 @@ pub enum ModelSpec {
         think_preseed: Option<bool>,
         /// Selects the task-loop prompt envelope
         /// (`docs/superpowers/evidence/2026-08-15-g4-protocol.md` §11,
-        /// Amendment 3): `"v1"`, `"v2"`, or `"v3"`. Raw and unvalidated at
+        /// Amendment 3; turn-4 spec §2 for `"v4"`): `"v1"`, `"v2"`, `"v3"`,
+        /// or `"v4"`. Raw and unvalidated at
         /// the parse step on purpose — [`ModelSpec::envelope_lens`] is the
         /// one place that validates it (against `think_preseed` too), and
         /// [`load_config`] calls that accessor for every model before
@@ -231,7 +258,7 @@ impl ModelSpec {
     ///   the pre-seed `v2` already requires), and `envelope = "v1"` with
     ///   `think_preseed` absent/`false` is fine too.
     /// - `envelope = "v1"` with `think_preseed = true`, or `envelope =
-    ///   "v2"`/`"v3"` with `think_preseed = false` -> a named config error:
+    ///   "v2"`/`"v3"`/`"v4"` with `think_preseed = false` -> a named config error:
     ///   the two keys disagree, and this is never resolved by silently
     ///   picking one.
     /// - An unrecognized `envelope` string -> a named config error listing
@@ -267,6 +294,9 @@ impl ModelSpec {
             }
             (Some(EnvelopeLens::V3), Some(false)) => {
                 Err("envelope = \"v3\" conflicts with think_preseed = false".to_string())
+            }
+            (Some(EnvelopeLens::V4), Some(false)) => {
+                Err("envelope = \"v4\" conflicts with think_preseed = false".to_string())
             }
             (Some(lens), _) => Ok(lens),
             (None, Some(true)) => Ok(EnvelopeLens::V2),

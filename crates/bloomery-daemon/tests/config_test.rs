@@ -360,14 +360,15 @@ envelope = "{envelope}"
     )
 }
 
-/// All three envelope values parse and resolve to the matching
-/// [`EnvelopeLens`] variant.
+/// All four envelope values parse and resolve to the matching
+/// [`EnvelopeLens`] variant (`"v4"` added by turn 4's spec §2).
 #[test]
 fn envelope_parses_for_all_three_values() {
     for (raw, expected) in [
         ("v1", EnvelopeLens::V1),
         ("v2", EnvelopeLens::V2),
         ("v3", EnvelopeLens::V3),
+        ("v4", EnvelopeLens::V4),
     ] {
         let path = write_temp_toml(&format!("envelope-{raw}.toml"), &envelope_toml(raw));
         let config = load_config(&path).unwrap_or_else(|e| panic!("envelope {raw:?}: {e}"));
@@ -394,6 +395,7 @@ fn unknown_envelope_value_is_a_named_error_mentioning_the_valid_set() {
     assert!(err.contains("v1"), "error should list the valid set: {err}");
     assert!(err.contains("v2"), "error should list the valid set: {err}");
     assert!(err.contains("v3"), "error should list the valid set: {err}");
+    assert!(err.contains("v4"), "error should list the valid set: {err}");
 }
 
 /// The shipped `think_preseed = true` key is accepted as an alias for
@@ -462,6 +464,7 @@ fn conflicting_envelope_and_think_preseed_combos_are_named_errors() {
         ("v1", true),  // think_preseed=true with envelope="v1"
         ("v2", false), // think_preseed=false with envelope="v2"
         ("v3", false), // think_preseed=false with envelope="v3"
+        ("v4", false), // think_preseed=false with envelope="v4" (turn 4 §2)
     ];
     for (envelope, think_preseed) in cases {
         let toml = format!(
@@ -521,12 +524,67 @@ think_preseed = true
 }
 
 /// `EnvelopeLens::lens_name` returns the exact pinned strings protocol
-/// §10/§11 name.
+/// §10/§11 (and turn 4's spec §2, for v4) name.
 #[test]
 fn envelope_lens_names_are_pinned() {
     assert_eq!(EnvelopeLens::V1.lens_name(), "bloomery-task-envelope-v1");
     assert_eq!(EnvelopeLens::V2.lens_name(), "bloomery-task-envelope-v2");
     assert_eq!(EnvelopeLens::V3.lens_name(), "bloomery-task-envelope-v3");
+    assert_eq!(EnvelopeLens::V4.lens_name(), "bloomery-task-envelope-v4");
+}
+
+/// envelope-v4 is v3 plus the grant line (turn-4 spec §2: "`think_preseed`
+/// as v3"), so it inherits both of v3's generation-side behaviors — the
+/// pre-seed and the `</action>` stop — and adds the rendered grant line
+/// that is v4's whole content.
+#[test]
+fn envelope_v4_inherits_v3s_preseed_and_action_stop_and_adds_the_grant_line() {
+    assert!(
+        EnvelopeLens::V4.think_preseed(),
+        "v4 keeps v2/v3's think pre-seed"
+    );
+    assert!(
+        EnvelopeLens::V4.action_stop(),
+        "v4 keeps v3's </action> stop sequence"
+    );
+    assert!(
+        EnvelopeLens::V4.grant_line(),
+        "v4 is the only lens that renders the grant line"
+    );
+    for earlier in [EnvelopeLens::V1, EnvelopeLens::V2, EnvelopeLens::V3] {
+        assert!(
+            !earlier.grant_line(),
+            "{earlier:?} must not render the grant line — v1/v2/v3 are byte-frozen"
+        );
+    }
+}
+
+/// `envelope = "v4"` with `think_preseed = true` is consistent (v4 implies
+/// the pre-seed), exactly as `"v3"` with `true` already was.
+#[test]
+fn envelope_v4_with_think_preseed_true_parses() {
+    let toml = r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = { name = "enthusiast-16gb", emulated = false }
+assay = { enabled = false, python = "python3" }
+
+[models."qwen3.8:27b"]
+path = "/mnt/extra/models/qwen3.8-27b.gguf"
+envelope = "v4"
+think_preseed = true
+"#;
+    let path = write_temp_toml("envelope-consistent-v4-true.toml", toml);
+    let config = load_config(&path).unwrap();
+    assert_eq!(
+        config
+            .models
+            .get("qwen3.8:27b")
+            .unwrap()
+            .envelope_lens()
+            .unwrap(),
+        EnvelopeLens::V4
+    );
 }
 
 /// `kv_per_token_bytes` parses when present, and is `None` when absent
