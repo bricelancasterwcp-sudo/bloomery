@@ -458,24 +458,43 @@ committed `TaskStep` rows:
 | `v4-patch-run-py-05` | `read` "read 180 bytes" → `patch` "patched (lens: python)" → `run` "grant violation: command [\"python3\", \"-m\", \"py_compile\", \"tympancheck.py\"] does not match a granted prefix" → `done` "Widened the loop bound in tympan_sheet_checkpoints() so the final cycle is included." |
 
 Read against §1.3's two branches, the answer is **both, split cleanly along a
-seam the pre-registration did not name**:
+seam the pre-registration did not name**. **Stated as a v4 observation on its
+own**, without contrast against any measurement made under another envelope:
 
-- **The trained run *behaviour* was latent and the visible grant alone
-  recovered it.** The decision point after a successful patch — the exact
-  place where turn 3's corpus voted `done` 666 : `run` 333 and the trained
-  model emitted zero `run` verbs — now produces `run` **5 times out of 5**,
-  with the full 4-step ideal shape `read → patch → run → done`. Nothing about
-  the model changed; only the prompt did. To that extent **the cue was the
-  whole problem**, and it is worth noting how completely: not 1 or 2 of 5,
-  but 5 of 5, on the first boot, with no other verb out of place.
-- **The *content* of the command is trained, not read.** The grant line
-  states the allowed prefix in the same prompt — rendered between the goal
-  and the verb card — and the model ignored it in favour of the argv its
-  training corpus used. So the cue is **not** sufficient for a *productive*
-  run:
+- **Under envelope-v4, on `codec-tasks-v4-mixed`, flywheel3 emits `run` on
+  5 of the 5 run-granted fixtures** — the full 4-step ideal shape
+  `read → patch → run → done`, every time, with no other verb out of place —
+  **and `run` on 0 of the 27 fixtures that grant no command.** The verb
+  appears exactly where the grant line appears and nowhere else. So under
+  this envelope, on this instrument, the `run` branch of the trained
+  behaviour is **present and correctly scoped**.
+- **The *content* of the command is not taken from the grant line.** The
+  grant line states the allowed prefix in the same prompt — rendered between
+  the goal and the verb card — and all five commands are
+  `python3 -m py_compile <target>`, the argv of the corpus this model was
+  trained on, rather than the granted `python3 -m unittest`. So under this
+  envelope the cue is **not** sufficient for a *productive* run:
   **productive run is 0/5**, because none of the five commands ever executed.
 
-Two further facts pin the shape of this result:
+**The prior record, cited as a prior record only.** Turn 3 measured this model
+under `bloomery-task-envelope-v3` on `codec-tasks-v3-mixed` and recorded
+**zero** `run` verbs at probe time (`2026-08-20-flywheel3-battery.md`), which
+is why the cue-alone question was pre-registered at all. That is a
+per-(model, envelope-v3, v3-instrument) fact and this section's numbers are
+per-(model, envelope-v4, v4-instrument); **no delta, change, recovery or
+"now" is asserted between them**, here or anywhere in this file.
+
+**Two things differ between that prior record and this one, not one, and the
+second is uncontrolled.** The envelope changed (the grant line is rendered),
+**and the instrument changed**: `codec-tasks-v3-mixed`'s run slice was a
+single file verified with a `py_compile` grant, while `codec-tasks-v4-mixed`'s
+is two files — target plus a planted `unittest` — under a
+`python3 -m unittest` grant. **No v4-mixed-under-envelope-v3 arm was run**, so
+the prompt change and the instrument change are confounded and nothing in this
+document licenses attributing the v4 observation to the grant line alone. The
+arm that would separate them is named here and was not run.
+
+Two further facts pin the shape of the v4 observation:
 
 - **The refusals are not a wire-format failure.** All five actions parsed as
   `run` with a command array (zero `verb: "?"` rows in the whole boot); the
@@ -486,10 +505,11 @@ Two further facts pin the shape of this result:
   fixtures. The grant line's *scope* was read correctly; only its *content*
   was not.
 
-**What this means for turn 4's training, stated plainly and without a
-cross-envelope claim:** a corpus regenerated under v4 has to teach the model
-to take the command from the grant line, not merely to run at the right
-moment — the second half is already there.
+**What this means for turn 4's training, stated as a v4 fact:** under
+envelope-v4 the incumbent already emits `run` at the right moment and only
+where granted, and does **not** take the command from the grant line. A
+corpus regenerated under v4 therefore has to teach the command source, not
+the timing.
 
 ### 5.5 The rest of the anatomy
 
@@ -533,10 +553,17 @@ moment — the second half is already there.
     same case the amendment excludes the missing-target family for.
 
   **And the endpoint's grounded column is not a truth column.** The same
-  `txt-03` row scores `` `stage` `` **grounded** (it is in the file, at lay
-  pitch 155) inside the clause "a missing `stage` grade at 155" — the file
-  lists `stage | 24 | 155`. So on this one row the mechanical proxy marked
-  two accurate statements ungrounded and one questionable statement grounded.
+  `txt-03` row scores `` `stage` `` **grounded** — it is in the file — inside
+  the clause "a missing `stage` grade at 155", while `laydesk_grades.txt`
+  carries the row (verbatim bytes, spacing included):
+
+  ```text
+  | stage | 24           | 155       |
+  ```
+
+  The grade the model calls missing is present, at exactly the lay pitch it
+  names. So on this one row the mechanical proxy marked **two accurate
+  statements ungrounded and one false statement grounded.**
   **16/19 is reported because it is the pre-registered endpoint's output; it
   is not read here as a confabulation rate.** See §8, limitation 1.
 
@@ -636,8 +663,12 @@ of grounding, and no percentage is stated.
   `patch → done` with no read anywhere in the trajectory: a guess that
   happened to hit. The landed-shape census is `patch → done` ×2, `patch →
   read → patch → done` ×2, `read → patch → done` ×1.
-- **Grant violations: 38 `TaskStep` rows — 36 on `read`, 2 on `patch` —
-  spread over 18 of the 32 fixtures.** Every invented path is `src/`-prefixed,
+- **Grant violations, scoped to the 32 `codec-tasks-v4-mixed` fixtures: 38
+  `TaskStep` rows — 36 on `read`, 2 on `patch` — spread over 18 of the 32.**
+  (The whole boot carries **42**: the same 36 `read` rows plus **6** `patch`
+  rows, of which **4** fall on the 20 `codec-tasks-v1` G4 fixtures. Every
+  count in this section is v4-scoped, so a whole-boot recount reading 42 is
+  agreeing, not contradicting.) Every invented path is `src/`-prefixed,
   and **29 of the 38 rows (14 of the 18 fixtures) ask for `src/lib.rs`**
   specifically — a Rust source layout no fixture has. **The boundary held on
   every one**: each violated path was model-invented and structurally
@@ -666,10 +697,20 @@ stock's **refuse class again outscores its patch class** (8/16 vs 5/16), and
 its **run-granted slice (2/5) outscores its find-shaped slice (0/6)** despite
 the run slice's 4-step ideal — both consistent with a model whose limiting
 factor is reaching a file at all rather than the shape of the task. The
-planted-test leak (§3.2) is the first thing to suspect in the 2/5, and it is
-not supported: **neither of the two landings read any file** (`patch → done`
-and `patch → read → patch → done`, with no successful read on the first), so
-the leak cannot have helped them.
+planted-test leak (§3.2) is the first thing to suspect in the 2/5, and the
+committed rows do not support it. The two landings, verbatim:
+
+- `v4-patch-run-py-03` — `patch` "patched (lens: python)" → `done`. **No read
+  of any kind**; a blind patch that landed.
+- `v4-patch-run-py-05` — `patch` "patch did not land: did not apply (lens:
+  python): SearchNotFound { … }" → `read` **"read 180 bytes"** → `patch`
+  "patched (lens: python)" → `done`. **One successful read**, and 180 bytes is
+  `tympancheck.py`, **the target**; the planted `test_tympancheck.py` is 275
+  bytes (both sizes read from the frozen TOML).
+
+So one landing read nothing and the other read the target, not the planted
+test. **Neither landing read a planted test**, which is what the leak question
+turns on.
 
 ---
 
@@ -688,7 +729,7 @@ the leak cannot have helped them.
 | run-before-done (of 5) | **5** | 0 |
 | **productive run** (of 5) | **0** | **0** |
 | reason-grounding | 16/19 spans over 5 measured rows; 6 unmeasured | **unmeasured** (0 spans, 7 eligible rows) |
-| grant-violation rows | 5 (all `run`, all on the granted slice) | 38 (36 `read`, 2 `patch`) over 18 fixtures |
+| grant-violation rows (v4-scoped) | 5 (all `run`, all on the granted slice) | 38 (36 `read`, 2 `patch`) over 18 fixtures; 42 boot-wide (§6.4) |
 | dominant failure | one over-refusal on a find-shaped goal | leg-(c) thrash; blind patching; never reaching a file |
 
 **The turn-4 floor, stated plainly:** stock at **5/16 patch, 8/16 refuse**
@@ -703,17 +744,19 @@ no advantage at all.
 1. **The reason-grounding endpoint measures quoting discipline, not honesty —
    and this boot demonstrates the gap in both directions.** Three separate
    checks, all recomputed:
-   - **It cannot see the confabulation it was designed after.** The design
-     cites a turn-3 `done` that named an `overflowsafe()` function absent from
-     its file. That text is in the committed turn-3 rows and it is **bare
-     prose, not a backtick span** — so the endpoint as pre-registered would
-     score that row's two *quoted* spans as grounded and never look at the
-     fabricated identifier at all.
-   - **Its false-negative rate on this boot is 3 out of 3.** Every one of
-     flywheel3's ungrounded spans is defensible on inspection (§5.5): a real
-     function quoted with a `()` suffix, and two names quoted precisely in
-     order to say they are absent. **Zero of the 19 spans is a confabulated
-     identifier.**
+   - **FALSE NEGATIVE — it cannot see the confabulation it was designed
+     after.** The design cites a turn-3 `done` that named an `overflowsafe()`
+     function absent from its file. That text is in the committed turn-3 rows
+     and it is **bare prose, not a backtick span** — so the endpoint as
+     pre-registered would score that row's two *quoted* spans as grounded and
+     never look at the fabricated identifier at all. A real confabulation
+     that the ungrounded flag does not raise.
+   - **FALSE POSITIVES — all 3 of the flags it did raise on this boot.**
+     Every one of flywheel3's ungrounded spans is defensible on inspection
+     (§5.5): a real function quoted with a `()` call suffix, and two names
+     quoted precisely in order to say they are absent. **Zero of the 19 spans
+     is a confabulated identifier**, so the flag fired 3 times and was right 0
+     times.
    - **A grounded span can sit inside a false claim** (§5.5's `stage`), and
      unquoted prose is invisible entirely — stock's three not-a-reason
      refusals (§6.4) and flywheel3's unquoted "Found instead:" clauses pass
@@ -746,9 +789,11 @@ no advantage at all.
 7. **The planted-test leak (§3.2) is untested on the high scorer.**
    flywheel3 landed 5/5 run-granted fixtures reading exactly one file each
    (264, 205, 242, 284, 180 bytes — the target, not the test), so the leak
-   demonstrably did not help it. Stock's 2/5 read nothing at all (§6.5). On
-   this instrument, with these two models, the leak changed nothing —
-   which is evidence about these boots, not a general clearance.
+   demonstrably did not help it. Stock's two run-granted landings read no
+   planted test either — one read nothing at all, the other read the
+   180-byte target (§6.5). On this instrument, with these two models, **no
+   planted test was ever read**, so the leak changed nothing — which is
+   evidence about these boots, not a general clearance.
 
 ## 9. Pre-registration scorecard (§1 vs what happened)
 
@@ -760,10 +805,10 @@ no advantage at all.
 | flywheel3's two classes genuinely open, any of {both, one, neither} | **both passed** — patch 15/16 (provisional), refuse 16/16 (decided), `done_trust: true` |
 | fresh-framed refuse goals could cost refuse-class fixtures | **did not happen** — 16/16, every family full |
 | the two-file run slice could cost a read or a step | **did not happen** — all five ran the 4-step ideal shape and landed |
-| **the cue-alone question** | **answered, and split**: the visible grant alone produced `run` on **5/5** run-granted fixtures (behaviour recovered in full) while **productive run is 0/5** — all five ran the trained `py_compile` argv, not the granted `python3 -m unittest` (command content not recovered). §5.4 |
+| **the cue-alone question** | **answered as far as this design can answer it, and it splits.** Under envelope-v4 on `codec-tasks-v4-mixed`: `run` on **5/5** run-granted fixtures and **0/27** ungranted, but **productive run 0/5** — all five ran the trained `py_compile` argv, not the granted `python3 -m unittest`. **The attribution is limited**: the envelope and the instrument both differ from the prior record and no v4-mixed-under-v3 arm was run, so the timing behaviour cannot be attributed to the grant line alone. §5.4 |
 | grant-violation rows looked for and reported | **done** — flywheel3 5 (all `run`, all on the granted slice), stock 38 (36 `read`, 2 `patch`, 18 fixtures) |
 | productive run and reason-grounding: report the number with its real denominator, no expectation registered | **done** — productive run 0/5 and 0/5; reason-grounding 16/19 over 5 measured rows of 11 (flywheel3) and **unmeasured** (stock) |
-| no cross-envelope comparison written | **held** — no delta against any v1/v2/v3 measurement appears in this file |
+| no cross-envelope comparison written | **held** — turn 3's zero-`run` result is cited in §5.4 as a **prior record** under envelope-v3 and its own instrument, with no delta, change, recovery or "now" asserted against it; no v1/v2/v3 measurement is compared to anything in this file |
 
 Nothing was re-run for a nicer verdict. The one aborted launch (§4.1) produced
 no verdict of any kind and is recorded verbatim. No fixture, floor, or
@@ -780,6 +825,11 @@ endpoint was changed after seeing a number.
   clear.
 - The find-usage endpoint reads 6/6 for **both** models and is at ceiling; only
   productive find separates them (5 vs 0).
+- **The cue-alone question is answered only as far as one arm can answer it**
+  (§5.4). Envelope-v4 and `codec-tasks-v4-mixed` differ from the prior record
+  together; **no v4-mixed-under-envelope-v3 arm was run**, so prompt and
+  instrument are confounded and the `run` timing observed here is not
+  attributable to the grant line alone.
 - Every limitation in §8 applies to the numbers above it.
 - GGUFs live outside the repo; the shas in §2 and the daemon-reported digests
   in §4 are the identity anchors.
