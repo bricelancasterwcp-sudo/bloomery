@@ -101,6 +101,7 @@ fn envelope_tag(envelope: EnvelopeLens) -> &'static str {
         EnvelopeLens::V1 => "v1",
         EnvelopeLens::V2 => "v2",
         EnvelopeLens::V3 => "v3",
+        EnvelopeLens::V4 => "v4",
     }
 }
 
@@ -192,7 +193,13 @@ fn assert_missing_target_second_prompt_matches_tool_path(envelope: EnvelopeLens)
         .ctx_history(1)
         .expect("context 1 is resident after a 2-step task");
 
-    let prompt1 = render_task_prompt(MISSING_TARGET_GOAL, PatchCodec::SearchReplace, envelope, "");
+    let prompt1 = render_task_prompt(
+        MISSING_TARGET_GOAL,
+        PatchCodec::SearchReplace,
+        envelope,
+        &[],
+        "",
+    );
     assert!(
         history.starts_with(&prompt1),
         "prompt 1 landmark not found at the start of ctx_history — history: {history:?}"
@@ -231,6 +238,7 @@ fn assert_missing_target_second_prompt_matches_tool_path(envelope: EnvelopeLens)
         MISSING_TARGET_GOAL,
         PatchCodec::SearchReplace,
         envelope,
+        &[],
         &transcript,
     );
 
@@ -238,6 +246,20 @@ fn assert_missing_target_second_prompt_matches_tool_path(envelope: EnvelopeLens)
         actual_second_prompt, computed_second_prompt,
         "flywheel-tool's missing-target tool-path prompt has drifted from the real run_task prompt"
     );
+
+    // A refusal task grants no command, so envelope-v4 renders the `none`
+    // line — pinned against the literal, since the equality above shares one
+    // renderer on both sides and would survive deleting the render branch.
+    if envelope == EnvelopeLens::V4 {
+        assert!(
+            actual_second_prompt.starts_with(&format!(
+                "{MISSING_TARGET_GOAL}\n\nGranted commands: none — run is not available in this \
+                 task\n\n"
+            )),
+            "the real run_task v4 refusal prompt must open with the goal then the none line — \
+             got: {actual_second_prompt:?}"
+        );
+    }
 }
 
 #[test]
@@ -253,6 +275,11 @@ fn missing_target_anti_drift_pin_matches_real_second_prompt_under_v2() {
 #[test]
 fn missing_target_anti_drift_pin_matches_real_second_prompt_under_v3() {
     assert_missing_target_second_prompt_matches_tool_path(EnvelopeLens::V3);
+}
+
+#[test]
+fn missing_target_anti_drift_pin_matches_real_second_prompt_under_v4() {
+    assert_missing_target_second_prompt_matches_tool_path(EnvelopeLens::V4);
 }
 // ---------------------------------------------------------------------------
 // Bin-level: spawn the actual built `flywheel-tool` binary.
@@ -439,6 +466,7 @@ fn bin_refuse_missing_target_request_uses_the_real_failed_read_observation() {
         MISSING_TARGET_REFUSE_GOAL,
         PatchCodec::SearchReplace,
         EnvelopeLens::V3,
+        &[],
         &transcript,
     );
 
@@ -446,6 +474,35 @@ fn bin_refuse_missing_target_request_uses_the_real_failed_read_observation() {
     assert_eq!(
         actual_prompt2, expected_prompt2,
         "the bin's missing-target pair 2 prompt drifted from a direct real exec_read call"
+    );
+}
+
+/// The bin's refusal-family v4 prompts carry the `none` grant line: a
+/// refusal task grants no command, and under envelope-v4 that is stated in
+/// the prompt rather than left for the model to infer (spec §2).
+#[test]
+fn bin_refuse_v4_prompts_carry_the_none_grant_line() {
+    let response = run_flywheel_tool(&refuse_defect_absent_request("v4"));
+    let prompt0 = response["pairs"][0]["prompt"]
+        .as_str()
+        .unwrap_or_else(|| panic!("missing pairs[0].prompt in {response}"));
+    assert!(
+        prompt0.starts_with(&format!(
+            "{REFUSE_GOAL_DEFECT_ABSENT}\n\nGranted commands: none — run is not available in \
+             this task\n\n"
+        )),
+        "a refusal request grants no command: {prompt0:?}"
+    );
+    assert_eq!(
+        prompt0,
+        render_task_prompt(
+            REFUSE_GOAL_DEFECT_ABSENT,
+            PatchCodec::SearchReplace,
+            EnvelopeLens::V4,
+            &[],
+            ""
+        ),
+        "the bin's v4 refusal prompt drifted from the loop's renderer"
     );
 }
 

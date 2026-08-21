@@ -29,6 +29,7 @@ use bloomery_substrate::Substrate;
 use crate::config::EnvelopeLens;
 use crate::pager::{Pager, PagerError};
 use crate::task::exec::absolutize;
+use crate::task::grant_line::grant_line;
 use crate::task::{exec_find, exec_patch, exec_read, exec_run, ExecBounds, Observation};
 
 /// Everything `run_task` needs to run one task to completion: what the
@@ -71,10 +72,12 @@ pub struct TaskSpec {
     pub mutating_verbs: bool,
     /// The task-loop prompt envelope
     /// (`docs/superpowers/evidence/2026-08-15-g4-protocol.md` §10/§11,
-    /// Amendments 2 and 3): [`render_prompt`] appends the literal
-    /// [`THINK_PRESEED`] pre-seed at the very end of the rendered prompt for
-    /// `V2` and `V3`; [`propose_action`] passes [`ACTION_STOP`] as the
-    /// substrate's stop sequence for `V3` only. `V1` renders exactly
+    /// Amendments 2 and 3; turn-4 spec §2 for `V4`): [`render_prompt`]
+    /// appends the literal [`THINK_PRESEED`] pre-seed at the very end of the
+    /// rendered prompt for `V2` and up; [`propose_action`] passes
+    /// [`ACTION_STOP`] as the substrate's stop sequence for `V3` and up; and
+    /// `V4` alone renders [`grant_line`] from this spec's own [`Grant`],
+    /// between the goal and the verb card. `V1` renders exactly
     /// envelope-v1's prompt, byte-for-byte, with no stop sequence.
     pub envelope: EnvelopeLens,
 }
@@ -235,7 +238,8 @@ const THINK_PRESEED: &str = "<think>\n\n</think>\n\n";
 /// `docs/superpowers/evidence/2026-08-15-g4-protocol.md` §11, Amendment 3):
 /// generation of a task turn terminates at the first occurrence of this
 /// literal in the completion, tag INCLUDED. Passed to [`Pager::infer`]'s
-/// `stop` parameter for `EnvelopeLens::V3` turns only — never for `/v1` or
+/// `stop` parameter for the lenses whose `action_stop()` is set — `V3` and
+/// `V4`, which is defined as `V3` plus the grant line — never for `/v1` or
 /// native HTTP inference (§11: "the `/v1` chat surface is untouched"). The
 /// law-3 ruling (§11): a stop string is *termination, not constraint* — the
 /// model's distribution is untouched up to the tag, the same class as
@@ -246,8 +250,18 @@ const ACTION_STOP: &str = "</action>";
 /// Builds the prompt for one model turn: the task's goal, the verb card for
 /// `spec.patch_codec`, and everything accumulated in `transcript` so far —
 /// then, when `spec.envelope.think_preseed()` is set (protocol §10, `V2`
-/// and `V3`), the literal [`THINK_PRESEED`] appended at the very end, after
+/// and up), the literal [`THINK_PRESEED`] appended at the very end, after
 /// the transcript, with nothing after it.
+///
+/// Under `spec.envelope.grant_line()` (envelope-v4 only, turn-4 spec §2) one
+/// more thing goes in: [`grant_line`] rendered from **`spec.grant`, the very
+/// grant `run_task` enforces**, placed between the goal and the verb card
+/// with the same blank-line separation the card already uses. Same source of
+/// truth as enforcement, so the model can never be told something the loop
+/// refuses. Every earlier lens renders an empty section here and is
+/// therefore byte-identical to what it rendered before v4 existed — a law,
+/// not an accident: `tests/task_render_test.rs`'s goldens pin the exact
+/// v1/v2/v3 bytes every G4/G5 verdict in the ledger was measured against.
 ///
 /// Deliberately does no windowing or truncation of its own. The pager's own
 /// `infer` is what refuses — with arithmetic — a prompt too large for the
@@ -257,12 +271,46 @@ const ACTION_STOP: &str = "</action>";
 /// (see `pager.rs`'s module docs) forbids applying to this loop's own
 /// prompt.
 fn render_prompt(spec: &TaskSpec, transcript: &str) -> String {
+    render_prompt_from(
+        &spec.goal,
+        RenderInputs {
+            patch_codec: spec.patch_codec,
+            mutating_verbs: spec.mutating_verbs,
+            envelope: spec.envelope,
+            commands: spec.grant.commands(),
+        },
+        transcript,
+    )
+}
+
+/// Every input a rendered prompt depends on apart from the goal and the
+/// transcript, bundled so [`render_prompt_from`] stays well inside clippy's
+/// argument budget and so "what can change a prompt" is a list one can read
+/// in one place.
+struct RenderInputs<'a> {
+    patch_codec: PatchCodec,
+    mutating_verbs: bool,
+    envelope: EnvelopeLens,
+    /// The granted argv prefixes — `spec.grant.commands()` for the loop.
+    commands: &'a [Vec<String>],
+}
+
+/// **The one and only prompt renderer.** Both the loop's [`render_prompt`]
+/// and the flywheel factory's [`render_task_prompt`] are thin adapters over
+/// this body; there is no second implementation of prompt assembly anywhere
+/// in the daemon or the factory, which is the property the four anti-drift
+/// tests pin against real `run_task` runs.
+fn render_prompt_from(goal: &str, inputs: RenderInputs<'_>, transcript: &str) -> String {
+    let grant_section = if inputs.envelope.grant_line() {
+        format!("{}\n\n", grant_line(inputs.commands))
+    } else {
+        String::new()
+    };
     let prompt = format!(
-        "{}\n\n{}\n\n{transcript}",
-        spec.goal,
-        verb_card_for(spec.patch_codec, spec.mutating_verbs)
+        "{goal}\n\n{grant_section}{}\n\n{transcript}",
+        verb_card_for(inputs.patch_codec, inputs.mutating_verbs)
     );
-    if spec.envelope.think_preseed() {
+    if inputs.envelope.think_preseed() {
         format!("{prompt}{THINK_PRESEED}")
     } else {
         prompt
@@ -276,14 +324,25 @@ fn render_prompt(spec: &TaskSpec, transcript: &str) -> String {
 /// constructs a minimal [`TaskSpec`] and calls the real function. No
 /// second implementation of rendering, anywhere in the flywheel factory.
 ///
-/// Only `goal`, `patch_codec`, `envelope`, and `transcript` affect the
-/// rendered text (see [`render_prompt`]'s body: it reads exactly
-/// `spec.goal`, `spec.patch_codec`, `spec.mutating_verbs`, and
-/// `spec.envelope`, plus the `transcript` argument). Every other
-/// `TaskSpec` field — `grant`, `budget_tokens`, `max_steps`, `cwd`,
-/// `bounds` — is irrelevant to rendering, so this wrapper fills them with
-/// cheap, empty/default values: an empty [`Grant`] (no roots, no
-/// commands — never dereferenced by rendering) and `ExecBounds::default()`.
+/// Only `goal`, `patch_codec`, `envelope`, the grant's `commands`, and
+/// `transcript` affect the rendered text — that is exactly
+/// [`RenderInputs`] plus the goal and the transcript, and this wrapper
+/// hands them straight to [`render_prompt_from`], the same body
+/// [`render_prompt`] runs. Every other `TaskSpec` field (`budget_tokens`,
+/// `max_steps`, `cwd`, `bounds`, and the grant's *roots*) is irrelevant to
+/// rendering and is not asked for.
+///
+/// `commands` became an argument with envelope-v4 (turn-4 spec §2): the
+/// grant line is rendered from the real grant, so a caller that could not
+/// say which commands its task grants could not render a v4 prompt at all —
+/// and the factory's own trajectory requests already carry exactly this
+/// field. It is passed as the raw prefixes rather than a [`Grant`] on
+/// purpose: a `Grant` built here from wire input could be *invalid* (an
+/// empty prefix is a `GrantError`), and a rendering function is the wrong
+/// place to discover that — the tool's `Scratch::grant` is where a request's
+/// commands become an enforced capability, and where a bad one becomes a
+/// named error.
+///
 /// `mutating_verbs` is hardcoded `true`: the flywheel corpus trains the
 /// read-then-patch habit, so every rendered prompt must show the model the
 /// `patch` verb card, exactly like a real mutating-verbs task.
@@ -291,21 +350,19 @@ pub fn render_task_prompt(
     goal: &str,
     patch_codec: PatchCodec,
     envelope: EnvelopeLens,
+    commands: &[Vec<String>],
     transcript: &str,
 ) -> String {
-    let spec = TaskSpec {
-        goal: goal.to_string(),
-        grant: Grant::from_json(r#"{"read_roots":[],"write_roots":[],"commands":[]}"#)
-            .expect("an empty grant (no roots, no commands) is always valid"),
-        budget_tokens: 0,
-        max_steps: 0,
-        cwd: std::path::PathBuf::from("/"),
-        patch_codec,
-        bounds: ExecBounds::default(),
-        mutating_verbs: true,
-        envelope,
-    };
-    render_prompt(&spec, transcript)
+    render_prompt_from(
+        goal,
+        RenderInputs {
+            patch_codec,
+            mutating_verbs: true,
+            envelope,
+            commands,
+        },
+        transcript,
+    )
 }
 
 /// What one call to [`propose_action`] produced.

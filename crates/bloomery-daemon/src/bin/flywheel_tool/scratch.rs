@@ -148,11 +148,14 @@ impl ScratchId<'_> {
 /// (including on every early-return error path below, which is why this is a
 /// `Drop` type rather than a pair of function calls).
 ///
-/// `_lock` is an exclusive `flock` held for the directory's whole lifetime —
-/// see [`lock_for`] for why a content-derived name needs one.
+/// `lock` is an exclusive `flock` held for the directory's whole lifetime —
+/// see [`lock_for`] for why a content-derived name needs one. It is an
+/// `Option` only so [`Scratch::drop`] can *release* it (by dropping the
+/// `File`) before [`sweep_lock`] runs; it is `Some` for the whole life of a
+/// live `Scratch`.
 pub(crate) struct Scratch {
     dir: PathBuf,
-    _lock: File,
+    lock: Option<File>,
 }
 
 /// Takes an exclusive advisory lock covering the scratch directory at `dir`,
@@ -174,28 +177,105 @@ pub(crate) struct Scratch {
 /// `flock` and not a lock*file*-as-mutex on purpose: the kernel releases a
 /// `flock` when the holding process dies, so a crashed run cannot wedge
 /// every later run at the same request. The lock file itself is a 0-byte
-/// sibling of the directory and is deliberately never unlinked — unlinking
-/// it while another process is blocked on it would hand that process a lock
-/// on a detached inode, which is exactly the race this is here to remove.
+/// sibling of the directory.
+///
+/// **The lock file is now swept at teardown** (turn-4 ride-along, spec §3):
+/// turn 3 left one 0-byte `.lock` per distinct request — ~999 files per
+/// corpus run — in the system temp dir forever. Unlinking it is only safe
+/// under a protocol, because the naive version reintroduces the very race
+/// the lock removes: process B, blocked on the lock file's inode, would
+/// acquire it *after* A unlinked the name, while process C creates a fresh
+/// file at the same name and acquires that — two holders, one directory.
+///
+/// The protocol is the standard verify-after-acquire pair:
+///
+/// 1. **Acquire** (here): open the name, block on `flock`, then check that
+///    the name still resolves to the inode we locked. If it does not, the
+///    file we hold was unlinked by a departing holder — drop it and retry
+///    against whatever now lives at the name.
+/// 2. **Release** ([`sweep_lock`]): unlink only while holding the lock, and
+///    only after confirming the name still resolves to our own inode, so
+///    any process that acquires the detached inode afterwards is by
+///    construction a waiter that will fail step 1's check and retry.
 fn lock_for(dir: &Path) -> Result<File, String> {
     let path = dir.with_extension("lock");
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&path)
-        .map_err(|e| format!("failed to open the scratch lock {path:?}: {e}"))?;
-    // SAFETY: `fd` is a valid, open descriptor owned by `file` for the whole
-    // call, and `flock` neither takes ownership of it nor retains it past
-    // return. `LOCK_EX` blocks rather than failing, which is the intent.
-    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
-    if rc != 0 {
-        return Err(format!(
-            "failed to lock the scratch dir {dir:?}: {}",
-            std::io::Error::last_os_error()
-        ));
+    for _ in 0..LOCK_ACQUIRE_ATTEMPTS {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .map_err(|e| format!("failed to open the scratch lock {path:?}: {e}"))?;
+        // SAFETY: `fd` is a valid, open descriptor owned by `file` for the
+        // whole call, and `flock` neither takes ownership of it nor retains
+        // it past return. `LOCK_EX` blocks rather than failing, which is the
+        // intent.
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        if rc != 0 {
+            return Err(format!(
+                "failed to lock the scratch dir {dir:?}: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        if names_the_same_inode(&path, &file) {
+            return Ok(file);
+        }
+        // The holder we waited behind unlinked this inode on its way out
+        // (step 2). Our lock is real but guards a name nobody else will
+        // open, so it guarantees nothing — drop it and lock the live file.
     }
-    Ok(file)
+    Err(format!(
+        "failed to lock the scratch dir {dir:?}: the lock file was replaced \
+         {LOCK_ACQUIRE_ATTEMPTS} times in a row"
+    ))
+}
+
+/// How many times [`lock_for`] re-locks after finding the file it locked had
+/// been unlinked. Each attempt only happens when another process actually
+/// swept a lock, so exceeding this is a pathology (a livelock, or a
+/// third party churning the file), not contention — and a named error beats
+/// spinning forever.
+const LOCK_ACQUIRE_ATTEMPTS: u32 = 64;
+
+/// Whether `path` currently resolves to the same inode as the already-open
+/// `file`. A missing (or unreadable) `path` answers `false`: it certainly is
+/// not the same file.
+fn names_the_same_inode(path: &Path, file: &File) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    match (std::fs::metadata(path), file.metadata()) {
+        (Ok(on_disk), Ok(held)) => on_disk.dev() == held.dev() && on_disk.ino() == held.ino(),
+        _ => false,
+    }
+}
+
+/// Removes the scratch lock file — step 2 of [`lock_for`]'s protocol, run
+/// once the directory is gone and the lock has been RELEASED.
+///
+/// Re-acquires non-blocking: if anyone else holds the lock (or takes it
+/// between our release and this call), `LOCK_NB` fails and the file is left
+/// exactly where it is — the next holder to depart sweeps it instead. The
+/// inode check before `remove_file` makes sure a lock file some other
+/// process created after unlinking ours is never the one we delete.
+///
+/// Every failure here is deliberately silent: a leftover 0-byte file is
+/// hygiene, and this runs inside `Drop`, where there is nobody to report to.
+fn sweep_lock(dir: &Path) {
+    let path = dir.with_extension("lock");
+    // No `create`: a lock file that is already gone needs no sweeping, and
+    // recreating one just to delete it would be its own small race.
+    let Ok(file) = std::fs::OpenOptions::new().write(true).open(&path) else {
+        return;
+    };
+    // SAFETY: same contract as `lock_for`'s call — a valid open descriptor
+    // owned by `file` for the duration. `LOCK_NB` returns rather than
+    // blocking, which is what makes a concurrent holder a no-op here.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return;
+    }
+    if names_the_same_inode(&path, &file) {
+        let _ = std::fs::remove_file(&path);
+    }
+    // `file` drops here, releasing the lock we just took.
 }
 
 impl Scratch {
@@ -231,7 +311,10 @@ impl Scratch {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir)
             .map_err(|e| format!("failed to create the scratch dir {dir:?}: {e}"))?;
-        let scratch = Scratch { dir, _lock: lock };
+        let scratch = Scratch {
+            dir,
+            lock: Some(lock),
+        };
         for (file, relative) in id.files.iter().zip(targets) {
             let path = scratch.dir.join(relative);
             if let Some(parent) = path.parent() {
@@ -268,6 +351,14 @@ impl Scratch {
 impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
+        // Order is the whole safety argument (see [`lock_for`]): the
+        // directory is gone first, then the lock is RELEASED (dropping the
+        // `File` closes the descriptor, which is what releases an `flock`),
+        // and only then does the sweep try to take it again — so a waiter
+        // that was blocked on this lock gets the directory it was waiting
+        // for, and the sweep simply declines if it did.
+        drop(self.lock.take());
+        sweep_lock(&self.dir);
     }
 }
 
@@ -447,6 +538,59 @@ mod tests {
     #[test]
     fn fields_are_length_prefixed_so_a_shifted_split_does_not_collide() {
         assert_ne!(id("ab", "c", &[]).digest(), id("a", "bc", &[]).digest());
+    }
+
+    // -----------------------------------------------------------------
+    // The lock file's lifecycle (turn-4 ride-along): swept at teardown, but
+    // never out from under a concurrent holder.
+    // -----------------------------------------------------------------
+
+    /// Turn 3 left one 0-byte `.lock` per distinct request behind forever
+    /// (~999 per corpus run). Dropping a `Scratch` now removes the directory
+    /// AND its lock file.
+    #[test]
+    fn dropping_a_scratch_removes_the_directory_and_sweeps_its_lock_file() {
+        let files = [file("a.py", "x = 1\n")];
+        let scratch = Scratch::materialize(&id("a.py", "x = 1\n", &files))
+            .expect("a one-file scratch materializes");
+        let dir = scratch.path().to_path_buf();
+        let lock = dir.with_extension("lock");
+        assert!(dir.is_dir(), "the scratch dir exists while held");
+        assert!(lock.is_file(), "the lock file exists while held");
+
+        drop(scratch);
+
+        assert!(!dir.exists(), "the scratch dir is removed on drop");
+        assert!(!lock.exists(), "the lock file is swept on drop: {lock:?}");
+    }
+
+    /// The sweep declines when someone else holds the lock — the property
+    /// that keeps the ride-along from reintroducing the collision the lock
+    /// exists to prevent. (A second `flock` on a second open file
+    /// description conflicts even within one process, so this test is a
+    /// faithful stand-in for a second `flywheel-tool`.)
+    #[test]
+    fn the_sweep_leaves_a_lock_file_a_concurrent_holder_still_owns() {
+        let dir = std::env::temp_dir().join(format!(
+            "flywheel-tool-scratch-sweeptest-{}",
+            std::process::id()
+        ));
+        let lock = dir.with_extension("lock");
+        let _ = std::fs::remove_file(&lock);
+        let holder = lock_for(&dir).expect("the lock is free");
+
+        sweep_lock(&dir);
+        assert!(
+            lock.is_file(),
+            "a lock another holder owns must survive the sweep: {lock:?}"
+        );
+
+        drop(holder);
+        sweep_lock(&dir);
+        assert!(
+            !lock.exists(),
+            "once released, the same lock file is swept: {lock:?}"
+        );
     }
 
     /// An absent `find_pattern` and an empty one are different requests

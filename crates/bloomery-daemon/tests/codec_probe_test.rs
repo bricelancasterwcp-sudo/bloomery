@@ -27,7 +27,8 @@ use bloomery_daemon::codec_probe::fixtures::{parse_fixture_set, FixtureSet};
 use bloomery_daemon::codec_probe::{
     fixture_set_unparseable_reason, gate_decision, is_provisional, probe_aborted_reason,
     run_boot_codec_probe, run_codec_probe, should_run_codec_probe, ENVELOPE_LENS, ENVELOPE_LENS_V2,
-    ENVELOPE_LENS_V3, FIXTURE_BUDGET_TOKENS, FIXTURE_MAX_STEPS, POST_DISABLED_CODEC_SKIP_REASON,
+    ENVELOPE_LENS_V3, ENVELOPE_LENS_V4, FIXTURE_BUDGET_TOKENS, FIXTURE_MAX_STEPS,
+    POST_DISABLED_CODEC_SKIP_REASON,
 };
 use bloomery_daemon::config::EnvelopeLens;
 use bloomery_daemon::pager::Pager;
@@ -314,6 +315,9 @@ fn instrument_parameters_match_the_pre_registered_protocol() {
     assert_eq!(ENVELOPE_LENS_V2, "bloomery-task-envelope-v2");
     // Protocol §11, Amendment 3 — the third envelope lens's pinned name.
     assert_eq!(ENVELOPE_LENS_V3, "bloomery-task-envelope-v3");
+    // Turn-4 spec §2 — the fourth envelope lens's pinned name (the visible
+    // grant); every turn-4 verdict travels under this spelling.
+    assert_eq!(ENVELOPE_LENS_V4, "bloomery-task-envelope-v4");
 }
 
 // ---------------------------------------------------------------------------

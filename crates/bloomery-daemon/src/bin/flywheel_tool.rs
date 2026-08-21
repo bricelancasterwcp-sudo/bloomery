@@ -76,6 +76,13 @@
 //!   verification fails is not an ideal, and the factory must abort that
 //!   task as structural rather than train on it.
 //!
+//! **Turn 4 (turn-4 spec §2) adds envelope-v4**, and this binary's only part
+//! in it is to keep being faithful: `"envelope": "v4"` parses here too, and
+//! every prompt is rendered by passing the request's own `commands` to
+//! `render_task_prompt`, which is what the grant line is built from — so a
+//! rendered trajectory states exactly the capability its real executor calls
+//! ran under.
+//!
 //! One consequence worth stating, because it is the reason the turn-3 gate
 //! protocol calls `find` observations *format*-faithful rather than
 //! byte-faithful: `exec_find`'s per-hit line embeds a canonicalized,
@@ -247,7 +254,7 @@ fn parse_patch_codec(raw: &str) -> Result<PatchCodec, String> {
     }
 }
 
-/// Parses the wire `envelope` string — the same three values
+/// Parses the wire `envelope` string — the same four values
 /// `EnvelopeLens`'s config parser accepts (`config.rs`'s `EnvelopeLens::parse`
 /// is private to that module, so this binary — a separate crate — restates
 /// the same tiny string-to-enum mapping rather than reaching for it).
@@ -256,8 +263,9 @@ fn parse_envelope(raw: &str) -> Result<EnvelopeLens, String> {
         "v1" => Ok(EnvelopeLens::V1),
         "v2" => Ok(EnvelopeLens::V2),
         "v3" => Ok(EnvelopeLens::V3),
+        "v4" => Ok(EnvelopeLens::V4),
         other => Err(format!(
-            "unknown envelope {other:?}: valid values are \"v1\", \"v2\", \"v3\""
+            "unknown envelope {other:?}: valid values are \"v1\", \"v2\", \"v3\", \"v4\""
         )),
     }
 }
@@ -381,7 +389,7 @@ fn handle_find_trajectory(
     }
     let read = real_target_read(&scratch, &grant, req)?;
 
-    let mut trajectory = Trajectory::new(&req.goal, codec, envelope);
+    let mut trajectory = Trajectory::new(&req.goal, codec, envelope, &req.commands);
     trajectory.emit(find_completion(pattern, FIND_PATH));
     trajectory.observe("find", &find.outcome, &find.content);
     trajectory.emit(read_completion(&req.target));
@@ -453,7 +461,7 @@ fn handle_run_trajectory(
     let grant = scratch.grant(&req.commands)?;
     let read = real_target_read(&scratch, &grant, req)?;
 
-    let mut trajectory = Trajectory::new(&req.goal, codec, envelope);
+    let mut trajectory = Trajectory::new(&req.goal, codec, envelope, &req.commands);
     trajectory.emit(read_completion(&req.target));
     trajectory.observe("read", &read.outcome, &read.content);
     trajectory.emit(patch_completion(&req.target, search, replace));
@@ -544,12 +552,18 @@ fn handle_patch_trajectory(
     let replace = require(&req.replace, "replace", "patch")?;
     let summary = require(&req.summary, "summary", "patch")?;
 
-    let prompt1 = render_task_prompt(&req.goal, codec, envelope, "");
+    let prompt1 = render_task_prompt(&req.goal, codec, envelope, &req.commands, "");
     let completion1 = read_completion(&req.target);
 
     let read_outcome = format!("read {} bytes", req.target_contents.len());
     let transcript_after_read = transcript_entry(1, "read", &read_outcome, &req.target_contents);
-    let prompt2 = render_task_prompt(&req.goal, codec, envelope, &transcript_after_read);
+    let prompt2 = render_task_prompt(
+        &req.goal,
+        codec,
+        envelope,
+        &req.commands,
+        &transcript_after_read,
+    );
     let completion2 = patch_completion(&req.target, search, replace);
 
     let pairs_1_2 = || {
@@ -590,7 +604,13 @@ fn handle_patch_trajectory(
         "{transcript_after_read}{}",
         transcript_entry(2, "patch", &patch_outcome, &new_contents)
     );
-    let prompt3 = render_task_prompt(&req.goal, codec, envelope, &transcript_after_patch);
+    let prompt3 = render_task_prompt(
+        &req.goal,
+        codec,
+        envelope,
+        &req.commands,
+        &transcript_after_patch,
+    );
     let completion3 = done_completion(summary);
 
     let mut pairs = pairs_1_2();
@@ -637,7 +657,7 @@ fn handle_refuse_trajectory(
 ) -> Result<TrajectoryResponse, String> {
     let refusal_reason = require(&req.refusal_reason, "refusal_reason", "refuse")?;
 
-    let prompt1 = render_task_prompt(&req.goal, codec, envelope, "");
+    let prompt1 = render_task_prompt(&req.goal, codec, envelope, &req.commands, "");
     let completion1 = read_completion(&req.target);
 
     let (read_outcome, read_content) = if req.target_missing {
@@ -649,7 +669,13 @@ fn handle_refuse_trajectory(
         )
     };
     let transcript_after_read = transcript_entry(1, "read", &read_outcome, &read_content);
-    let prompt2 = render_task_prompt(&req.goal, codec, envelope, &transcript_after_read);
+    let prompt2 = render_task_prompt(
+        &req.goal,
+        codec,
+        envelope,
+        &req.commands,
+        &transcript_after_read,
+    );
     let completion2 = done_completion(refusal_reason);
 
     Ok(TrajectoryResponse {

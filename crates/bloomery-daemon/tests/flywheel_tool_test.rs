@@ -83,19 +83,27 @@ fn fresh_dir(tag: &str) -> PathBuf {
 }
 
 /// Builds `<dir>/sandbox` containing `file.txt` (`SANDBOX_CONTENTS`) and a
-/// `Grant` scoped to exactly that directory — mirrors
-/// `task_loop_test.rs::sandbox`.
-fn sandbox(dir: &std::path::Path) -> (PathBuf, Grant) {
+/// `Grant` scoped to exactly that directory, allowing exactly `commands` —
+/// mirrors `task_loop_test.rs::sandbox`. `commands` is what envelope-v4
+/// renders its grant line from, so the v4 pins below drive both the empty
+/// (`none`) and the granted shape through the REAL grant the loop enforces.
+fn sandbox_granting(dir: &std::path::Path, commands: &[Vec<String>]) -> (PathBuf, Grant) {
     let sb = dir.join("sandbox");
     std::fs::create_dir_all(&sb).unwrap();
     std::fs::write(sb.join("file.txt"), SANDBOX_CONTENTS).unwrap();
     let sb = std::fs::canonicalize(&sb).unwrap();
     let g = Grant::from_json(&format!(
-        r#"{{"read_roots":["{s}"],"write_roots":["{s}"],"commands":[]}}"#,
-        s = sb.display()
+        r#"{{"read_roots":["{s}"],"write_roots":["{s}"],"commands":{c}}}"#,
+        s = sb.display(),
+        c = serde_json::to_string(commands).unwrap()
     ))
     .unwrap();
     (sb, g)
+}
+
+/// The no-commands sandbox every pre-v4 test already used.
+fn sandbox(dir: &std::path::Path) -> (PathBuf, Grant) {
+    sandbox_granting(dir, &[])
 }
 
 fn fixture(dir: &std::path::Path, replies: Vec<Reply>) -> (Pager<FakeSubstrate>, String) {
@@ -142,9 +150,13 @@ fn spec(grant: Grant, cwd: PathBuf, envelope: EnvelopeLens) -> TaskSpec {
 /// separator byte), and asserts it byte-equals the tool-path
 /// reconstruction: `render_task_prompt` fed `transcript_entry`'s output for
 /// the same read step.
-fn assert_second_prompt_matches_tool_path(envelope: EnvelopeLens) {
-    let dir = fresh_dir(&format!("antidrift-{}", envelope_tag(envelope)));
-    let (sb, g) = sandbox(&dir);
+fn assert_second_prompt_matches_tool_path(envelope: EnvelopeLens, commands: &[Vec<String>]) {
+    let dir = fresh_dir(&format!(
+        "antidrift-{}-{}",
+        envelope_tag(envelope),
+        commands.len()
+    ));
+    let (sb, g) = sandbox_granting(&dir, commands);
     let (mut pager, agent_id) = fixture(
         &dir,
         vec![
@@ -175,7 +187,7 @@ fn assert_second_prompt_matches_tool_path(envelope: EnvelopeLens) {
     // starts inside the joined history — `render_prompt`/`render_task_prompt`
     // is what actually produced prompt 1 inside `run_task`, so this is not
     // a second implementation, just a landmark.
-    let prompt1 = render_task_prompt(GOAL, PatchCodec::SearchReplace, envelope, "");
+    let prompt1 = render_task_prompt(GOAL, PatchCodec::SearchReplace, envelope, commands, "");
     assert!(
         history.starts_with(&prompt1),
         "prompt 1 landmark not found at the start of ctx_history — history: {history:?}"
@@ -214,13 +226,37 @@ fn assert_second_prompt_matches_tool_path(envelope: EnvelopeLens) {
     // were correct.
     let read_outcome = format!("read {} bytes", SANDBOX_CONTENTS.len());
     let transcript = transcript_entry(1, "read", &read_outcome, SANDBOX_CONTENTS);
-    let computed_second_prompt =
-        render_task_prompt(GOAL, PatchCodec::SearchReplace, envelope, &transcript);
+    let computed_second_prompt = render_task_prompt(
+        GOAL,
+        PatchCodec::SearchReplace,
+        envelope,
+        commands,
+        &transcript,
+    );
 
     assert_eq!(
         actual_second_prompt, computed_second_prompt,
         "flywheel-tool's tool-path prompt has drifted from the real run_task prompt"
     );
+
+    // Under envelope-v4 the prompt also carries the grant line, rendered
+    // from `spec.grant` — the SAME grant `run_task` enforces. Pinned against
+    // a literal (not against `grant_line`'s own output, which would agree
+    // with any mutation of it), so deleting the render branch fails here
+    // even though both sides of the equality above would lose the line
+    // together.
+    if envelope == EnvelopeLens::V4 {
+        let expected_line = if commands.is_empty() {
+            "Granted commands: none — run is not available in this task".to_string()
+        } else {
+            format!("Granted commands: {}", commands[0].join(" "))
+        };
+        assert!(
+            actual_second_prompt.starts_with(&format!("{GOAL}\n\n{expected_line}\n\n")),
+            "the real run_task v4 prompt must open with the goal then the grant line — got: \
+             {actual_second_prompt:?}"
+        );
+    }
 }
 
 fn envelope_tag(envelope: EnvelopeLens) -> &'static str {
@@ -228,22 +264,42 @@ fn envelope_tag(envelope: EnvelopeLens) -> &'static str {
         EnvelopeLens::V1 => "v1",
         EnvelopeLens::V2 => "v2",
         EnvelopeLens::V3 => "v3",
+        EnvelopeLens::V4 => "v4",
     }
+}
+
+/// The turn-4 run slice's grant (spec §3), as a real `Grant`'s commands.
+fn unittest_commands() -> Vec<Vec<String>> {
+    vec![vec![
+        "python3".to_string(),
+        "-m".to_string(),
+        "unittest".to_string(),
+    ]]
 }
 
 #[test]
 fn anti_drift_pin_matches_real_second_prompt_under_v1() {
-    assert_second_prompt_matches_tool_path(EnvelopeLens::V1);
+    assert_second_prompt_matches_tool_path(EnvelopeLens::V1, &[]);
 }
 
 #[test]
 fn anti_drift_pin_matches_real_second_prompt_under_v2() {
-    assert_second_prompt_matches_tool_path(EnvelopeLens::V2);
+    assert_second_prompt_matches_tool_path(EnvelopeLens::V2, &[]);
 }
 
 #[test]
 fn anti_drift_pin_matches_real_second_prompt_under_v3() {
-    assert_second_prompt_matches_tool_path(EnvelopeLens::V3);
+    assert_second_prompt_matches_tool_path(EnvelopeLens::V3, &[]);
+}
+
+#[test]
+fn anti_drift_pin_matches_real_second_prompt_under_v4_with_no_granted_command() {
+    assert_second_prompt_matches_tool_path(EnvelopeLens::V4, &[]);
+}
+
+#[test]
+fn anti_drift_pin_matches_real_second_prompt_under_v4_with_a_granted_command() {
+    assert_second_prompt_matches_tool_path(EnvelopeLens::V4, &unittest_commands());
 }
 
 // ---------------------------------------------------------------------------
@@ -298,7 +354,7 @@ fn record_step_folds_in_exactly_transcript_entrys_output() {
     // preamble prefix (whose length equals `prompt1.len()`, since the
     // preamble itself never changes across steps) isolates exactly the
     // transcript slice `record_step` appended.
-    let prompt1 = render_task_prompt(GOAL, PatchCodec::SearchReplace, EnvelopeLens::V1, "");
+    let prompt1 = render_task_prompt(GOAL, PatchCodec::SearchReplace, EnvelopeLens::V1, &[], "");
     let prompt2 = &history[prompt1.len() + 1..]; // +1 for FakeSubstrate's '\n' join
     let real_transcript = &prompt2[prompt1.len()..];
 
@@ -408,6 +464,68 @@ fn bin_trajectory_prompts_end_with_think_preseed_under_v2_and_v3_not_v1() {
             "{label}: prompt ends_with(THINK_PRESEED) = {ends_with_preseed}, expected {expected}"
         );
     }
+}
+
+/// The bin's v4 prompts carry the grant line rendered from the request's
+/// own `commands` — pinned two ways: against the literal line (so deleting
+/// the render branch fails here) and against `render_task_prompt` fed the
+/// same commands (so a tool that rendered the line ITSELF, rather than
+/// through the loop's renderer, fails too).
+#[test]
+fn bin_v4_patch_mode_prompts_carry_the_grant_line_from_the_requests_commands() {
+    const GOAL_TEXT: &str = "fix the off-by-one in average()";
+
+    let none = run_flywheel_tool(&trajectory_request("v4"));
+    let prompt0 = none["pairs"][0]["prompt"]
+        .as_str()
+        .expect("pairs[0].prompt");
+    assert!(
+        prompt0.starts_with(&format!(
+            "{GOAL_TEXT}\n\nGranted commands: none — run is not available in this task\n\n"
+        )),
+        "a request with no commands must render the none line: {prompt0:?}"
+    );
+    assert_eq!(
+        prompt0,
+        render_task_prompt(
+            GOAL_TEXT,
+            PatchCodec::SearchReplace,
+            EnvelopeLens::V4,
+            &[],
+            ""
+        ),
+        "the bin's v4 prompt drifted from the loop's renderer"
+    );
+
+    let mut request = trajectory_request("v4");
+    request
+        .as_object_mut()
+        .expect("request is an object")
+        .insert(
+            "commands".to_string(),
+            serde_json::json!([["python3", "-m", "unittest"]]),
+        );
+    let granted = run_flywheel_tool(&request);
+    let prompt0 = granted["pairs"][0]["prompt"]
+        .as_str()
+        .expect("pairs[0].prompt");
+    assert!(
+        prompt0.starts_with(&format!(
+            "{GOAL_TEXT}\n\nGranted commands: python3 -m unittest\n\n"
+        )),
+        "a granted request must render the granted line: {prompt0:?}"
+    );
+    assert_eq!(
+        prompt0,
+        render_task_prompt(
+            GOAL_TEXT,
+            PatchCodec::SearchReplace,
+            EnvelopeLens::V4,
+            &unittest_commands(),
+            ""
+        ),
+        "the bin's v4 prompt drifted from the loop's renderer"
+    );
 }
 
 #[test]

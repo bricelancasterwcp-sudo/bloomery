@@ -109,6 +109,7 @@ fn envelope_tag(envelope: EnvelopeLens) -> &'static str {
         EnvelopeLens::V1 => "v1",
         EnvelopeLens::V2 => "v2",
         EnvelopeLens::V3 => "v3",
+        EnvelopeLens::V4 => "v4",
     }
 }
 
@@ -225,7 +226,7 @@ fn find_request(envelope: &str) -> serde_json::Value {
 /// (`flywheel_tool_test.rs::record_step_folds_in_exactly_transcript_entrys_output`
 /// uses the same technique).
 fn v1_transcript_of(goal: &str, prompt: &str) -> String {
-    let preamble = render_task_prompt(goal, PatchCodec::SearchReplace, EnvelopeLens::V1, "");
+    let preamble = render_task_prompt(goal, PatchCodec::SearchReplace, EnvelopeLens::V1, &[], "");
     prompt
         .strip_prefix(&preamble)
         .unwrap_or_else(|| panic!("prompt is not the V1 preamble plus a transcript: {prompt:?}"))
@@ -612,7 +613,7 @@ fn assert_find_second_prompt_matches_tool_path(envelope: EnvelopeLens) {
         .substrate()
         .ctx_history(1)
         .expect("context 1 is resident after a 2-step task");
-    let prompt1 = render_task_prompt(FIND_GOAL, PatchCodec::SearchReplace, envelope, "");
+    let prompt1 = render_task_prompt(FIND_GOAL, PatchCodec::SearchReplace, envelope, &[], "");
     assert!(
         history.starts_with(&prompt1),
         "prompt 1 landmark not found at the start of ctx_history — history: {history:?}"
@@ -632,13 +633,31 @@ fn assert_find_second_prompt_matches_tool_path(envelope: EnvelopeLens) {
     );
     assert!(!observation.failed, "{observation:?}");
     let transcript = transcript_entry(1, "find", &observation.outcome, &observation.content);
-    let computed_second_prompt =
-        render_task_prompt(FIND_GOAL, PatchCodec::SearchReplace, envelope, &transcript);
+    let computed_second_prompt = render_task_prompt(
+        FIND_GOAL,
+        PatchCodec::SearchReplace,
+        envelope,
+        &[],
+        &transcript,
+    );
 
     assert_eq!(
         actual_second_prompt, computed_second_prompt,
         "flywheel-tool's find tool-path prompt has drifted from the real run_task prompt"
     );
+
+    // A find-shaped task grants no command, so envelope-v4's grant line is
+    // the `none` literal — pinned directly (the equality above would survive
+    // deleting the render branch, since both sides share one renderer).
+    if envelope == EnvelopeLens::V4 {
+        assert!(
+            actual_second_prompt.starts_with(&format!(
+                "{FIND_GOAL}\n\nGranted commands: none — run is not available in this task\n\n"
+            )),
+            "the real run_task v4 find prompt must open with the goal then the none line — got: \
+             {actual_second_prompt:?}"
+        );
+    }
 }
 
 #[test]
@@ -654,6 +673,39 @@ fn find_anti_drift_pin_matches_real_second_prompt_under_v2() {
 #[test]
 fn find_anti_drift_pin_matches_real_second_prompt_under_v3() {
     assert_find_second_prompt_matches_tool_path(EnvelopeLens::V3);
+}
+
+#[test]
+fn find_anti_drift_pin_matches_real_second_prompt_under_v4() {
+    assert_find_second_prompt_matches_tool_path(EnvelopeLens::V4);
+}
+
+/// The bin's find-shaped v4 prompts carry the `none` grant line — a find
+/// task grants no command, and turn 4's whole point is that this is now
+/// visible at the decision point (spec §1).
+#[test]
+fn bin_find_shaped_v4_prompts_carry_the_none_grant_line() {
+    let response = run_flywheel_tool(&find_request("v4"));
+    let prompt0 = response["pairs"][0]["prompt"]
+        .as_str()
+        .unwrap_or_else(|| panic!("missing pairs[0].prompt in {response}"));
+    assert!(
+        prompt0.starts_with(&format!(
+            "{FIND_GOAL}\n\nGranted commands: none — run is not available in this task\n\n"
+        )),
+        "a find-shaped request grants no command: {prompt0:?}"
+    );
+    assert_eq!(
+        prompt0,
+        render_task_prompt(
+            FIND_GOAL,
+            PatchCodec::SearchReplace,
+            EnvelopeLens::V4,
+            &[],
+            ""
+        ),
+        "the bin's v4 find prompt drifted from the loop's renderer"
+    );
 }
 
 // ---------------------------------------------------------------------------
