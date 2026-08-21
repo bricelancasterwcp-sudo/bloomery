@@ -170,22 +170,60 @@ class RunVerifiedValidationTest(unittest.TestCase):
     name the target), plus a non-empty `run_argv` that starts with one of
     the granted `commands` prefixes -- the same element-wise prefix match
     the real `Grant` applies, so a task the tool would refuse is caught in
-    the factory instead of at render time."""
+    the factory instead of at render time.
 
-    def _make_valid_task(self):
-        contents = "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n"
+    Turn 4 adds the **fails-before rule** (spec §3). Turn 3's verification
+    was `py_compile`, which cannot fail on a semantic defect: the run step
+    trained the HABIT of verifying but verified nothing. The rebuilt slice
+    plants a `unittest` beside the target, and the factory proves that test
+    can actually fail by executing it against the UNPATCHED workspace and
+    requiring a nonzero exit. (The tool's own real run is the other half:
+    it executes the same test against the PATCHED file and refuses to
+    render a trajectory unless it exits 0.) A planted test that passes
+    before the patch would render an ideal whose `run` step proves nothing
+    -- exactly turn 3's failure, one layer deeper -- so it is a named
+    structural violation here."""
+
+    CONTENTS = (
+        "def add(a, b):\n"
+        "    # Return the sum of a and b.\n"
+        "    return a - b\n"
+        "\n"
+        "\n"
+        "def double(a):\n"
+        "    return a * 2\n"
+    )
+
+    def _planted_test(self, expected):
+        return (
+            "import unittest\n"
+            "\n"
+            "import mathy\n"
+            "\n"
+            "\n"
+            "class TestMathy(unittest.TestCase):\n"
+            "    def test_add(self):\n"
+            f"        self.assertEqual(mathy.add(3, 5), {expected})\n"
+            "\n"
+            "\n"
+            'if __name__ == "__main__":\n'
+            "    unittest.main()\n"
+        )
+
+    def _make_valid_task(self, expected=8):
         return templates.Task(
             name="unit_run_family",
             lens="python",
             target="mathy.py",
-            files={"mathy.py": contents},
-            goal="mathy.py's add() is broken. Patch the file, then emit done.",
-            search="    return a + b",
-            replace="    return a + b  # ok",
+            files={"mathy.py": self.CONTENTS, "test_mathy.py": self._planted_test(expected)},
+            goal="mathy.py's add() subtracts. Patch the file, then emit done.",
+            search="    return a - b",
+            replace="    return a + b",
             summary="Fixed add().",
             trajectory=task_mod.RUN_TRAJECTORY,
-            run_argv=("python3", "-m", "py_compile", "mathy.py"),
-            commands=(("python3", "-m", "py_compile"),),
+            run_argv=("python3", "-m", "unittest", "test_mathy.py"),
+            commands=(("python3", "-m", "unittest"),),
+            test_file="test_mathy.py",
         )
 
     def test_valid_run_task_has_no_violations(self):
@@ -213,9 +251,50 @@ class RunVerifiedValidationTest(unittest.TestCase):
 
     def test_a_run_goal_must_still_name_the_target_filename(self):
         task = self._make_valid_task()
-        bad = task._replace(goal="add() is broken. Patch the file, then emit done.")
+        bad = task._replace(goal="add() subtracts. Patch the file, then emit done.")
         violations = templates.validate_task(bad)
         self.assertTrue(any("target filename" in v for v in violations), violations)
+
+    # --- the fails-before rule -------------------------------------------------
+
+    def test_a_planted_test_that_already_passes_before_the_patch_is_a_violation(self):
+        """The mutation that proves the rule is enforced rather than
+        decorative: assert the BUGGY behavior instead of the fixed one and
+        the planted test passes against the unpatched file, which makes the
+        ideal's `run` step vacuous."""
+        task = self._make_valid_task(expected=-2)
+        # The mutation really is a pre-patch pass, not a broken test:
+        # add(3, 5) is 3 - 5 == -2 before the patch.
+        violations = templates.validate_task(task)
+        self.assertTrue(any("passes against the unpatched" in v for v in violations), violations)
+
+    def test_a_run_shaped_task_with_no_test_file_is_a_violation(self):
+        task = self._make_valid_task()
+        violations = templates.validate_task(task._replace(test_file=""))
+        self.assertTrue(any("test_file" in v for v in violations), violations)
+
+    def test_a_test_file_that_is_not_among_the_task_files_is_a_violation(self):
+        task = self._make_valid_task()
+        bad = task._replace(test_file="test_absent.py")
+        violations = templates.validate_task(bad)
+        self.assertTrue(any("not among" in v for v in violations), violations)
+
+    def test_a_run_argv_that_does_not_name_the_planted_test_is_a_violation(self):
+        # Still inside the grant, so the prefix rule passes -- but the run
+        # would not execute the test the fails-before rule just cleared,
+        # and the two halves of the proof would be about different commands.
+        task = self._make_valid_task()
+        bad = task._replace(run_argv=("python3", "-m", "unittest", "discover"))
+        violations = templates.validate_task(bad)
+        self.assertTrue(any("does not name" in v for v in violations), violations)
+
+    def test_the_fails_before_rule_does_not_fire_for_a_plain_task(self):
+        # The expensive branch must belong to the run shape alone: a plain
+        # task carries no test_file and must still validate clean.
+        task = self._make_valid_task()._replace(
+            trajectory=task_mod.PLAIN_TRAJECTORY, run_argv=(), commands=(), test_file=""
+        )
+        self.assertEqual(templates.validate_task(task), [])
 
 
 if __name__ == "__main__":

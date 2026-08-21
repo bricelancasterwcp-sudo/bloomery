@@ -8,8 +8,10 @@ ideals"):
   filename, and a `find_pattern` that occurs in the target and in NO
   sibling.
 - `templates.RUN_TEMPLATES` — the run-verified wrappers over the existing
-  python families (`templates_python.RUN_FAMILIES`): same defect bodies,
-  same goals, plus `run_argv`/`commands` for a `py_compile` verification.
+  python families (`templates_run_verified.RUN_FAMILIES`): same defect
+  bodies, same goals, plus a PLANTED `unittest` sibling, the
+  `python3 -m unittest test_<stem>.py` argv that runs it, and the
+  `python3 -m unittest` grant that permits it (turn-4 spec §3).
 
 Split out of `test_templates.py` (which stays the home of the registry
 counts and the word-list disjointness proof) to keep both files under the
@@ -23,8 +25,9 @@ import random
 import re
 import unittest
 
+from tools.flywheel.factory import planted_test
 from tools.flywheel.factory import task as task_mod
-from tools.flywheel.factory import templates
+from tools.flywheel.factory import templates, templates_python, templates_run_verified
 from tools.flywheel.factory.contamination import GATE_VOCABULARY
 from tools.flywheel.factory.wordlists import MULTIFILE_SIBLING_VERBS, MULTIFILE_TARGET_VERBS
 
@@ -232,7 +235,14 @@ class RunVerifiedWrapperTest(unittest.TestCase):
             for seed in (0, 1, 17):
                 base = base_fn(random.Random(seed))
                 run = fn(random.Random(seed))
-                self.assertEqual(run.files, base.files, f"{name} seed={seed}")
+                # The planted test is the ONLY thing the wrapper adds to
+                # `files`; the base family's own file must survive verbatim.
+                self.assertEqual(
+                    {path: run.files[path] for path in base.files}, base.files, f"{name} seed={seed}"
+                )
+                self.assertEqual(
+                    set(run.files) - set(base.files), {run.test_file}, f"{name} seed={seed}"
+                )
                 self.assertEqual(run.goal, base.goal, f"{name} seed={seed}")
                 self.assertEqual(run.target, base.target, f"{name} seed={seed}")
                 self.assertEqual(run.search, base.search, f"{name} seed={seed}")
@@ -241,19 +251,42 @@ class RunVerifiedWrapperTest(unittest.TestCase):
             wrapped += 1
         self.assertEqual(wrapped, len(templates.PYTHON_TEMPLATES))
 
-    def test_every_run_task_carries_a_granted_py_compile_of_its_own_target(self):
+    def test_every_run_task_plants_a_unittest_it_is_granted_to_run(self):
         for name, fn in templates.RUN_TEMPLATES:
             for seed in range(20):
                 task = fn(random.Random(seed))
+                stem = task.target.removesuffix(".py")
                 self.assertEqual(task.trajectory, task_mod.RUN_TRAJECTORY, name)
                 self.assertEqual(task.lens, "python", name)
-                self.assertEqual(task.run_argv[-1], task.target, f"{name} seed={seed}")
-                self.assertEqual(task.commands, (templates.PY_COMPILE_PREFIX,), name)
+                self.assertEqual(task.test_file, f"test_{stem}.py", f"{name} seed={seed}")
+                self.assertIn(task.test_file, task.files, f"{name} seed={seed}")
                 self.assertEqual(
-                    task.run_argv[: len(templates.PY_COMPILE_PREFIX)],
-                    templates.PY_COMPILE_PREFIX,
+                    task.run_argv,
+                    templates.UNITTEST_PREFIX + (task.test_file,),
                     f"{name} seed={seed}",
                 )
+                self.assertEqual(task.commands, (templates.UNITTEST_PREFIX,), name)
+
+    def test_the_planted_test_imports_the_target_and_calls_its_probed_function(self):
+        for name, fn in templates.RUN_TEMPLATES:
+            base_name = name.removesuffix(templates.RUN_FAMILY_SUFFIX)
+            probe = templates_run_verified.PROBE[base_name]
+            for seed in (0, 3, 11):
+                task = fn(random.Random(seed))
+                stem = task.target.removesuffix(".py")
+                source = task.files[task.test_file]
+                func = templates_run_verified.probed_function(task.files[task.target], probe)
+                self.assertIn(f"import {stem}\n", source, f"{name} seed={seed}")
+                self.assertIn(f"{stem}.{func}({probe.args})", source, f"{name} seed={seed}")
+                self.assertIn("unittest.TestCase", source, f"{name} seed={seed}")
+
+    def test_there_is_exactly_one_probe_per_python_family(self):
+        # A family without a probe could not plant a test at all; a probe
+        # without a family is a stale entry nothing exercises. Both are
+        # silent, so they are asserted mechanically.
+        self.assertEqual(
+            sorted(templates_run_verified.PROBE), sorted(templates_python.FAMILIES)
+        )
 
     def test_run_tasks_carry_no_find_fields(self):
         for name, fn in templates.RUN_TEMPLATES:
@@ -261,15 +294,35 @@ class RunVerifiedWrapperTest(unittest.TestCase):
             self.assertEqual(task.find_pattern, "", name)
 
     def test_every_run_task_is_structurally_valid(self):
+        # Includes the fails-before rule (turn-4 spec §3): validating a
+        # run-shaped task EXECUTES its planted test against the unpatched
+        # workspace and requires a nonzero exit.
         for name, fn in templates.RUN_TEMPLATES:
             for seed in range(25):
                 task = fn(random.Random(seed))
                 violations = templates.validate_task(task)
                 self.assertEqual(violations, [], f"{name} seed={seed}: {violations}\n{task}")
 
+    def test_the_planted_test_fails_before_the_patch_and_passes_after(self):
+        """Both halves of the verification contract in one place. The
+        factory's validator only owns the FAILS-BEFORE half (the tool's own
+        real run owns passes-after, and refuses to render a trajectory
+        otherwise); asserting both here makes a family whose expected value
+        drifted fail in the factory suite rather than only against the
+        built binary."""
+        for name, fn in templates.RUN_TEMPLATES:
+            for seed in (0, 3, 11):
+                task = fn(random.Random(seed))
+                before = planted_test.run_python(task.files, task.run_argv)
+                self.assertNotEqual(before.returncode, 0, f"{name} seed={seed}: {before.stdout}")
+
+                patched = dict(task.files)
+                patched[task.target] = task.files[task.target].replace(task.search, task.replace, 1)
+                after = planted_test.run_python(patched, task.run_argv)
+                self.assertEqual(after.returncode, 0, f"{name} seed={seed}: {after.stdout}")
+
     def test_run_targets_are_syntactically_valid_python_before_and_after_the_patch(self):
-        # The verification the shape actually runs is `py_compile`, so a
-        # family whose target (or patched target) did not compile would
+        # A family whose target (or patched target) did not compile would
         # abort the whole factory run at render time. Compiling both here
         # is the GPU-free, tool-free version of that check.
         for name, fn in templates.RUN_TEMPLATES:
@@ -279,6 +332,7 @@ class RunVerifiedWrapperTest(unittest.TestCase):
                 after = before.replace(task.search, task.replace, 1)
                 compile(before, task.target, "exec")
                 compile(after, task.target, "exec")
+                compile(task.files[task.test_file], task.test_file, "exec")
                 self.assertNotEqual(before, after, f"{name} seed={seed}")
 
 

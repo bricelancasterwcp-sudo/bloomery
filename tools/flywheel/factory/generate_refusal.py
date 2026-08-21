@@ -17,7 +17,6 @@ from tools.flywheel.factory import gate_sampling, templates, templates_refusal
 from tools.flywheel.factory.contamination import GateFixture, normalize
 from tools.flywheel.factory.task import RefusalTask
 
-ENVELOPE = "v3"
 PATCH_CODEC = "search_replace"
 
 
@@ -85,13 +84,19 @@ def build_refusal_trajectory_request(task: RefusalTask) -> dict:
     `refusal_reason`, `target_missing`; no `search`/`replace`/`summary`.
     `target_contents` is `""` for the missing-target family (by
     convention, per `flywheel_tool.rs`'s own doc comment — never read when
-    `target_missing` is true) and the real content for defect-absent."""
+    `target_missing` is true) and the real content for defect-absent.
+
+    `envelope` and `commands` are NOT set here: turn 4 made them properties
+    of every request regardless of class, stamped by the single caller
+    (`generate_request.build_trajectory_request`). This module used to hold
+    its own `ENVELOPE = "v3"` constant — a second copy of a value that must
+    match its sibling's exactly, which is the drift the single stamp now
+    makes impossible."""
     target_contents = "" if task.target_missing else task.files[task.target]
     return {
         "cmd": "trajectory",
         "goal": task.goal,
         "patch_codec": PATCH_CODEC,
-        "envelope": ENVELOPE,
         "target": task.target,
         "target_contents": target_contents,
         "expect": "refuse",

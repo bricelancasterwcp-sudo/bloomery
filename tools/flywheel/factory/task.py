@@ -12,6 +12,8 @@ from __future__ import annotations
 import re
 from typing import NamedTuple
 
+from tools.flywheel.factory import planted_test
+
 DONE_INSTRUCTION = "Patch the file, then emit done."
 # The refusal shape's counterpart to DONE_INSTRUCTION: every refusal goal
 # ends with it, and `validate_refusal_task` asserts that. Canonical HERE,
@@ -82,7 +84,16 @@ class Task(NamedTuple):
     - `run_argv`/`commands` are the verification the run-verified ideal
       executes and the grant prefixes that permit it — the same
       `commands` shape a fixture's grant carries, so `validate_task` can
-      apply the real `Grant`'s allowlist rule before the tool ever runs."""
+      apply the real `Grant`'s allowlist rule before the tool ever runs.
+
+    Turn 4 adds a fifth, defaulted the same way:
+
+    - `test_file` names the PLANTED `unittest` a run-verified task ships
+      beside its target (turn-4 spec §3). It is an ordinary entry in
+      `files` — nothing about materializing, rendering or screening it is
+      special-cased — and this field exists so the fails-before rule knows
+      WHICH of the task's files is the verification, rather than guessing
+      from a filename convention."""
 
     name: str
     lens: str  # "python" | "plaintext"
@@ -96,6 +107,7 @@ class Task(NamedTuple):
     find_pattern: str = ""
     run_argv: tuple[str, ...] = ()
     commands: tuple[tuple[str, ...], ...] = ()
+    test_file: str = ""
 
 
 def _find_shape_violations(task: Task, contents: str) -> list[str]:
@@ -143,10 +155,12 @@ def _find_shape_violations(task: Task, contents: str) -> list[str]:
 
 
 def _run_shape_violations(task: Task) -> list[str]:
-    """The run-verified branch's own rule: a non-empty `run_argv` that
-    some granted prefix in `commands` covers, element-wise — the same
-    match `bloomery_core::grant::command::check_command` applies at render
-    time, deliberately made STRICTER in one place.
+    """The run-verified branch's own rules, cheapest first.
+
+    Rule one: a non-empty `run_argv` that some granted prefix in
+    `commands` covers, element-wise — the same match
+    `bloomery_core::grant::command::check_command` applies at render time,
+    deliberately made STRICTER in one place.
 
     The divergence: an EMPTY granted prefix is skipped here rather than
     matched. `check_command` never sees one (`Grant`'s wire parser rejects
@@ -155,7 +169,16 @@ def _run_shape_violations(task: Task) -> list[str]:
     template, before any `Grant` exists. Treating an empty prefix as a
     match would make it grant every possible argv — the one way this rule
     could pass vacuously — so a task carrying one is refused here instead
-    of failing later at grant construction."""
+    of failing later at grant construction.
+
+    Rule two, turn 4's (spec §3): the **fails-before** rule, delegated to
+    `planted_test.fails_before_violations`, which EXECUTES the planted
+    test against the unpatched workspace and requires a nonzero exit. It
+    runs only once rule one is satisfied, and that ordering is deliberate
+    rather than an optimization: a task whose argv the grant would refuse,
+    or that has no argv at all, is already structurally rejected, and
+    spawning an interpreter to ask a second question about it would only
+    add a second violation describing the same broken task."""
     if not task.run_argv:
         return ["run-verified task has an empty run_argv"]
 
@@ -165,7 +188,8 @@ def _run_shape_violations(task: Task) -> list[str]:
             f"run_argv {list(task.run_argv)} does not start with any granted command prefix "
             f"{[list(prefix) for prefix in granted]} -- the real Grant would refuse to run it"
         ]
-    return []
+
+    return planted_test.fails_before_violations(task.files, task.test_file, task.run_argv)
 
 
 def validate_task(task: Task) -> list[str]:

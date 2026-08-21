@@ -50,6 +50,13 @@ contamination too, and turn 3's multi-file repair tasks render siblings
 into real training pairs. Corpus rows carry a `files` map for exactly
 this reason; a row predating it falls back to target-only.
 
+Turn 4 widens the FILENAME rule the same way, through the same shared
+helper (turn-4 spec §3's ride-along — "the last gap in that rule"): every
+name a task carries is screened against every gate target, not just the
+declared one. Turn 4's run slice plants a `test_<stem>.py` sibling into
+every run-verified task, so a rule that only ever looked at the target was
+about to be blind to a file on the corpus's main path.
+
 CLI: ``python3 -m tools.flywheel.factory.contamination --corpus
 corpus.jsonl --gate crates/bloomery-daemon/fixtures/codec-tasks-v1.toml
 --gate crates/bloomery-daemon/fixtures/codec-tasks-v2-mixed.toml --out
@@ -172,6 +179,11 @@ def _violations_for_task(
     each caller — this function only knows about the fields every rule
     compares, so a violation dict here never carries `task_id`.
 
+    Both the contents rule and (since turn 4) the FILENAME rule are full
+    cross products over `files`; see `names_norm` below for why the
+    filename rule was the last one still looking at the declared target
+    alone.
+
     `files` is EVERY file the task carries, not just the declared
     target's contents: the gate side has always iterated `fixture.files`,
     and the corpus side now matches it, so the contents rule is a full
@@ -182,10 +194,20 @@ def _violations_for_task(
     leaves the goal/target/search rules running unchanged."""
     violations: list[dict] = []
     goal_norm = normalize(goal)
-    target_norm = normalize(target)
     search_norm = normalize(search)
     files_norm = {path: normalize(contents) for path, contents in sorted(files.items())}
     goal_tokens = token_set(goal)
+    # Turn 4's ride-along (turn-4 spec §3: "the contamination guard screens
+    # sibling FILENAMES against gate targets -- the last gap in that rule").
+    # Every name the task carries is screened, not only the declared target:
+    # a novel target does not make a sibling named after a gate fixture's
+    # file any less of a collision, and turn 4's run slice plants a sibling
+    # (`test_<stem>.py`) into every run-verified task, so the gap moved onto
+    # the corpus's main path. The declared `target` stays in the set even
+    # though it is normally a key of `files`, because for a missing-target
+    # refusal task it is by construction NOT one -- dropping it there would
+    # silently narrow the rule while widening it everywhere else.
+    names_norm = {name: normalize(name) for name in sorted({target, *files})}
 
     for fixture in fixtures:
         if goal_norm == normalize(fixture.goal):
@@ -196,14 +218,17 @@ def _violations_for_task(
                     "detail": "corpus goal matches a gate goal (exact or normalized)",
                 }
             )
-        if target_norm == normalize(fixture.target):
-            violations.append(
-                {
-                    "rule": "target_filename_match",
-                    "gate_fixture": fixture.name,
-                    "detail": f"corpus target {target!r} matches gate target {fixture.target!r}",
-                }
-            )
+        fixture_target_norm = normalize(fixture.target)
+        for name, name_norm in names_norm.items():
+            if name_norm == fixture_target_norm:
+                violations.append(
+                    {
+                        "rule": "target_filename_match",
+                        "gate_fixture": fixture.name,
+                        "corpus_file": name,
+                        "detail": f"corpus file {name!r} matches gate target {fixture.target!r}",
+                    }
+                )
         if fixture.search is not None and search_norm == normalize(fixture.search):
             violations.append(
                 {
@@ -271,8 +296,9 @@ def task_violates_gates(
 def check_corpus(rows: Iterable[dict], fixtures: list[GateFixture], jaccard_threshold: float = 0.8) -> Report:
     """The comparator itself. Fails on any of: exact or normalized match
     of goals, the contents of ANY file a task carries (target or sibling),
-    target filenames, search strings; OR >= `jaccard_threshold` Jaccard
-    token-set similarity between any corpus goal and any gate goal."""
+    the NAME of any file a task carries against any gate target, search
+    strings; OR >= `jaccard_threshold` Jaccard token-set similarity between
+    any corpus goal and any gate goal."""
     corpus_tasks = _corpus_tasks_from_rows(rows)
     violations: list[dict] = []
 
