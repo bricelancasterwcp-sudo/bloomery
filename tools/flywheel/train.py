@@ -1,20 +1,23 @@
-"""Flywheel QLoRA training — the pre-registered run. Turn 3 (flywheel3)
+"""Flywheel QLoRA training — the pre-registered run. Turn 4 (flywheel4)
 uses this file UNCHANGED apart from this header; every hyperparameter
-below is the turn-1 recipe, held fixed across turns 1, 2 and 3.
+below is the turn-1 recipe, held fixed across turns 1, 2, 3 and 4.
 
 Governing documents:
-- spec  docs/superpowers/specs/2026-08-20-flywheel3-turn3-design.md §5
-        (turn 1: …/2026-08-16-flywheel-14b-design.md §4)
-- gates docs/superpowers/evidence/2026-08-20-flywheel3-preregistration.md
+- spec  docs/superpowers/specs/2026-08-21-flywheel4-turn4-design.md §5
+        (turn 3: …/2026-08-20-flywheel3-turn3-design.md §5;
+         turn 1: …/2026-08-16-flywheel-14b-design.md §4)
+- gates docs/superpowers/evidence/2026-08-21-flywheel4-preregistration.md
         (turn 1: …/2026-08-16-flywheel1-preregistration.md;
-         turn 2: …/2026-08-16-flywheel2-preregistration.md)
+         turn 2: …/2026-08-16-flywheel2-preregistration.md;
+         turn 3: …/2026-08-20-flywheel3-preregistration.md)
 
 **Seeds: the two literal 20260816 seeds below (`random_state` on the LoRA
 init, `seed` on TrainingArguments) do NOT move per turn and were not
-changed for turn 3.** They are the *procedure's* identity — holding them
-fixed is what makes turn 3 a comparison against turns 1-2 rather than a
+changed for turn 4.** They are the *procedure's* identity — holding them
+fixed is what makes turn 4 a comparison against turns 1-3 rather than a
 fresh draw. The seed that refreshes each turn is the CORPUS seed
-(20260817 → 20260820), which is recorded in the fingerprint, not here.
+(20260817 → 20260820 → 20260821), which is recorded in the fingerprint,
+not here.
 
 Binding rules implemented here (do not change without a recorded
 amendment):
@@ -27,10 +30,10 @@ amendment):
 - Validation split (fingerprint val_split_ids) is filtered OUT of the
   train set and used for loss monitoring only.
 
-Usage (turn 3):
-  python tools/flywheel/train.py --corpus ~/flywheel3/corpus.jsonl \
-      --fingerprint docs/superpowers/evidence/2026-08-20-flywheel3-fingerprint.json \
-      --base ~/models/hf/Qwen3-14B --out ~/flywheel3/adapter \
+Usage (turn 4):
+  python tools/flywheel/train.py --corpus ~/flywheel4/corpus.jsonl \
+      --fingerprint docs/superpowers/evidence/2026-08-21-flywheel4-fingerprint.json \
+      --base ~/models/hf/Qwen3-14B --out ~/flywheel4/adapter \
       [--max-steps N]   # smoke: --max-steps 5
 """
 
