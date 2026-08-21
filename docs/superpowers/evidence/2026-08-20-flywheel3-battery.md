@@ -75,12 +75,18 @@ n=16.
 **Recomputation.** Every number in this document is recomputed from the
 committed `CodecFixture` rows and the committed `TaskStep` rows, not read off
 the daemon's own verdict line. The recomputation reproduces 20/20, 15/16 and
-16/16 exactly. Independently recomputed Wilson bounds match the journaled ones
-to every printed digit, with one honest exception: the 16/16 **upper** bound
-evaluates to `1.0000000000000002` in the recomputation's float order against
-the journaled `1.0` — one ulp, on a bound that is not load-bearing for either
-the floor or the flag (the flag rests on the lower bound, 0.8063923194655636,
-which matches to every digit).
+16/16 exactly, and independently recomputed Wilson bounds match the journaled
+ones to every printed digit.
+
+One apparent exception is not one, and the cause is worth stating exactly: the
+recomputation's 16/16 **upper** bound prints `1.0000000000000002` against the
+journaled `1.0`. That is **not** a float-ordering difference between two
+computations of the same quantity — `wilson95`
+(`crates/bloomery-core/src/stats.rs:34`) **clamps the upper bound with
+`.min(1.0)`**, so the daemon computes the identical number and then clamps it.
+The journaled `1.0` is the clamped value of the recomputation's own result, and
+the two agree exactly. (The lower bound, which is the only one the flag rests
+on, is `0.8063923194655636` in both.)
 
 ---
 
@@ -95,7 +101,7 @@ Everything the verdict rests on, with the check that was actually run.
 | daemon PID, boot 1 | 2899457 | `readlink /proc/2899457/exe` = the featured binary, asserted before the kill |
 | daemon PID, boot 2 | 2915928 | same assertion |
 | **GGUF** | `/home/brice/flywheel3/qwen3-14b-flywheel3-Q4_K_M.gguf`, 9,001,752,960 bytes, sha256 **`25f9f0209099bcaeb01279bb968a0f9aa684f69f58e7e20f5b927c0d4a481763`** | recomputed with `sha256sum`; **equal to `~/flywheel3/SHAS.txt`** |
-| **daemon-reported model digest** | **`25f9f0209099bcaeb01279bb968a0f9aa684f69f58e7e20f5b927c0d4a481763`** | read live from `/status` during boot 1 — **byte-identical to the GGUF sha above.** This is the real review seat for an out-of-repo artifact: the weights the daemon actually loaded are the weights Task 11 produced. |
+| **daemon-reported model digest** | **`25f9f0209099bcaeb01279bb968a0f9aa684f69f58e7e20f5b927c0d4a481763`** | read live from `/status` during boot 1 — **byte-identical to the GGUF sha above.** This is the real review seat for an out-of-repo artifact: the weights the daemon actually loaded are the weights Task 11 produced. **Attribution gap, and the durable route around it:** that `/status` read was an operator observation and left no committed trace, so it is not independently checkable from this repo. What *is* durable is the path: the retained boot configs `target/fw3-live/g4/bloomery-fw3-g4.toml:9` and `target/fw3-live/g5/bloomery-fw3-g5.toml:9` each name `path = "/home/brice/flywheel3/qwen3-14b-flywheel3-Q4_K_M.gguf"`, and `sha256sum` of that file is the digest above. So the chain config → file → sha is re-runnable by anyone with the box, and the live `/status` read is corroboration of it rather than its only support. |
 | adapter | `32be926a7eb1f0e263ddf095990df9d10784911acf232c1d49e50b7bbfd92682` | `~/flywheel3/SHAS.txt` |
 | corpus | `6f88771f91f05d7de3f8a91e8cdf66bed35f44940983572f30f752ea668fb695` | equals the pre-registration's recorded value; re-verified after training |
 | gate `codec-tasks-v1.toml` | `ab64a38f67b9dc7b97edd8bcbb18fe5803aaaae7745425ae5d8e24afab5ab972` | recomputed; **equals** the pre-registration's recorded sha |
@@ -136,26 +142,42 @@ Two dedicated boots on `master` @ `9575b21`, G4 first then G5, mirroring
 
 | item | value |
 |---|---|
-| GPU | RTX 5080, 16,303 MiB total, **1,644 MiB in use by the desktop** (gnome-shell 511, an Electron app 355, firefox 174, gnome-text-editor 142, lact 49, ptyxis 31, Xwayland 6) → ~14.3 GiB free |
+| GPU | RTX 5080, 16,303 MiB total, **1,644 MiB in use by the desktop** → ~14.3 GiB free. **Uncommitted figure** — an `nvidia-smi` snapshot read at preflight, with no durable trace; unlike every other row here it cannot be re-derived from a committed artifact. The per-process itemization (gnome-shell 511, an Electron app 355, firefox 174, gnome-text-editor 142, lact 49, ptyxis 31, Xwayland 6) sums to **1,268 MiB, not 1,644** — the ~376 MiB gap is driver/context overhead `nvidia-smi` does not attribute to any process, so the two numbers are different measurements and are not expected to reconcile. Neither is load-bearing: the *journaled* consequence of the budget read is the `window_tokens` figure below, which is committed. |
 | bloomery daemon | none running |
 | other GPU processes | **an idle `ollama serve` (PID 3696348) is present and holds 0 MiB** — it does not appear in `nvidia-smi`'s compute-apps list at all. **Reported, not killed**, per the standing rule; it is the same idle process Task 11 recorded. |
 | Rust suite | **not run** — the brief forbids `cargo test` after the featured build, and no source changed since the baselines' featured build |
 
 **The one boot-condition difference from the baselines, recorded rather than
-smoothed over.** The desktop held ~585 MiB more VRAM than it did during the
-16:12 baselines run (1,644 MiB vs 1,059 MiB), so the daemon's boot-time budget
-read was lower and the computed serving window came out smaller: **26,900
-tokens** for both fw3 boots, against **28,976** (stock) and **29,851** (fw2).
-The visible consequence is in the assay ceiling: fw3 measures
+smoothed over.** The desktop held more VRAM than it did during the 16:12
+baselines run, so the daemon's boot-time budget read was lower and the computed
+serving window came out smaller. **The two fw3 boots did not even agree with
+each other**, and both figures are journaled on their boots' `Refusal` rows:
+
+| boot | `window_tokens` |
+|---|---|
+| stock baseline | 28,976 |
+| flywheel2 baseline | 29,851 |
+| **fw3 boot 1 (G4)** | **26,900** |
+| **fw3 boot 2 (G5)** | **27,604** |
+
+**That 704-token boot-to-boot drift is the cleanest evidence available that
+this is a fact about the box and not about the model.** Nothing changed between
+the two boots except the desktop's own VRAM use in the eleven minutes between
+them: same GGUF, same digest, same config shape, same binary, same fixture
+sets. A number that moves when the model does not is a number measuring the
+environment.
+
+The visible consequence is in the assay ceiling: both fw3 boots measure
 `max_verified 12288` / `first_failure 13312` where both baselines measured
 `13312` / `14336` — one rung lower, and the 13,312 rung fails with
 `InfrastructureError: HTTP 400`, which is the daemon's own window refusal
-(three `Refusal` rows this boot against two for each baseline). **This is a
-residency fact about the box, not a property of the model**, and it does not
-touch the codec measurement: G4/G5 fixture prompts are hundreds of bytes, and
-the codec resolved from the profile is `search_replace` in all three boots, so
-fw3 was measured under exactly the codec both baselines were. It is named here
-so a reader comparing ceilings across the three documents is not misled.
+(three `Refusal` rows on each fw3 boot against two on each baseline). **This is
+a residency fact about the box, not a property of the model**, and it does not
+touch the codec measurement: G4/G5 fixture prompts are hundreds of bytes —
+three orders of magnitude below the smallest of these windows — and the codec
+resolved from the profile is `search_replace` in all four boots, so fw3 was
+measured under exactly the codec both baselines were. It is named here so a
+reader comparing ceilings across the three documents is not misled.
 
 **The assay profile's zero cells are not a fw3 finding.** fw3's profile reads
 `envelope.fidelity 0.0` (n=10, all 10 failures `shape`) and
@@ -384,9 +406,42 @@ actually read (`read` → `done`, 2 steps, every one). Two verbatim:
   the file declares it twice with different values at lines 2 and 5 (46, then
   507); no change made without a goal that matches."
 
-Each names the asserted symptom, denies it with a specific in-file fact, and
-names the *different* real defect — which is the behaviour the family trains,
-and it requires having read the bytes.
+**All five deny the asserted symptom with a real, checkable in-file fact.**
+That half was verified against the frozen fixture bytes for every one of the
+five: `total = 0` before the loop in `tunelog.py`; the `if not samples: return
+0` guard in `seismodesk_stats.py`; the `if remaining < 0:` clamp in
+`cellarcount.py`; `settle_delay_ms = 38` on line 3 of `warpplan.ini`; the
+07:00/4-hour/11:00 arithmetic in `faultwatch_window.txt`. The refusal decision
+is right in all five, and 16/16 is untouched.
+
+**But the "Found instead" half is grounded on only 4 of the 5, and the fifth is
+a fabrication.** This section's earlier wording — "each … names the *different*
+real defect" — was false, and the correction matters more than the count does.
+Verified against the frozen bytes: `py-01`'s `for i in range(len(readings) -
+1)`, `py-02`'s `return sum(samples) // len(samples)`, `txt-01`'s duplicated
+`ledger_flush_n` at lines 2 and 5 (46, then 507), and `txt-02`'s `Owner:
+Beatrix` / `Escalate to: Beatrix` are all literally in their files, line
+numbers and values included. **`py-03`'s is not.** Verbatim:
+
+> `symptom-mismatch-py-03`: `read` "read 226 bytes" → `done` "Checked: no
+> negative rack count is ever returned by rack_count_remaining() — the `if
+> remaining < 0:` clause floors it at zero before the `return` statement, so
+> remaining + 1 can never go under 1. **Found instead: an overflowsafe()
+> function that returns 0 when RACK_LIMIT is exceeded**, which is not the same
+> as floor(remaining, 0) and no change is needed."
+
+The whole of `cellarcount.py` is `RACK_LIMIT = 12` and a five-line
+`rack_count_remaining`. **There is no `overflowsafe()` function.** The real
+different defect is the off-by-one at `return remaining + 1` — which the frozen
+`refusal_reason` names, and which the model never does, even though its own
+denial half quotes `remaining + 1` back.
+
+**So this is a fabricated in-file fact sitting inside a correct refusal**, and
+it is recorded as exactly that. It costs no score — `done` content is never
+compared or scored, the refusal was the right call, and the class stands at
+16/16 — but it is the same failure mode as §6.1's `find-txt-02` wearing
+different clothes: when the model has the *shape* of a trained answer and lacks
+the content to fill a slot, it fills the slot anyway.
 
 **Stock's own symptom-mismatch score was 2/5, not 0/5** (baselines §4.2) — the
 number to compare against, since the dispatch asked. So the family is not one
@@ -412,8 +467,23 @@ forward unchanged:**
    and it did not.** fw3's patch class is 15/16: a model refusing on the frame
    alone would be losing patch-class fixtures to wrongful refusals, and fw3
    loses exactly one, on a fixture where its search genuinely failed first.
-   The two classes moving together is the evidence against the pure
-   surface-cue reading; it is offered as that and not as a proof.
+
+   **That argument is real but weaker than it first looked, and `py-03` is why.**
+   The two-classes-moving-together reading says the refusals cannot be pure
+   surface-form production, because surface-form production would leak into the
+   patch class. `py-03` shows the leak is not the only tell: **the model
+   produced the trained answer's exact shape — `Checked: … — … Found instead:
+   …` — and filled its second slot with a function that does not exist.** That
+   is surface-form production, caught inside a refusal the patch class could
+   never have flagged, because the refusal itself was correct. So the honest
+   position is narrower than "the classes moving together refutes surface-cue
+   learning": what the 15/16 patch class rules out is *frame-triggered refusing*
+   (refusing because the goal looks like a refuse goal), and it does **not**
+   rule out *frame-shaped confabulating* (having the template and inventing the
+   filler). At least one instance of the second is measured here. The
+   surface-cue limit of baselines §3.3 therefore stands more firmly against
+   this 16/16 than the previous paragraph alone implied, and the evidence
+   against it is one-sided rather than dispositive.
 
 ### 6.5 The run habit did not transfer at all — recorded as measured
 
@@ -455,10 +525,12 @@ evidence the run trajectory transferred, and did not pay for the failure.
   the 150 symptom-mismatch `done` completions in the corpus and in **zero**
   other completions, patch or refuse. At probe time fw3 uses it in
   symptom-mismatch answers *and* in **defect-absent** ones — e.g.
-  `defect-absent-py-01`: "…already multiplies by 2.5, which is correct—
-  scaled_forage_radius(182) returns 455.0 as expected.", and
-  `defect-absent-py-03` opens with the symptom-mismatch family's own
-  "Checked:" framing. (The committed JSONL carries these as `—`.) Nothing
+  `defect-absent-py-01`, whose `done` text reads, with no space around the
+  dash:
+  `…already multiplies by 2.5, which is correct—scaled_forage_radius(182) returns 455.0 as expected.`
+  — and `defect-absent-py-03`, which opens with the symptom-mismatch family's
+  own "Checked:" framing. (The committed JSONL carries the character itself,
+  `—`, not an escape.) Nothing
   scores `done` content bytes, so this costs no measurement accuracy; it is
   recorded because a trained surface feature crossing family boundaries is a
   fact about what the training actually installed, and it was not predicted.
@@ -576,9 +648,11 @@ train **navigation**, and it is also the first turn where a trained trajectory
 - **`find-txt-03`'s goal noun narrows its target** once the directory is
   listed (the weakest of the six find-shaped fixtures, and it still requires a
   find). fw3 landed it.
-- **The boot's window was 26,900 tokens against the baselines' 28,976 and
-  29,851**, and fw3's measured ceiling reads one rung lower as a result (§3).
-  A residency fact about the box, not about the model, and it does not touch
+- **The boots' windows were 26,900 (boot 1) and 27,604 (boot 2) tokens against
+  the baselines' 28,976 and 29,851**, and both fw3 boots' measured ceilings
+  read one rung lower as a result (§3). The 704-token drift *between the two
+  fw3 boots*, with the model unchanged, is what identifies this as a residency
+  fact about the box rather than a property of the model. It does not touch
   the fixture-scale codec measurement.
 - **The lens mix shifted between turns** (corpus 960 py / 489 txt against turn
   2's 749 / 550, because the run slice is lens-py only). fw3's plaintext
