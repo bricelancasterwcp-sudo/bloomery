@@ -116,8 +116,8 @@ use render::{
     patch_completion, read_completion, run_completion, Pair, Trajectory, FIND_PATH,
 };
 use scratch::{
-    files_to_materialize, real_target_read, run_exit_code, safe_relative, RequestFile, Scratch,
-    ScratchId,
+    check_command_prefixes, files_to_materialize, real_target_read, run_exit_code, safe_relative,
+    RequestFile, Scratch, ScratchId,
 };
 
 /// One request line's `"cmd"` discriminator. Only `trajectory` exists
@@ -301,6 +301,9 @@ fn require<'a>(
 fn handle_trajectory(req: &TrajectoryRequest) -> Result<TrajectoryResponse, String> {
     let codec = parse_patch_codec(&req.patch_codec)?;
     let envelope = parse_envelope(&req.envelope)?;
+    // Checked for every mode, not just the two that build a scratch grant:
+    // under envelope-v4 these words are rendered into the prompt.
+    check_command_prefixes(&req.commands)?;
 
     match (
         req.expect,

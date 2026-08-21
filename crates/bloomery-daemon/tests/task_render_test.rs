@@ -288,3 +288,125 @@ fn v4_keeps_the_think_preseed_v3_ends_with() {
         "envelope-v4 inherits v3's pre-seed: {rendered:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Demotion beats the grant: a task that may not `run` says so, whatever its
+// grant allows.
+//
+// Driven through a REAL `run_task` rather than `render_task_prompt`, because
+// the wrapper hardcodes `mutating_verbs: true` — the demoted combination
+// only exists on the live route, where `mutating_verbs` is fail-closed
+// (`pager::codec_gate::resolve_mutating_verbs`: an unmeasured or demoted
+// model reads `false`) while the task's grant is whatever the caller asked
+// for. The fixture pattern below is `task_loop_test.rs`'s, restated (a
+// separate `tests/*.rs` file is its own crate and cannot import it).
+// ---------------------------------------------------------------------------
+
+/// A demoted, v4-configured task whose grant DOES carry a command renders
+/// the `none` line — never the granted one. Without this rule the model
+/// would read `Granted commands: python3 -m unittest` directly above the
+/// read-only card's `patch and run are not available in this task`.
+#[test]
+fn a_demoted_v4_task_renders_the_none_line_even_with_a_command_bearing_grant() {
+    use bloomery_core::gguf::GgufMeta;
+    use bloomery_core::grant::Grant;
+    use bloomery_core::journal::Journal;
+    use bloomery_daemon::agents::ImageStore;
+    use bloomery_daemon::pager::Pager;
+    use bloomery_daemon::task::{run_task, ExecBounds, TaskSpec, TaskStatus};
+    use bloomery_substrate::fake::FakeSubstrate;
+    use bloomery_substrate::Reply;
+
+    let dir = std::env::temp_dir().join(format!(
+        "bloomery-taskrender-demoted-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    let sandbox = dir.join("sandbox");
+    std::fs::create_dir_all(&sandbox).unwrap();
+    let sandbox = std::fs::canonicalize(&sandbox).unwrap();
+
+    // The grant a run-verified task carries — granted here, and deliberately
+    // NOT what the prompt is allowed to advertise, because the task is
+    // demoted.
+    let grant = Grant::from_json(&format!(
+        r#"{{"read_roots":["{s}"],"write_roots":[],"commands":[["python3","-m","unittest"]]}}"#,
+        s = sandbox.display()
+    ))
+    .unwrap();
+
+    let mut fake = FakeSubstrate::new();
+    fake.script_reply(Reply {
+        text: "<action verb=\"done\">\nnothing to do\n</action>".to_string(),
+        prompt_tokens: Some(8),
+        completion_tokens: Some(4),
+        duration_ms: 1,
+    });
+    let mut pager = Pager::new(
+        fake,
+        Journal::open(&dir.join("pager.jsonl")).unwrap(),
+        ImageStore::new(&dir.join("img")).unwrap(),
+        Box::new(|| Some(1024 * 1024 * 1024)),
+    );
+    let gguf = dir.join("m.gguf");
+    std::fs::write(&gguf, b"fake weights").unwrap();
+    pager
+        .register_model(
+            "m",
+            &gguf,
+            GgufMeta {
+                arch: "qwen2".into(),
+                layers: 4,
+                kv_heads: 2,
+                head_dim: 32,
+                training_ctx: 65536,
+                weights_bytes: 1000,
+            },
+            None,
+        )
+        .unwrap();
+    let agent = pager.create_agent("m", 100, None, 1_000_000).unwrap();
+
+    let spec = TaskSpec {
+        goal: GOAL.to_string(),
+        grant,
+        budget_tokens: 1_000_000,
+        max_steps: 5,
+        cwd: sandbox.clone(),
+        patch_codec: PatchCodec::SearchReplace,
+        bounds: ExecBounds {
+            read_cap_bytes: 256 * 1024,
+            find_result_cap: 100,
+            run_output_cap_bytes: 64 * 1024,
+            run_timeout_secs: 120,
+        },
+        // Gate G4 demotion — the fail-closed value an unmeasured model gets.
+        mutating_verbs: false,
+        envelope: EnvelopeLens::V4,
+    };
+    let mut task_journal = Journal::open(&dir.join("task.jsonl")).unwrap();
+    let result = run_task(&mut pager, &agent.id, &spec, &mut task_journal);
+    assert_eq!(result.status, TaskStatus::Done, "{:?}", result.steps);
+
+    // One step, so the whole history IS the single rendered prompt.
+    let prompt = pager
+        .substrate()
+        .ctx_history(1)
+        .expect("context 1 is resident after a 1-step task");
+    assert!(
+        prompt.starts_with(&format!(
+            "{GOAL}\n\nGranted commands: none — run is not available in this task\n\n"
+        )),
+        "a demoted v4 task must render the none line: {prompt:?}"
+    );
+    assert!(
+        !prompt.contains("python3"),
+        "a demoted task must never see its grant's commands advertised: {prompt:?}"
+    );
+    assert!(
+        prompt.contains("patch and run are not available in this task"),
+        "the demoted task gets the read-only verb card: {prompt:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

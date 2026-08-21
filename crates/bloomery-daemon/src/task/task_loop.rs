@@ -292,6 +292,9 @@ struct RenderInputs<'a> {
     mutating_verbs: bool,
     envelope: EnvelopeLens,
     /// The granted argv prefixes — `spec.grant.commands()` for the loop.
+    /// Read only when `mutating_verbs` is set: a demoted task cannot `run`
+    /// anything, so its grant line is `none` regardless (see
+    /// [`render_prompt_from`]).
     commands: &'a [Vec<String>],
 }
 
@@ -300,9 +303,29 @@ struct RenderInputs<'a> {
 /// this body; there is no second implementation of prompt assembly anywhere
 /// in the daemon or the factory, which is the property the four anti-drift
 /// tests pin against real `run_task` runs.
+///
+/// **Demotion wins over the grant.** A gate-G4-demoted task
+/// (`mutating_verbs == false`) may not use `run` at all — [`run_task`]
+/// refuses the verb structurally before `execute_action` dispatches it — so
+/// the grant line renders as `none` no matter what the task's grant allows.
+/// This is not cosmetic: `mutating_verbs` is fail-closed on the live HTTP
+/// route (`pager::codec_gate::resolve_mutating_verbs` — an unmeasured or
+/// demoted model reads `false`), so without this a v4-configured demoted
+/// model handed a command-bearing grant would read `Granted commands:
+/// python3 -m unittest` directly above the read-only card's `patch and run
+/// are not available in this task`. Advertising a verb the loop will refuse
+/// is exactly what rendering from the enforced grant exists to prevent; the
+/// `none` line is the truthful statement for a task that cannot run
+/// anything. Byte-neutral for every turn-4 surface, all of which are
+/// `mutating_verbs: true`.
 fn render_prompt_from(goal: &str, inputs: RenderInputs<'_>, transcript: &str) -> String {
     let grant_section = if inputs.envelope.grant_line() {
-        format!("{}\n\n", grant_line(inputs.commands))
+        let runnable: &[Vec<String>] = if inputs.mutating_verbs {
+            inputs.commands
+        } else {
+            &[]
+        };
+        format!("{}\n\n", grant_line(runnable))
     } else {
         String::new()
     };

@@ -74,6 +74,39 @@ pub(crate) fn safe_relative(path: &str) -> Result<PathBuf, String> {
     Ok(p.to_path_buf())
 }
 
+/// Rejects any `commands` entry that is not a usable argv prefix: an empty
+/// prefix, or one containing an empty/whitespace-only word.
+///
+/// Same doctrine as [`safe_relative`] and the binary's parsers — an input
+/// this tool cannot honor is a NAMED error, never silently ignored — but the
+/// reason it is checked here, for every mode, is envelope-v4. `commands` used
+/// to reach only [`Scratch::grant`], which validates it (`Grant::from_json`
+/// refuses an empty prefix); patch and refuse mode build no scratch at all,
+/// so their `commands` went entirely unread. Under v4 those same bytes are
+/// *rendered into the prompt*, where an empty prefix would produce a dangling
+/// `Granted commands: ` and a blank word a stray double space — training text
+/// asserting a capability nobody can name. A whitespace-only word is refused
+/// for the same reason `Grant` refuses the empty prefix: `check_command`
+/// matches argv element-wise, so no real `run` could ever match it.
+pub(crate) fn check_command_prefixes(commands: &[Vec<String>]) -> Result<(), String> {
+    for (index, prefix) in commands.iter().enumerate() {
+        if prefix.is_empty() {
+            return Err(format!(
+                "commands[{index}] is an empty argv prefix: a granted command must name at least \
+                 one argv word"
+            ));
+        }
+        if let Some(word) = prefix.iter().position(|w| w.trim().is_empty()) {
+            return Err(format!(
+                "commands[{index}][{word}] is blank: every word of a granted argv prefix must be \
+                 non-empty and not whitespace (a run action's argv is matched element-wise, so a \
+                 blank word can never match)"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Everything about a request that determines what its scratch directory
 /// will contain — and therefore, under ruling bT7/R1, everything the
 /// directory's name is derived from.
@@ -538,6 +571,40 @@ mod tests {
     #[test]
     fn fields_are_length_prefixed_so_a_shifted_split_does_not_collide() {
         assert_ne!(id("ab", "c", &[]).digest(), id("a", "bc", &[]).digest());
+    }
+
+    // -----------------------------------------------------------------
+    // `commands` validation (turn-4): an argv prefix the prompt could not
+    // state truthfully is a named error, for every mode.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn a_usable_argv_prefix_passes_the_commands_check() {
+        let commands = vec![
+            vec![
+                "python3".to_string(),
+                "-m".to_string(),
+                "unittest".to_string(),
+            ],
+            vec!["cargo".to_string(), "test".to_string()],
+        ];
+        assert!(check_command_prefixes(&commands).is_ok());
+        assert!(check_command_prefixes(&[]).is_ok(), "no commands is fine");
+    }
+
+    #[test]
+    fn an_empty_argv_prefix_is_a_named_error() {
+        let err = check_command_prefixes(&[vec![]]).unwrap_err();
+        assert!(err.contains("commands[0]"), "{err}");
+        assert!(err.contains("empty argv prefix"), "{err}");
+    }
+
+    #[test]
+    fn a_blank_word_in_an_argv_prefix_is_a_named_error() {
+        let commands = vec![vec!["python3".to_string(), "   ".to_string()]];
+        let err = check_command_prefixes(&commands).unwrap_err();
+        assert!(err.contains("commands[0][1]"), "{err}");
+        assert!(err.contains("blank"), "{err}");
     }
 
     // -----------------------------------------------------------------

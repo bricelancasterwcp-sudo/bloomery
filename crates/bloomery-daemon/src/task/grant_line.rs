@@ -15,10 +15,21 @@
 //! **Rendered from the enforced `Grant`, never from task text.** The caller
 //! ([`crate::task::task_loop::render_prompt`]) passes
 //! `spec.grant.commands()` — the very allowlist `exec_run` checks against —
-//! so the model can never be told something the loop would refuse. The
-//! rejected alternative (a sentence in the fixture's goal text) needed no
-//! envelope bump but would have taught permissions from the task author, with
-//! two authoring surfaces obliged to agree.
+//! so the model can never be told something the loop would refuse. (The one
+//! place the grant is not the last word is gate-G4 demotion, which is
+//! *stricter*: a `mutating_verbs == false` task may not `run` at all, so its
+//! caller passes no commands and this renders [`NONE_LINE`] — see
+//! `render_prompt_from`.) The rejected alternative (a sentence in the
+//! fixture's goal text) needed no envelope bump but would have taught
+//! permissions from the task author, with two authoring surfaces obliged to
+//! agree.
+//!
+//! **The line states argv PREFIXES, not whole commands.** `Grant::check_command`
+//! matches element-wise on the prefix, so the grant `["python3","-m","unittest"]`
+//! rendered as `Granted commands: python3 -m unittest` also permits
+//! `python3 -m unittest -v test_stats.py` — the line understates what is
+//! allowed rather than overstating it, which is the safe direction for a
+//! statement the model acts on.
 //!
 //! Exact bytes are load-bearing: they are prompt content the model reads
 //! verbatim and every turn-4 verdict is measured under them, so they are

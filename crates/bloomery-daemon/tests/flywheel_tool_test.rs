@@ -446,14 +446,15 @@ fn bin_trajectory_request_lands_with_three_pairs_and_the_exact_search_block() {
 }
 
 #[test]
-fn bin_trajectory_prompts_end_with_think_preseed_under_v2_and_v3_not_v1() {
+fn bin_trajectory_prompts_end_with_think_preseed_under_v2_v3_v4_not_v1() {
     const PRESEED: &str = "<think>\n\n</think>\n\n";
 
     let v1 = run_flywheel_tool(&trajectory_request("v1"));
     let v2 = run_flywheel_tool(&trajectory_request("v2"));
     let v3 = run_flywheel_tool(&trajectory_request("v3"));
+    let v4 = run_flywheel_tool(&trajectory_request("v4"));
 
-    for (label, response) in [("v1", &v1), ("v2", &v2), ("v3", &v3)] {
+    for (label, response) in [("v1", &v1), ("v2", &v2), ("v3", &v3), ("v4", &v4)] {
         let prompt0 = response["pairs"][0]["prompt"]
             .as_str()
             .unwrap_or_else(|| panic!("{label}: missing pairs[0].prompt in {response}"));
@@ -526,6 +527,33 @@ fn bin_v4_patch_mode_prompts_carry_the_grant_line_from_the_requests_commands() {
         ),
         "the bin's v4 prompt drifted from the loop's renderer"
     );
+}
+
+/// An unusable argv prefix is a named error for EVERY mode — including
+/// patch mode, which builds no scratch grant and so never validated
+/// `commands` before envelope-v4 started rendering them into the prompt.
+#[test]
+fn bin_trajectory_request_with_an_unusable_command_prefix_is_a_named_error() {
+    for (label, commands) in [
+        ("empty prefix", serde_json::json!([[]])),
+        ("blank word", serde_json::json!([["python3", "  "]])),
+    ] {
+        let mut request = trajectory_request("v4");
+        request
+            .as_object_mut()
+            .expect("request is an object")
+            .insert("commands".to_string(), commands);
+
+        let response = run_flywheel_tool(&request);
+        let error = response["error"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{label}: expected an error field, got {response}"));
+        assert!(error.contains("commands[0]"), "{label}: {error}");
+        assert!(
+            response.get("pairs").is_none(),
+            "{label}: a refused request renders no pairs: {response}"
+        );
+    }
 }
 
 #[test]
