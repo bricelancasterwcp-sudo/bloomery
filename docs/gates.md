@@ -69,4 +69,14 @@ codec-tasks-v2-mixed remains the recorded turn-2 instrument, frozen and
 unamended. Floors stay per-class, never blended; advisory posture
 unchanged.
 
+**Amendment (2026-08-21, recorded before the v4 instrument exists):** turn 4's
+decided-G5 instrument is fixture set codec-tasks-v4-mixed (16 `expect="patch"`
++ 16 `expect="refuse"`), run under `bloomery-task-envelope-v4`; the floor stays
+≥13/16 per class, the decided/provisional flag is the two-sided Wilson rule
+(bT10/R1) and is always stated separately from the floor; scoring per
+docs/superpowers/evidence/2026-08-21-g5v4-protocol.md. Results are
+per-(model, envelope): codec-tasks-v3-mixed under envelope-v3 remains the
+recorded turn-3 instrument, frozen and unamended; no cross-envelope comparison
+is written.
+
 ---
