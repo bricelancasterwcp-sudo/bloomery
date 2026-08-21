@@ -134,9 +134,9 @@ fn shape_source(f: &Fixture) -> String {
 /// Scoped per class on purpose. A shape appearing in BOTH classes is not a
 /// violation — it is the point: if every `scaled_*`-shaped file in the set
 /// were a refusal, the shape alone would leak the label, and the gate would
-/// stop measuring refusal honesty. v4 shares three shapes across the class
+/// stop measuring refusal honesty. v4 shares four shapes across the class
 /// line for exactly this reason (the extremum loop, the `scaled_*`
-/// multiplier, and the checkpoint loop each appear once as a patch fixture
+/// multiplier, the dict-key lookup, and the two-section INI each appear once as a patch fixture
 /// and once as a refusal).
 #[test]
 fn v4_mixed_no_two_fixtures_in_a_class_share_a_code_shape() {

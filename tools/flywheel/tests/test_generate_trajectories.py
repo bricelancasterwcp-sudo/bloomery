@@ -199,7 +199,7 @@ class RealToolTrajectoryShapesTest(unittest.TestCase):
     """The brief's end-to-end row through the REAL binary, one per new
     shape. The stub can only echo canned text; only the real tool proves
     the `find` observation came from a real `exec_find` walk and the `run`
-    observation from a real `exec_run` of `py_compile` against the PATCHED
+    observation from a real `exec_run` of the planted `unittest` against the PATCHED
     file."""
 
     @classmethod
