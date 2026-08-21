@@ -55,6 +55,15 @@ through as they land, same commit) — and a *Process lessons* block. Recorded
 here because the evidence docs that found them are records of runs, not a
 registry of debt.
 
+**Amended 2026-08-20** (flywheel turn 3, merge-time append): the flywheel
+turn-2 section's **two named fast-follows** — the refusal validator's
+structural check-first assertion, and all-`files` contamination screening —
+are delivered and **struck through in place** in that section, in the
+2026-08-15 item-7 convention (struck where they were recorded, not moved), each
+with what closed it. Turn 3's own section is added below with its settled
+rulings, its deferred minors, and its process lessons. Nothing else in this
+file is touched.
+
 ## Delivered in Phase 2a (2026-08-14)
 
 Struck through, never deleted: the original text stands as recorded, with
@@ -142,15 +151,29 @@ patch + 10/10 refuse, both provisional at n=10) — first `done_trust`.
 
 **Deferred from this slice (final-review triage: all defer-sound):**
 
-- **First fast-follow:** `validate_refusal_task` lacks a structural
+- ~~**First fast-follow:** `validate_refusal_task` lacks a structural
   assertion that refusal goals end with the check-first instruction
   (the patch-side validator has the `DONE_INSTRUCTION` analog). Today
   every template routes through `goal_phrasing` which appends it by
-  construction; a turn-3 template could silently drop it.
-- Contamination guard screens only `target_contents` per task; a
+  construction; a turn-3 template could silently drop it.~~
+  **DELIVERED in flywheel turn 3 (2026-08-20, Task 4, commit `1f0b8f0`)** —
+  `CHECK_INSTRUCTION` is canonical in `tools/flywheel/factory/task.py` and the
+  refusal validator now asserts structurally that the goal ends with it
+  (`task.py:360-361`), so the turn-3 templates this bullet worried about are
+  covered by construction rather than by routing discipline.
+- ~~Contamination guard screens only `target_contents` per task; a
   missing-target task's *sibling* file (name/contents) is screened by
   neither sampler nor CLI. Exposure nil today (sibling content never
-  enters a rendered pair); fast-follow: screen all `task.files`.
+  enters a rendered pair); fast-follow: screen all `task.files`.~~
+  **DELIVERED in flywheel turn 3 (2026-08-20, Task 4, commit `1f0b8f0`)** —
+  `_violations_for_task` takes the whole `files` map, and both callers (the
+  draw-time sampler and the post-hoc CLI) screen through that one
+  implementation (`tools/flywheel/factory/contamination.py`). Note what the
+  "exposure nil today" clause was resting on: turn 3 is the first turn with
+  **multi-file** tasks, so the sibling exposure would have become real the
+  moment the find templates landed. This was a correctness precondition for
+  the rest of turn 3, not hygiene — which is why "Task 4 before Task 7" was a
+  preflight finding rather than a preference.
 - `codec_probe/mod.rs` dormancy doc overstates: G4 scoring is
   unchanged, but `CodecFixture` journal rows now carry `expect` —
   "byte-comparable" is true of scores, not journal bytes. Doc tighten.
@@ -663,6 +686,156 @@ edited**: the write-discard failure mode (edit passes that raise after logging
 ok, silently discarding applied-but-unwritten fixes) struck twice across two
 files and survived a correctly-built sweep pointed at only one of them —
 scoped re-reviews caught it both times.
+
+## Delivered in flywheel turn 3 (2026-08-20, `flywheel3-turn3` branch)
+
+The flywheel's third turn: a `find`/`run` trajectory slice and a third refusal
+family (symptom-mismatch), trained against the hole flywheel2 *measured* rather
+than one anybody anticipated — its patch class failed the v3 floor by exactly
+the size of the find-shaped slice, 0/6
+(`docs/superpowers/evidence/2026-08-20-g5v3-baselines.md` §6).
+**`qwen3-14b-flywheel3` passed the full pre-registered battery**: G4 20/20,
+G5-v3 patch 15/16 (floor pass, provisional) and refuse 16/16 (floor pass,
+decided), `done_trust: true` — the first done-trust mark at n=16 per class.
+Find-shaped patch went 0/6 → 5/6 and the pre-registered *productive-find*
+endpoint read 5/6 against 0/6 for both baselines
+(`docs/superpowers/evidence/2026-08-20-flywheel3-battery.md`). The `run`
+trajectory, a third of the same repair slice, showed **zero** observable
+transfer — recorded there as a null result on a trained behaviour.
+
+**Settled (standing rulings for this slice — do not re-litigate without a
+recorded amendment):**
+
+- **The flywheel tool's scratch root is named by a content hash of the
+  request's identity, and held under an exclusive `flock` for the directory's
+  lifetime** (rulings bT7/R1 and bT7/R2,
+  `crates/bloomery-daemon/src/bin/flywheel_tool/scratch.rs`, commits `474b565`
+  + `fe231e1`). The find shape's `exec_find` embeds the canonicalized scratch
+  path in its observation, so a PID-carrying temp dir made two same-seed
+  real-binary runs differ in exactly 999 of 4,263 rows — the determinism law
+  the corpus rests on, broken silently. **The two rejected fixes are the
+  load-bearing half of the ruling:** relativizing the path in `render`, and
+  rewriting the rows factory-side, both post-process real executor output, so
+  the trained text would stop being what the tool actually rendered.
+  Instrument honesty outranks a smaller diff. The `flock` is a *measured*
+  correction to the ruling's own assumption — it supposed the
+  concurrent-identical-request edge merely needed documenting, and a parallel
+  `cargo test` collided 3-in-5 with silently-wrong observations.
+- **`FIND_PATTERN_LITERAL_RE` is a structural validator rule, not a per-family
+  test** (commit `7abcab7`). Find-slice patterns must match
+  `\A[A-Za-z0-9_ ]+\Z`, asserted in `_find_shape_violations`, so every
+  *future* find family inherits it by construction instead of by an author
+  remembering. Three mutations killed; the round's strongest signal was the
+  new rule catching a deliberately bogus test.
+- **`codec-tasks-v3-mixed` is frozen at `e6c7637` — 32 fixtures (16 patch + 16
+  refuse) — with a diversity rule of its own** (`codec_fixtures_v3_diversity_test.rs`).
+  It was audited fixture-by-fixture from its own frozen bytes (goal arithmetic
+  recomputed, `py_compile` run on re-derived patched bytes, 24/24 quoted spans
+  checked against the files) and is never amended after a number has been
+  seen — the same law `codec-tasks-v1` and `codec-tasks-v2-mixed` live under.
+  Two honesty properties of the frozen set are **ruled to stand as frozen and
+  named in every evidence write-up** rather than fixed: the defect-absent
+  family is **3 hard-decidable / 3 soft** (its per-family number is never six
+  equivalent trials), and `v3-refuse-defect-absent-py-01`'s `refusal_reason`
+  cites a calibration sheet absent from the workspace (costing no measurement
+  accuracy — the reason is never compared to model output and never scored).
+- **Productive find is a pre-registered secondary endpoint, and it exists
+  because raw find-usage was *measured* unfit — in both directions.** Stock
+  scores 6/6 on raw usage with no find training at all (every find-shaped goal
+  carries an explicit search instruction) and lands 0/6, so the endpoint is at
+  ceiling for an untrained model; and flywheel2's malformed finds never become
+  `find` steps (they journal as `verb: "?"` with
+  `MissingAttr { verb: "find", attr: "path" }`), so a model learning **only
+  the wire format** moves the raw count 2 → 6 with zero productive gain.
+  Productive find — a well-formed `find` **and** the fixture landing — survives
+  both confounds and was 0/6 for both baselines, so any nonzero value is new.
+  It is **never** kill material and never a floor, and **nothing in the daemon
+  computes it**: it is the measurer's obligation, from the committed rows.
+
+**Flywheel turn 2's two named fast-follows were delivered this slice** and are
+struck through in place in that section above (Task 4, commit `1f0b8f0`): the
+refusal validator's structural check-first assertion, and all-`files`
+contamination screening. The second was a **correctness precondition** for the
+rest of the turn, not hygiene — turn 3 is the first turn with multi-file tasks,
+so the sibling exposure its original text called "nil today" would have gone
+live the moment the find templates landed.
+
+**Deferred from this slice (final-review triage: all defer-sound). One line
+each; per-task detail lives in the SDD ledger at
+`.superpowers/sdd/2026-08-20-flywheel3-turn3/progress.md`:**
+
+- A mistyped `commands` TOML key parses silently empty — no
+  `deny_unknown_fields`, no required-iff rule; the net is the v3 structural
+  test pinning the exact argv prefix on all five run-granted fixtures.
+- `registry.rs:312` still `format!`-interpolates capability-grant JSON
+  unescaped (the `flywheel_tool.rs` twin was closed in Task 6).
+- Grant tests pass a scratch dir that never exists (documented, harmless
+  today); two bare assertions carry no failure message.
+- `shipped_fixture_set_v2_mixed()` has no production caller now that v3 is the
+  live mixed set.
+- The no-duplicate-violation-rows property is unpinned (one assertion on the
+  two-file planted row closes it); `test_contamination_g5`'s `_corpus_row` is
+  legacy-shaped by accident and wants a deliberate-legacy comment so the
+  fallback coverage is not "fixed" away; the canonical-object identity pin was
+  never observed RED (an `ImportError` masked it — structurally unavoidable,
+  recorded).
+- `files`/`target_contents` equality can false-positive above `read_cap_bytes`,
+  producing a dishonest message in that latent case; two mutation-ledger rows
+  do not reconcile (their counts are not quotable downstream; the pins do
+  bite).
+- Four-way fixture-helper duplication in the tool's tests wants a
+  `tests/common` module; `files_to_materialize` deep-clones.
+- `test_every_slot_gets_a_family_from_its_own_shape_registry` is name-vacuous
+  (the property is covered elsewhere); the plain request's field omission is
+  unpinned and the `found 1 matches` precondition unenforced.
+- A full corpus run leaves ~999 zero-byte `.lock` files in the temp dir; the
+  scratch digest is truncated to 64 bits (hygiene-only, reasoned in code).
+- The v3 diversity normalizer's second pass is logically inert (`drop=true`
+  subsumes it — the test is not weakened, the doc misleads); the
+  missing-target byte-valid branch is weaker than its doc (an empty-contents
+  sibling would pass) — amendment-drift insurance.
+- `v3-patch-find-txt-03`'s goal noun ("sheet") narrows its target once the
+  directory is listed — the weakest of the six find-shaped fixtures, and it
+  still requires a find.
+- Test-file line-cap pressure continues: two turn-3 factory modules sit at
+  exactly the 400-line cap.
+- Style/wording residue: a rows-and-len wart, a seed-test docstring that
+  disagrees with its loop, and the inherited G5 protocol §4 n-specific floor
+  spelling (ledgered, no action).
+
+**Process lessons:**
+
+- **The determinism break was found by measurement, not by review.** Multiple
+  reviewers and a green suite had already been over the find slice; what found
+  it was a test that actually ran the *real* binary twice on the same seed and
+  diffed the rows. Reviews check that code says what its author meant; only a
+  measurement checks that the world agrees. The rule for the next factory:
+  pin determinism against the real tool, never against a stub.
+- **The fix wave introduced its own wrong citation.** The final-review fix wave
+  rewrote the README's determinism section correctly and, in the same commit,
+  cited `474b565` for a change that landed in `cbe5886` — a fresh falsehood
+  created by the act of removing an old one. The scoped re-review caught it
+  only because it verified the *replacement's* accuracy rather than merely
+  confirming the original claim was gone. A fix wave is a change like any
+  other and carries the same burden of proof; "we were only fixing a doc" is
+  not a weaker standard.
+- **Anatomy claims need the same script treatment as counts.** The turn-3
+  baselines doc had every headline verdict reproduced mechanically and still
+  shipped five wrong *anatomy* sentences — "reads the same file six times"
+  (it never obtained content at all), "3 grant violations" (61 rows across 18
+  fixtures), a 6/6 fabrication claim that was really 3 + 2 + 1. Verdicts get
+  recomputed because they are obviously numbers; prose about *why* a model
+  missed is just as much a claim about the journal, and just as recomputable.
+  When two recomputations disagreed, the resolution was a third mechanical
+  recount from the committed JSONL, not an argument — and the implementer was
+  right both times.
+- **A live measurement's boot conditions are part of its record.** flywheel3's
+  boots ran with ~585 MiB more desktop VRAM in use than the baselines', which
+  moved the computed serving window and dropped the measured assay ceiling one
+  rung. It does not touch the fixture-scale codec verdict, and it is written
+  into the evidence anyway — because the alternative is a future reader
+  comparing ceilings across three documents and inferring a model difference
+  that is really a fact about the box.
 
 ## Phase 2 work items (in recommended order)
 
