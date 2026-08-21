@@ -24,8 +24,8 @@
 use bloomery_core::action::lens::{land, Landing, LandingLens, PlainText};
 use bloomery_core::action::PatchBody;
 use bloomery_daemon::codec_probe::fixtures::{
-    shipped_fixture_set, shipped_fixture_set_v2_mixed, shipped_fixture_set_v3_mixed, Expect,
-    Fixture,
+    shipped_fixture_set, shipped_fixture_set_v2_mixed, shipped_fixture_set_v3_mixed,
+    shipped_fixture_set_v4_mixed, Expect, Fixture,
 };
 use bloomery_daemon::task::lens_py::PythonLens;
 use std::collections::BTreeSet;
@@ -356,23 +356,26 @@ fn v2_mixed_fixture_names_are_unique() {
     }
 }
 
-/// Names unique across ALL THREE shipped sets (task-4 brief, widened by the
-/// turn-3 task-8 brief when `codec-tasks-v3-mixed` froze): nothing
+/// Names unique across ALL FOUR shipped sets (task-4 brief, widened by the
+/// turn-3 task-8 brief when `codec-tasks-v3-mixed` froze and again by the
+/// turn-4 task-5 brief when `codec-tasks-v4-mixed` froze): nothing
 /// downstream may alias a fixture from one gate set with one from another
-/// by name. This is the one v3 assertion that lives here rather than in
-/// `codec_fixtures_v3_test.rs` — it is the only one that has to see every
+/// by name. This is the one per-set assertion that lives here rather than
+/// in each set's own suite — it is the only one that has to see every
 /// shipped set at once.
 #[test]
-fn fixture_names_are_unique_across_all_three_shipped_sets() {
+fn fixture_names_are_unique_across_all_four_shipped_sets() {
     let v1 = shipped_fixture_set().expect("shipped_fixture_set");
     let v2 = shipped_fixture_set_v2_mixed().expect("shipped_fixture_set_v2_mixed");
     let v3 = shipped_fixture_set_v3_mixed().expect("shipped_fixture_set_v3_mixed");
+    let v4 = shipped_fixture_set_v4_mixed().expect("shipped_fixture_set_v4_mixed");
     let mut seen = BTreeSet::new();
     for f in v1
         .fixtures
         .iter()
         .chain(v2.fixtures.iter())
         .chain(v3.fixtures.iter())
+        .chain(v4.fixtures.iter())
     {
         assert!(
             seen.insert(f.name.clone()),
@@ -382,7 +385,7 @@ fn fixture_names_are_unique_across_all_three_shipped_sets() {
     }
     assert_eq!(
         seen.len(),
-        v1.fixtures.len() + v2.fixtures.len() + v3.fixtures.len()
+        v1.fixtures.len() + v2.fixtures.len() + v3.fixtures.len() + v4.fixtures.len()
     );
 }
 

@@ -8,6 +8,10 @@ corpus, so the guard's normal direction ("corpus vs gate") inverts -- export
 every v3-mixed FILE as a pseudo-corpus row and run the SAME `check_corpus`
 comparator, once with `codec-tasks-v1` as the gate and once with
 `codec-tasks-v2-mixed`.
+
+Turn 4's `codec-tasks-v4-mixed` gets the same treatment against all three
+older sets, one file further along the same chain:
+`test_contamination_g5_v4.py`.
 """
 
 import unittest

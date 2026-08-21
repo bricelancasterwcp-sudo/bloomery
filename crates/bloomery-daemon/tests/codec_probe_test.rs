@@ -1464,30 +1464,41 @@ fn a_set_with_no_refuse_fixtures_aborts_rather_than_a_vacuous_refuse_keep() {
     assert!(err.reason.contains("0 refuse"), "got {}", err.reason);
 }
 
-/// `run_boot_g5_probe` boots G5 against `codec-tasks-v4-mixed` now (flywheel
-/// turn-4 Task 3), but that file is still Task 3's own placeholder — Task 5
-/// authors and freezes the real 32-fixture content, the same way Task 8 did
-/// for v3. Until then this test's NAME describes the state the file will be
-/// in once Task 5 lands, not the state it is in now: today it exercises the
-/// placeholder-skip path, exactly the shape v3's own placeholder-era test
-/// carried (as `run_boot_g5_probe_refuses_to_run_against_the_shipped_placeholder_set`,
-/// visible at commit `7f4ca52`) before v2 froze, and the shape v2's own
-/// placeholder-era test carried before that. Task 5 flips this body back to
-/// the real-set-runs shape, the same flip Task 8 made for v3.
+/// `run_boot_g5_probe` no longer refuses to run against the shipped set:
+/// flywheel turn-4 Task 5 replaced the Task-3 placeholder in place with the
+/// real, frozen 32-fixture `codec-tasks-v4-mixed` set — see
+/// `fixtures::shipped_fixture_set_v4_mixed`'s doc comment. This restores
+/// the shape Task 8 gave this test during v3's own freeze, and proves the
+/// inverse cheaply, without needing to script all 32 fixtures' worth of
+/// replies: [`MODEL`] is never registered on this pager, so `create_agent`
+/// is refused on the very first fixture the probe attempts — an
+/// infrastructure abort that can ONLY happen if `run_boot_g5_probe`
+/// actually tried to run the real set, since the placeholder-skip branch
+/// never calls `create_agent` at all. The degraded reason therefore names a
+/// per-model probe abort (`g5_probe_aborted_reason`'s shape), never the
+/// placeholder-skip line.
 #[test]
 fn run_boot_g5_probe_runs_the_real_shipped_set_not_a_placeholder_skip() {
     let dir = fresh_dir("g5-boot-real-set");
-    let pager = Mutex::new(build_pager(&dir, vec![]));
+    let journal = Journal::open(&dir.join("pager.jsonl")).unwrap();
+    let images = ImageStore::new(&dir.join("img")).unwrap();
+    let fake = FakeSubstrate::new();
+    let mut pager = Pager::new(fake, journal, images, Box::new(|| Some(1024 * 1024 * 1024)));
+    pager.set_task_journal_path(dir.join("tasks.jsonl"));
+    let pager = Mutex::new(pager);
     let g5_models = vec![MODEL.to_string()];
 
     run_boot_g5_probe(&pager, &g5_models, &dir.join("scratch"))
-        .expect("a placeholder skip is a clean boot, not a journal failure");
+        .expect("an aborted probe is a clean boot, not a journal failure");
 
     let events = pager_events(&dir);
-    assert!(fixture_events(&events).is_empty(), "no fixture ever ran");
+    assert!(
+        fixture_events(&events).is_empty(),
+        "the very first fixture's agent creation fails before any CodecFixture is journaled"
+    );
     assert!(
         verdict_mixed_events(&events).is_empty(),
-        "no verdict ever recorded"
+        "an aborted probe never journals a verdict"
     );
 
     let degraded: Vec<&str> = events
@@ -1497,28 +1508,38 @@ fn run_boot_g5_probe_runs_the_real_shipped_set_not_a_placeholder_skip() {
             _ => None,
         })
         .collect();
-    assert_eq!(degraded.len(), 1, "exactly one skip line: {degraded:?}");
     assert_eq!(
-        degraded[0],
-        g5_placeholder_skip_reason("codec-tasks-v4-mixed-PLACEHOLDER")
+        degraded.len(),
+        1,
+        "exactly one skip/abort line: {degraded:?}"
+    );
+    assert!(
+        degraded[0].starts_with("G5 refusal probe aborted for"),
+        "must be a per-model abort (proving the real set was attempted), not a placeholder skip: {:?}",
+        degraded[0]
+    );
+    assert!(
+        !degraded[0].contains("is a placeholder"),
+        "must NOT take the placeholder-skip path against the real shipped set: {:?}",
+        degraded[0]
     );
 
     let p = pager.lock().unwrap();
-    assert!(p.status().models[0].done_trust.is_none());
-    assert!(p.status().models[0].refusal_gate.is_none());
+    assert!(
+        p.status().models.is_empty(),
+        "MODEL is deliberately never registered on this pager"
+    );
 }
 
-/// The placeholder-skip branch's exact wording, pinned directly against
-/// [`g5_placeholder_skip_reason`] so a wording change is caught even
-/// independent of the boot-level test above — which, for as long as
-/// `codec-tasks-v4-mixed.toml` stays a placeholder, also exercises this
-/// exact string through the shipped file. Once Task 5 freezes the real
-/// set that indirect coverage goes away again (same reason this pin
-/// existed on its own during v2's and v3's own frozen eras), so this direct
-/// pin stays regardless of which era the shipped file is in. The wording
-/// itself is unchanged from v3's era — it was made era-independent (no
-/// task number, no specific gate-set name baked in beyond `set_name`) as
-/// part of turn 3's Task 3 fix report, so no wording change is needed here.
+/// The placeholder-skip branch itself stays correct and reachable in
+/// principle — it just cannot be exercised through the shipped file
+/// anymore (see the test above), exactly as during v2's and v3's frozen
+/// eras. `g5_placeholder_skip_reason`'s exact wording is therefore still
+/// pinned directly, so an accidental wording change is caught even though
+/// the shipped-file integration path no longer covers it. The set name
+/// below is a literal, not a read of the shipped file: this pin is about
+/// the helper's format string, and it must keep biting whichever era the
+/// shipped file is in.
 #[test]
 fn g5_placeholder_skip_reason_wording_is_pinned() {
     assert_eq!(
