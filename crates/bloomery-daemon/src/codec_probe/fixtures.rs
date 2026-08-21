@@ -235,6 +235,31 @@ pub fn shipped_fixture_set_v3_mixed() -> Result<FixtureSet, String> {
     parse_fixture_set(include_str!("../../fixtures/codec-tasks-v3-mixed.toml"))
 }
 
+/// The name `boot::run_boot_g5_probe` checks parsed mixed sets against
+/// before running any model. This const exists so the boot guard can refuse
+/// a placeholder fixture set if one ever returns — a guard that is
+/// independent of which era's placeholder may exist. The placeholder era
+/// for v4 has NOT ended yet: flywheel turn-4 Task 3 ships this file as the
+/// same minimal 2-fixture proof-of-concept v2 and v3 each shipped in their
+/// own placeholder eras, and Task 5 is expected to land the real frozen
+/// content and drop this suffix (the same swap commits cbe5886 and e6c7637
+/// each made for v2 and v3).
+pub const V4_MIXED_PLACEHOLDER_SET_NAME: &str = "codec-tasks-v4-mixed-PLACEHOLDER";
+
+/// Parses the flywheel turn-4 G5 mixed fixture set embedded at
+/// `fixtures/codec-tasks-v4-mixed.toml`.
+///
+/// This file currently ships a minimal 2-fixture placeholder (one patch, one
+/// refuse; `set = "codec-tasks-v4-mixed-PLACEHOLDER"`) to unblock this
+/// task's boot-wiring swap — not yet the real 32-fixture frozen set (design
+/// doc §4). Task 5 is expected to overwrite this file's content in place
+/// with that real, frozen set (dropping the `-PLACEHOLDER` suffix from
+/// `set`), the same path/function/struct shape v2's Task 4 and v3's Task 8
+/// each used, so no caller changes when that lands.
+pub fn shipped_fixture_set_v4_mixed() -> Result<FixtureSet, String> {
+    parse_fixture_set(include_str!("../../fixtures/codec-tasks-v4-mixed.toml"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
