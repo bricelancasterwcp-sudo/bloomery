@@ -14,9 +14,12 @@ re-running, never tune-and-rerun. Any post-commit amendment is a
 
 `qwen36-reap48-flywheel5` = `~/models/hf/Qwen3.6-35B-A3B-REAP48-ours`
 (bf16, text-only `Qwen3_5MoeForCausalLM`, `model_type
-qwen3_5_moe_text`, 40 layers = 10 full-attention + 30 linear
-(Gated-DeltaNet), 133 experts, `mtp_num_hidden_layers: 0`;
-`model.safetensors` sha256
+qwen3_5_moe_text`, 40 layers = **10 full-attention + 30 Gated-DeltaNet,
+as MEASURED** from the checkpoint's own `config.json`
+(`full_attention_interval = 4`, `layer_types` carrying exactly 10
+`full_attention` entries among the 40; spec §2's arithmetic, `block_count
+/ full_attention_interval = 40 / 4 = 10`), 133 experts,
+`mtp_num_hidden_layers: 0`; `model.safetensors` sha256
 `8027ca0a8277b540cd4c62eb7a5bdf6028875e84b33ddcf4f9cd4b0e9d63423b`) + the
 turn-5 LoRA trained below (ONE adapter, from base, on the corpus identified
 in "Corpus identity"), merged, quantized Q4_K_M — a NEW subject and the
@@ -142,6 +145,49 @@ attempt to reconstruct a per-set split the baselines document itself does
 not carry. The over-eager-**patching** failure shape (refuse 9/16 fails
 the floor while patch 13/16 clears it) is separately and directly measured
 by the floor numbers above and is unaffected by this histogram nuance.
+
+### Serving facts of the line (reported, never gated)
+
+Quoted from the baselines document's §7 (`.models[0]` of the daemon's own
+`/status`, plus the boot journal's first `AgentCreated` row and each
+boot's saved POST profile):
+
+| quantity | boot 1 | boot 2 |
+|---|---|---|
+| `kv_per_token` | **20,480** B/tok | **20,480** B/tok |
+| `recurrent_state_bytes` | **65,863,680** B | **65,863,680** B |
+| `kv_per_token_declared` | **false** (derived, not an operator override) | **false** |
+| `window_tokens` (`AgentCreated`) | **107,886** | **95,290** |
+| decode tps (`speed.decode_tps`) | **104.59** tok/s | **101.40** tok/s |
+| prefill tps (`speed.prefill_tps`) | 3,894.65 tok/s | 3,988.73 tok/s |
+| digest (`/status` `.models[0].digest`) | matches `90e2181e8c3175c7f59f911ee70dfcc58cd068977fc657be3a4101d041f591a5` | matches, same |
+
+`ctx_overhead_mib` was the operator-set config value **512** on both boots
+(baselines §2/§3 boot TOML, ≥ the measured 493 MiB compute buffer at
+n_ctx 54,784) — an input, not a `/status`-reported figure, quoted here
+alongside the derived geometry it feeds.
+
+**These are serving facts of the line, reported, and never part of the
+pass/fail floor** (baselines §1.3, §7). The `window_tokens` gap between
+the two boots (107,886 vs. 95,290) is traced by the baselines document
+entirely to a ~246 MiB difference in `free_vram_bytes` recorded at each
+boot's own load time, itself unexplained by anything measured there (GPU
+driver memory-release lag vs. ordinary desktop VRAM growth over the
+inter-boot gap, neither confirmed nor ruled out) — **stated there as a
+finding about the box, never adjudicated further, and it did not affect
+any fixture's `landed` outcome.**
+
+flywheel5's own two boots are **expected to reproduce this same
+geometry** — `kv_per_token` 20,480, `recurrent_state_bytes` 65,863,680,
+`kv_per_token_declared` false, digest matching whatever sha the trained
+GGUF carries once it exists — because these are derived from the GGUF's
+own `full_attention_interval`/`ssm.*` metadata and the pager's charge
+sites, neither of which LoRA training touches. `window_tokens`, decode
+tps and prefill tps are **not** asserted as fixed numbers in advance: per
+the same box-fact caveat the anchor boots themselves demonstrated, they
+may differ boot-to-boot on this box, and any such difference is reported
+exactly as the anchor's own §7 reports it — a box finding, never a
+training effect and never gated.
 
 ### What flywheel5 must do, stated as arithmetic
 
@@ -274,11 +320,30 @@ masked to -100), **no EOS appended** — every completion's trained tail is
 `</action>` (asserted per-batch by `train_common.assert_batch_shape`).
 
 **Unpacked, batch size 1** (ruled 2026-08-22, named in the spec and the
-`train_moe.py` header): naive back-to-back packing would leak context
-across the model's 30 recurrent (Gated-DeltaNet) layers' hidden state —
-the pod's earlier "packed to 4096" run was exactly this naive packing and
-is not repeated. Packing is deferred to a later, separately pre-registered
-side study; it is a non-goal of this turn (spec §7).
+`train_moe.py` header): naive back-to-back packing would leak context two
+ways — **state leakage across the 30 recurrent (Gated-DeltaNet) layers'**
+hidden state, and **cross-attention leakage across the 10 full-attention
+layers** (both reasons, as spec §4.2 gives them) — the pod's earlier
+"packed to 4096" run was exactly this naive packing and is not repeated.
+Packing is deferred to a later, separately pre-registered side study; it
+is a non-goal of this turn (spec §7).
+
+**A slip in the spec's own wording, corrected here.** Spec §4.2 (line 208
+of `2026-08-22-flywheel5-turn5-design.md`) states this rationale as "no
+cross-example leakage through **the 4 attention layers** or the 30
+recurrent layers' state" — but the checkpoint's own config measures **10**
+full-attention layers, not 4 (`full_attention_interval = 4` is the
+*stride* between attention layers, not their count — see the Subject
+section above). This reads as a spike-era transcription slip carried into
+the spec text, not a claim about a different, unpruned checkpoint. The
+rationale itself (leakage across the attention layers, whatever their
+count, and across the 30 recurrent layers) is unaffected by the slip, and
+this pre-registration states the measured count (10) rather than
+repeating the spec's "4." **This is a wording correction only, made here
+because it was caught during review** — the spec itself is not edited
+in place; a dated note is added to this turn's CARRIED-DEBT append
+(`flywheel5-battery.md`, per spec §5's evidence-files list) cross-linking
+back to this paragraph, per the amendment rule below.
 
 **Seeds statement (binding).** `20260816` is unchanged from turns 1-4 on
 both the LoRA-init seed and `TrainingArguments.seed` — it is the
@@ -300,7 +365,19 @@ below).
   `s8qomynzbd`, 50 GB, datacenter `US-WA-1` — SXM availability read "Low"
   at volume-creation time; re-checked at pod-cut time; fallback = SECURE
   cloud or another volume-capable datacenter, recorded if used), holding
-  the base weights, uploaded once (Task 8), never re-uploaded.
+  the base weights, uploaded once (Task 8), never re-uploaded. **Source of
+  these literals:** the Task-8 pod ledger, `target/flywheel5/pod-ledger.md`
+  (local, not committed — the RunPod API responses are saved beside it as
+  `volume.json` and `dc-availability.json`); the pod's own facts (DC
+  actually used, pod id, $/h) are restated in `flywheel5-training.md` when
+  the pod is cut. The ledger records only `US-WA-1` and `EUR-IS-1` as
+  showing any A100-SXM4-80GB availability among the 21 volume-capable
+  datacenters checked (both `uninterruptablePrice: 1.39`, `stockStatus:
+  Low`; `US-WA-1` chosen, no other differentiator surfaced), and flags
+  that "Low" stock is not guaranteed to hold and must be re-checked at
+  pod-cut time. **Controller's live re-check, today ~16:xx CDT:** SXM
+  $1.39/h, `stockStatus` Low in both `US-WA-1` and `EUR-IS-1`; balance
+  $12.96 — unchanged from the Task-8 figures above.
 - **Pod:** RunPod **A100-SXM4-80GB** ($1.39/h), **150 GB** container disk
   (PCIe with 200+ GB has hung at `runtime: null` in prior turns; do not
   wait past ~5 min on that state), image
