@@ -591,6 +591,11 @@ fn a_demoted_spec_refuses_run_the_same_way() {
     assert!(result.steps[0].failed);
     assert_eq!(result.steps[0].outcome, MUTATING_VERB_DEMOTED);
     assert_eq!(result.steps[0].content, MUTATING_VERB_DEMOTED);
+    assert_eq!(
+        result.steps[0].args,
+        vec!["echo".to_string(), "hi".to_string()],
+        "a refused run step's args must equal the refused argv, turn-5 spec §3"
+    );
     assert_eq!(result.steps[1].verb, "done");
 }
 
