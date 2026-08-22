@@ -64,6 +64,18 @@ with what closed it. Turn 3's own section is added below with its settled
 rulings, its deferred minors, and its process lessons. Nothing else in this
 file is touched.
 
+**Amended 2026-08-21** (flywheel turn 4, merge-time append): one turn-3
+deferred one-liner — the ~999 zero-byte `.lock` files a full corpus run left
+behind — is delivered and **struck through in place** in that section (2026-08-15
+item-7 convention), with the verify-after-acquire protocol that closed it and
+the companion clause that still stands. A **second** turn-3 carry closed this
+turn, the *sibling-filename* contamination rule, was never given a bullet in
+this file — it lived only in the turn-3 SDD ledger as an out-of-scope carry —
+so it is recorded as delivered in turn 4's own section below rather than
+struck somewhere it was never written. Turn 4's section is added below with
+its settled rulings, its deferred minors, and its process lessons. Nothing
+else in this file is touched.
+
 ## Delivered in Phase 2a (2026-08-14)
 
 Struck through, never deleted: the original text stands as recorded, with
@@ -788,7 +800,16 @@ each; per-task detail lives in the SDD ledger at
 - `test_every_slot_gets_a_family_from_its_own_shape_registry` is name-vacuous
   (the property is covered elsewhere); the plain request's field omission is
   unpinned and the `found 1 matches` precondition unenforced.
-- A full corpus run leaves ~999 zero-byte `.lock` files in the temp dir; the
+- ~~A full corpus run leaves ~999 zero-byte `.lock` files in the temp dir;~~
+  **DELIVERED in flywheel turn 4 (2026-08-21, Task 2, commit `c9221a1`)** —
+  `sweep_lock` now unlinks the lock file at teardown under a
+  **verify-after-acquire** protocol (`flywheel_tool/scratch.rs:225-233`):
+  acquire re-checks that the name still resolves to the inode it locked, and
+  release unlinks only while still holding the lock, so a concurrent holder's
+  file is never swept out from under it. Two unit tests pin both halves
+  (`dropping_a_scratch_removes_the_directory_and_sweeps_its_lock_file`,
+  `the_sweep_leaves_a_lock_file_a_concurrent_holder_still_owns`). The
+  companion clause still stands, unstruck: the
   scratch digest is truncated to 64 bits (hygiene-only, reasoned in code).
 - The v3 diversity normalizer's second pass is logically inert (`drop=true`
   subsumes it — the test is not weakened, the doc misleads); the
@@ -836,6 +857,197 @@ each; per-task detail lives in the SDD ledger at
   into the evidence anyway — because the alternative is a future reader
   comparing ceilings across three documents and inferring a model difference
   that is really a fact about the box.
+
+## Delivered in flywheel turn 4 (2026-08-21, `flywheel4-turn4` branch, merged as PR #18)
+
+The flywheel's fourth turn: **envelope-v4** — a prompt that renders the grant
+line from the real `Grant` the task loop enforces — plus a corpus regenerated
+under it whose `run` slice is trained on the *granted* argv
+(`python3 -m unittest test_<stem>.py`) against a planted test proved to fail
+before the patch and pass after, and a fourth frozen gate set
+(`codec-tasks-v4-mixed`, 32 fixtures) authored to be the net for surface-cue
+learning. It was aimed at a hole the turn-4 baselines *measured* rather than
+one anybody anticipated: under envelope-v4 the incumbent emitted `run` on 5/5
+run-granted fixtures, in the right shape, only where granted — and ran the
+command it was trained on rather than the one the prompt granted, so all five
+were refused at the grant check and **productive run was 0/5**
+(`docs/superpowers/evidence/2026-08-21-g5v4-baselines.md` §5.4).
+
+**`qwen3-14b-flywheel4` passed the full pre-registered battery**: G4 **20/20**
+(the kill leg), G5-v4 patch **16/16** and refuse **16/16** — both floor passes
+and both **decided** — `done_trust: true`, and **productive run 5/5** against
+a measured 0/5 for both envelope-v4 anchors, with the planted test and the
+patched target both compiled to bytecode after the patch on all five fixtures
+(`docs/superpowers/evidence/2026-08-21-flywheel4-battery.md` §5.4). Productive
+find read 6/6, and the two boots produced **zero grant-violation rows and zero
+parse failures** across 72 fixture runs. Every comparison in that document is
+against the two envelope-v4 anchors only; turn-3 numbers are prior records
+under a different prompt and a different fixture set, and no delta against
+them is written anywhere.
+
+**Settled (standing rulings for this slice — do not re-litigate without a
+recorded amendment):**
+
+- **`action_stop` inherits for V4** (ruling bT2/R1). envelope-v4 is
+  envelope-v3 *plus* the grant line and nothing else moves, so the stop
+  sequence is inherited rather than re-declared. The byte-identity law is what
+  makes this checkable: v1/v2/v3 goldens were captured as genuine literals
+  **before** the V4 branch existed and stay GREEN after it, and deleting the
+  grant line kills 12 tests while leaving the goldens untouched.
+- **A multi-prefix grant renders the label once per prefix line** (ruling
+  bT2/R2) — the accepted reading of "one line per prefix". Only the
+  single-prefix form shipped in any corpus or gate this turn; the multi-prefix
+  rendering is pinned by test, not exercised by data.
+- **A demoted model never sees a grant** (Task 2 fix round 1). When
+  `mutating_verbs` is false the v4 renderer emits the `none` line, so a model
+  the G4 gate demoted cannot be told that `run` is available. Verified through
+  the real `run_task` path, not through the renderer alone.
+- **The `unittest` timing line rides in trained text as REAL executor output**
+  (ruling bT4/R1). Every one of the corpus's 333 run renderings carries the
+  planted test's own stdout, `Ran 1 test in 0.000s` included. A test that ever
+  took longer than 0.5 ms would render `0.001s` and flip bytes, so a
+  re-generation differing **only** in a timing line is a **NAMED-CAUSE**
+  difference, not a determinism break — accepted in preference to sanitizing
+  real executor output (the bT7/R1 principle: instrument honesty outranks a
+  smaller diff). **It did not surface**: the corpus sha matched at training
+  time and twice more after quantize.
+- **The v4 defect-absent family is 6 hard-decidable / 0 soft, and stands as
+  frozen** (ruling bT5/R1). Every claim in that family is settled against the
+  file's own bytes by arithmetic or by literal presence/absence, with no
+  appeal to intent — so a defect-absent miss cannot be excused as a defensible
+  judgment call, and the split is stated in every evidence write-up. The
+  comment-contract band v3 carried can return in a later set if wanted; it is
+  not an amendment to this one.
+- **reason-grounding's denominator is 11, and its haystack is file CONTENTS ∪
+  file PATHS** (ruling bT5/R2 as refined by bF/R1, recorded as a dated
+  amendment in the protocol *before* the endpoint was ever computed). The 5
+  missing-target refuse fixtures are excluded **unconditionally** — their
+  target does not exist in the workspace, so the endpoint is structurally
+  unmeasurable there — leaving the 6 defect-absent + 5 symptom-mismatch rows.
+  A quoted **filename** is a grounded reference, never confabulation. A landed
+  refuse row whose `done` text carries **zero** backtick spans is
+  **unmeasured**, never 100%: an empty numerator over an empty denominator is
+  not evidence of grounding.
+- **reason-grounding measures quoting discipline, not honesty — and turn 4
+  demonstrated that at the endpoint's ceiling.** The limitation was recorded
+  before flywheel4 was measured (baselines §8.1: the confabulation the
+  endpoint was designed after is *bare prose*, so the endpoint would not raise
+  it at all; and every ungrounded flag on the incumbent's boot was a false
+  positive). flywheel4's boot returned **6 of 6 spans grounded — the best
+  score the endpoint can give** — while three of the four rows it measured
+  carry a **false claim built out of grounded spans**, and the boot's one
+  false *repair* claim ("Fixed that before emitting done", on a fixture with
+  no `patch` step and byte-unchanged files) sits in a row scored *unmeasured*
+  (battery §6.3). **The number is reported because it is the pre-registered
+  endpoint's output; it is never read as a confabulation rate, and a high
+  score is not evidence that refusal prose is accurate.** Any change to the
+  endpoint is a separate dated amendment made after a measurement, never
+  inside one.
+
+**A turn-3 carry delivered here that this file never held a bullet for:** the
+**sibling-filename contamination rule**. Turn 3's guard was widened to screen
+all `task.files` *contents* (struck in the turn-2 section above), and the
+turn-3 review explicitly ledgered the *filename*-match half as pre-existing
+and out of scope. Turn 4 closes it (Task 4 ride-along, commit `8c64d66`,
+`tools/flywheel/tests/test_contamination_siblings.py`): a planted test's
+filename is screened against gate targets, so the run slice's `test_<stem>.py`
+siblings cannot collide with a gate fixture by name. Like turn 3's contents
+half, this was a **correctness precondition** rather than hygiene — turn 4 is
+the first turn whose tasks ship a second, factory-named file beside the
+target.
+
+**Deferred from this slice (final-review triage: all defer-sound). One line
+each; per-task detail lives in the SDD ledger at
+`.superpowers/sdd/2026-08-21-flywheel4-turn4/progress.md`:**
+
+- `TaskStep` rows carry **no fixture key and no action arguments** — the
+  `CodecFixture` join stays ordinal (validated, never assumed), and a
+  *granted* `run` journals only `ran python3 exit 0`, so turn 4's headline
+  secondary had to be corroborated from the retained probe scratch rather than
+  read from the record. Carried across three turns now; the recurring
+  observability debt of this program.
+- The tool's `parse_envelope` error string lists `v4` but that listing is
+  untested; the bin-level find/refuse v4 pins exercise only the `none` line;
+  the per-prefix test name exercises a single prefix (the Rust side pins
+  multi).
+- The lock-sweep test asserts `!exists` unconditionally — stronger than the
+  contract, safe today.
+- `flywheel_tool.rs` sits at **783/800** lines: any later tool edit needs a
+  themed split, and the ceiling is a hard one.
+- `planted_test.run_python` has no timeout or output cap, unlike the
+  `exec_run` it mirrors — a future looping test family would hang generation
+  (loud-abort-not-bad-row today); the docstring should say the mirroring stops
+  at bounds, or the call should grow a `timeout=`.
+- The Rust fresh-frame extractor reads **transcribed** skeletons (bounded by a
+  factory-side live-assembler test and an anti-vacuity pin); the rule is
+  pinned on the 12 refuse skeletons only, though it holds wider in fact.
+- Frozen-set residue, named and never amended: `SM-py-01`'s reason drops the
+  `" at <site>"` connector (the site is still quoted and real); the
+  single-line-literal clause is tautological; find-uniqueness is existential
+  (inherited).
+- Turn-4 doc residue: a "verbatim" label on a synthesized anchors table; the
+  fingerprint's phase table reads `kept = 1449` against the written 1448 and
+  wants a footnote; a stale "last commit touching `tools/flywheel`"; three
+  generation-side numbers rest on an ad-hoc harness (descriptive only); a
+  truncated verb-card header quote; the Task-1 `(spec §3, carried into turn 4)`
+  cite is ambiguous on first read.
+- `codec_probe_test.rs` grew +21 lines rather than staying flat, on a file
+  already over the test-file cap (pre-existing, tracked in the *Smaller items*
+  list).
+- **Uninterpreted, deliberately:** `eval_loss` bottomed at 0.0009852 at epoch
+  0.74 and finished at 0.001118. No interpretation was pre-registered and none
+  is offered — the battery decides, and it did.
+- **Recorded, not resolved:** assay's own POST profile scores flywheel4's
+  `patch_editing` cell at *stock's* level (`unusable`, decided, [0.0, 0.434])
+  on the same daemon and in the same boot where bloomery's probe measures
+  20/20 and 16/16 + 16/16. The two instruments run different fixture sets under
+  different prompt lenses; both numbers stand as measured, and neither is
+  evidence about the other.
+
+**Process lessons:**
+
+- **Detach the long-running process from the agent that starts it.** Turn 4's
+  training agent was killed by a harness hiccup at step 539 of 1,086; the
+  training itself was `setsid nohup`-detached and ran to completion untouched,
+  and a *fresh* agent finished the post-train chain — because the harness
+  refuses to resume a stopped agent, whichever way it was stopped. The battery
+  applied the lesson pre-emptively: both daemons were launched detached, so
+  neither a 10-minute POST nor a probe was ever hostage to the agent watching
+  it. **The corollary rule: never wire the measurement's lifetime to the
+  observer's.**
+- **"Prose from the script's output rather than the bytes" struck again, and
+  the fix is the same every time.** Turn 3 shipped five wrong *anatomy*
+  sentences beside mechanically-correct verdicts. Turn 4's baselines review
+  caught two more of exactly that shape — a "neither stock landing read any
+  file" that the committed rows contradicted, and a **cross-envelope causal
+  claim** the standing rule forbids (the instrument changed too; no
+  v4-mixed-under-v3 arm was ever run). The battery task then caught **three of
+  its own draft's** claims the same way — a fixture count, a
+  five-versus-six tally, and a "verbatim" JSON block that had been
+  pretty-printed rather than copied — by re-deriving each from the committed
+  bytes before commit rather than trusting the sentence that felt right.
+  Verdicts get recomputed because they are obviously numbers; prose about
+  *why* is just as much a claim about the journal.
+- **When the journal cannot carry the fact, look for what the run left on
+  disk.** A granted `run` journals the program name and the exit code, never
+  the argv, so `ran python3 exit 0` alone cannot distinguish a real test run
+  from a command that exited 0 doing nothing. The retained probe scratch
+  settles it: `__pycache__/test_<stem>.pyc` **and** `__pycache__/<stem>.pyc`,
+  both stamped after the patched source, on all five fixtures. The headline
+  secondary of the whole turn rests on filesystem residue, and it is stronger
+  evidence than the row that prompted the question.
+- **The executed-audit standard, from the Task-5 fixture review.** All 32
+  frozen fixtures were re-derived from their own bytes by *execution and
+  arithmetic* — the five run fixtures actually run `rc=1 → rc=0`, the
+  fresh-frame rule re-run against the **live** skeletons (0 hits) and against
+  v3's (21 hits, proving the rule non-vacuous), the transcription diffed
+  12/12. A frozen instrument is worth exactly what its audit executed; a read
+  of the TOML is not an audit of it.
+- **A `pgrep -af '<pattern>'` self-matches its own shell command line.** The
+  battery's preflight "is a daemon running?" check answered *yes* for its own
+  `bash -c`. `ps -eo pid,comm | grep -w <name>` answers the question that was
+  asked. This is the standing box trap that also makes `pkill` patterns
+  dangerous here, and it cost a false reading before it was caught.
 
 ## Phase 2 work items (in recommended order)
 
