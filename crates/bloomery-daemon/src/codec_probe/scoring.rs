@@ -206,6 +206,7 @@ mod tests {
             outcome: outcome.to_string(),
             content: String::new(),
             failed,
+            args: Vec::new(),
         }
     }
 

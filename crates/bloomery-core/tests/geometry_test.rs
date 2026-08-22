@@ -162,10 +162,37 @@ fn kv_arithmetic_matches_measured_qwen() {
     let m = GgufMeta {
         arch: "qwen2".into(),
         layers: 28,
+        attention_layers: 28,
         kv_heads: 4,
         head_dim: 128,
         training_ctx: 32768,
         weights_bytes: 0,
+        recurrent_state_bytes: 0,
     };
     assert_eq!(kv_bytes_per_token(&m), 57344); // 56 KiB — robigo's measured row
+}
+
+#[test]
+fn kv_bytes_per_token_counts_attention_layers_only() {
+    use bloomery_core::gguf::GgufMeta;
+    let hybrid = GgufMeta {
+        arch: "qwen35moe".into(),
+        layers: 40,
+        attention_layers: 10,
+        kv_heads: 2,
+        head_dim: 256,
+        training_ctx: 262_144,
+        weights_bytes: 11_755_624_288,
+        recurrent_state_bytes: 65_863_680,
+    };
+    assert_eq!(kv_bytes_per_token(&hybrid), 20_480, "2 * 10 * 2 * 256 * 2");
+    let dense = GgufMeta {
+        attention_layers: 40,
+        ..hybrid.clone()
+    };
+    assert_eq!(
+        kv_bytes_per_token(&dense),
+        81_920,
+        "the pre-fix over-count, for the record"
+    );
 }

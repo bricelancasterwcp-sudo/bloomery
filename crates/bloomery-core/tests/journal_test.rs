@@ -167,6 +167,7 @@ fn agent_removed_and_task_step_round_trip() {
         verb: "patch".into(),
         outcome: "applied".into(),
         duration_ms: 41,
+        args: Vec::new(),
     };
     j.append(&e1).unwrap();
     j.append(&e2).unwrap();
@@ -189,6 +190,7 @@ fn codec_fixture_and_codec_verdict_round_trip() {
         steps: 2,
         detail: "applied".into(),
         expect: "patch".into(),
+        agent: None,
     };
     let e2 = Event::CodecVerdict {
         model: "m1".into(),
@@ -393,4 +395,75 @@ fn committed_g2_journal_still_replays() {
         "expected committed journals to carry a real number of events in \
          aggregate, got {total_events}"
     );
+}
+
+/// Turn-5 spec §3 compat pin: a pre-turn-5 `TaskStep` row carries no `args`
+/// key at all (exactly what every row journaled before this field existed
+/// looks like on disk), and must still deserialize, with `args` defaulting
+/// to empty — never an error, never a synthesized guess at what the
+/// arguments were.
+#[test]
+fn task_step_with_no_args_key_deserializes_with_empty_args() {
+    let line = r#"{"event":"TaskStep","id":"a112","step":1,"verb":"read","outcome":"read 109 bytes","duration_ms":0}"#;
+    let event: Event = serde_json::from_str(line).expect("a pre-turn-5 TaskStep line must parse");
+    match event {
+        Event::TaskStep { args, verb, .. } => {
+            assert!(args.is_empty());
+            assert_eq!(verb, "read");
+        }
+        other => panic!("expected TaskStep, got {other:?}"),
+    }
+}
+
+/// Turn-5 spec §3 compat pin, the `CodecFixture` half: a pre-turn-5 row
+/// carries no `agent` key, and must deserialize with `agent` defaulting to
+/// `None` — the ordinal join stays the only join for old journals; the new
+/// keyed join is only available where the writer knew to record it.
+#[test]
+fn codec_fixture_with_no_agent_key_deserializes_as_none() {
+    let line = r#"{"event":"CodecFixture","model":"m1","fixture_set":"codec-tasks-v1","fixture":"py-mean-off-by-one","codec":"search_replace","landed":true,"steps":3,"detail":"patched (lens: python)","expect":"patch"}"#;
+    let event: Event = serde_json::from_str(line).unwrap();
+    match event {
+        Event::CodecFixture { agent, .. } => assert_eq!(agent, None),
+        other => panic!("expected CodecFixture, got {other:?}"),
+    }
+}
+
+/// New-writer round trip: `TaskStep.args` and `CodecFixture.agent` survive
+/// append/replay unchanged, including the keyed join value itself
+/// (`CodecFixture.agent == TaskStep.id`, turn-5 spec §3).
+#[test]
+fn task_step_args_and_codec_fixture_agent_round_trip() {
+    let dir = std::env::temp_dir().join("bloomery-journal-turn5");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("j.jsonl");
+    let _ = std::fs::remove_file(&path);
+    let mut j = Journal::open(&path).unwrap();
+    let e1 = Event::TaskStep {
+        id: "a7".into(),
+        step: 3,
+        verb: "run".into(),
+        outcome: "ran python3 exit 0".into(),
+        duration_ms: 87,
+        args: vec![
+            "python3".into(),
+            "-m".into(),
+            "unittest".into(),
+            "test_x.py".into(),
+        ],
+    };
+    let e2 = Event::CodecFixture {
+        model: "m1".into(),
+        fixture_set: "codec-tasks-v4-mixed".into(),
+        fixture: "v4-patch-run-py-01".into(),
+        codec: "search_replace".into(),
+        landed: true,
+        steps: 4,
+        detail: "patched (lens: python)".into(),
+        expect: "patch".into(),
+        agent: Some("a7".into()),
+    };
+    j.append(&e1).unwrap();
+    j.append(&e2).unwrap();
+    assert_eq!(replay(&path).unwrap(), vec![e1, e2]);
 }

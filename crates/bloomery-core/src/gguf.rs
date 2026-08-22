@@ -16,10 +16,22 @@ use std::path::Path;
 pub struct GgufMeta {
     pub arch: String,
     pub layers: u32,
+    /// Layers that own a KV cache. `block_count / {arch}.full_attention_interval`
+    /// when that key is present (llama.cpp: layer i is full attention iff
+    /// (i+1) % interval == 0), else `block_count`. Spec 2026-08-22 turn-5 §2.
+    pub attention_layers: u32,
     pub kv_heads: u32,
     pub head_dim: u32,
     pub training_ctx: u32,
     pub weights_bytes: u64,
+    /// Per-context constant for the recurrent (Gated-DeltaNet / SSM) layers:
+    /// sum over `layers - attention_layers` of `[(conv_kernel-1) *
+    /// (inner_size + 2*group_count*state_size) + state_size*inner_size] * 4`
+    /// bytes (llama.cpp's `n_embd_r + n_embd_s`, f32). 0 when the
+    /// `{arch}.ssm.*` keys are absent. Independent of the window. 0 when
+    /// any of the four keys is absent — a partial set is not modeled,
+    /// recorded in the turn-5 spec (2026-08-22 §2).
+    pub recurrent_state_bytes: u64,
 }
 
 /// Errors that can occur while parsing a GGUF file's metadata.
@@ -245,6 +257,70 @@ fn lookup_u32(kvs: &HashMap<String, GgufValue>, key: &str) -> Result<u32, GgufEr
     lookup_int(kvs, key).map(|v| v as u32)
 }
 
+/// `Ok(None)` when `key` is absent; the usual error when it is present but not an integer.
+fn lookup_u32_opt(kvs: &HashMap<String, GgufValue>, key: &str) -> Result<Option<u32>, GgufError> {
+    if kvs.contains_key(key) {
+        lookup_u32(kvs, key).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+fn resolve_attention_layers(
+    kvs: &HashMap<String, GgufValue>,
+    arch: &str,
+    layers: u32,
+) -> Result<u32, GgufError> {
+    let key = format!("{arch}.full_attention_interval");
+    match lookup_u32_opt(kvs, &key)? {
+        None => Ok(layers),
+        Some(0) => Err(GgufError::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{key} is zero"),
+        ))),
+        Some(k) => {
+            let attention_layers = layers / k;
+            // `layers / k == 0` means the interval is larger than
+            // block_count: no layer satisfies llama.cpp's `(i+1) % k == 0`
+            // rule. Mathematically that IS zero full-attention layers, but
+            // zero routes `kv_bytes_per_token` to the kv_per_token == 0
+            // unbounded-window path (geometry.rs) — a silent "this model
+            // has no context limit at all" rather than the config error it
+            // almost certainly is. Reject instead of laundering it through.
+            if layers > 0 && attention_layers == 0 {
+                return Err(GgufError::Io(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("{key} exceeds block_count"),
+                )));
+            }
+            Ok(attention_layers)
+        }
+    }
+}
+
+/// f32 bytes per recurrent layer x recurrent layers; 0 unless all four ssm keys are present.
+fn resolve_recurrent_state_bytes(
+    kvs: &HashMap<String, GgufValue>,
+    arch: &str,
+    recurrent_layers: u32,
+) -> Result<u64, GgufError> {
+    let (conv_kernel, state_size, group_count, inner_size) = (
+        lookup_u32_opt(kvs, &format!("{arch}.ssm.conv_kernel"))?,
+        lookup_u32_opt(kvs, &format!("{arch}.ssm.state_size"))?,
+        lookup_u32_opt(kvs, &format!("{arch}.ssm.group_count"))?,
+        lookup_u32_opt(kvs, &format!("{arch}.ssm.inner_size"))?,
+    );
+    let (Some(conv_kernel), Some(state_size), Some(group_count), Some(inner_size)) =
+        (conv_kernel, state_size, group_count, inner_size)
+    else {
+        return Ok(0);
+    };
+    let conv_dim = u64::from(inner_size) + 2 * u64::from(group_count) * u64::from(state_size);
+    let per_layer = u64::from(conv_kernel.saturating_sub(1)) * conv_dim
+        + u64::from(state_size) * u64::from(inner_size);
+    Ok(u64::from(recurrent_layers) * per_layer * 4)
+}
+
 fn lookup_string(kvs: &HashMap<String, GgufValue>, key: &str) -> Result<String, GgufError> {
     match kvs.get(key) {
         Some(GgufValue::Str(s)) => Ok(s.clone()),
@@ -304,12 +380,18 @@ pub fn parse_gguf_meta(path: &Path) -> Result<GgufMeta, GgufError> {
     let head_dim = resolve_head_dim(&kvs, &arch)?;
     let training_ctx = lookup_u32(&kvs, &format!("{arch}.context_length"))?;
 
+    let attention_layers = resolve_attention_layers(&kvs, &arch, layers)?;
+    let recurrent_state_bytes =
+        resolve_recurrent_state_bytes(&kvs, &arch, layers.saturating_sub(attention_layers))?;
+
     Ok(GgufMeta {
         arch,
         layers,
+        attention_layers,
         kv_heads,
         head_dim,
         training_ctx,
         weights_bytes: file_len,
+        recurrent_state_bytes,
     })
 }

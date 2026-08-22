@@ -210,6 +210,7 @@ impl<S: Substrate> crate::pager::Pager<S> {
         steps: u32,
         detail: &str,
         expect: &str,
+        agent: &str,
     ) -> Result<(), PagerError> {
         jrnl::codec_fixture(
             &mut self.journal,
@@ -221,6 +222,7 @@ impl<S: Substrate> crate::pager::Pager<S> {
             steps,
             detail,
             expect,
+            Some(agent),
         )
     }
 

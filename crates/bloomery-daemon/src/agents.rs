@@ -35,13 +35,17 @@ pub struct Agent {
     pub kv_bytes: u64,
     /// What making this agent resident actually costs the VRAM budget:
     /// `kv_bytes` plus the per-context runtime overhead
-    /// (`Pager::set_ctx_overhead_bytes`).
+    /// (`Pager::set_ctx_overhead_bytes`) plus this model's per-context
+    /// recurrent-state charge (`GgufMeta::recurrent_state_bytes`, turn-5
+    /// spec §2 — 0 for a dense model).
     ///
-    /// The two are different numbers because llama.cpp allocates more than a
-    /// KV cache per context: the 2026-08-14 natural-pressure run measured a
+    /// The terms are different numbers because llama.cpp allocates more than
+    /// a KV cache per context: the 2026-08-14 natural-pressure run measured a
     /// 304 MiB `Vulkan0` compute buffer and a 30 MiB host buffer alongside
     /// every 896 MiB KV cache, and planning against the KV alone put six
-    /// contexts where five fit and OOM'd the device. Every residency
+    /// contexts where five fit and OOM'd the device. A hybrid Gated-DeltaNet
+    /// model additionally allocates a fixed recurrent-state buffer per
+    /// context that the KV-cache math never counts at all. Every residency
     /// decision — placement, eviction sufficiency, the time-sharing
     /// tiebreak — reads this field, never `kv_bytes`.
     pub reserved_bytes: u64,

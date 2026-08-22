@@ -87,6 +87,13 @@ pub enum Event {
         verb: String,
         outcome: String,
         duration_ms: u64,
+        /// The action's model-supplied arguments, verbatim and in order
+        /// (turn-5 spec §3): read -> [path] (+ "lines=a-b"); find ->
+        /// [pattern, path]; patch -> [path] (never the body); run -> argv;
+        /// done / unparseable -> []. `#[serde(default)]` so pre-turn-5 rows
+        /// replay with an empty list.
+        #[serde(default)]
+        args: Vec<String>,
     },
     /// One codec-probe fixture run (G4/G5 instrument). `detail` is the last
     /// patch step's outcome, or the terminal status when no patch step ran
@@ -108,6 +115,11 @@ pub enum Event {
         /// byte-identically (the compat pin, `journal_test.rs`).
         #[serde(default = "default_expect_patch")]
         expect: String,
+        /// The agent that ran this fixture — the exact join key to its
+        /// `TaskStep` rows (`CodecFixture.agent == TaskStep.id`), replacing
+        /// the ordinal join (turn-5 spec §3). `None` on pre-turn-5 rows.
+        #[serde(default)]
+        agent: Option<AgentId>,
     },
     /// The per-model G4 verdict, emitted exactly once per completed probe
     /// (never for an aborted one — unmeasured is not an event, it is the

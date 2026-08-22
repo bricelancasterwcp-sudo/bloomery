@@ -58,15 +58,22 @@ impl ModelEntry {
     /// [`Self::effective_weights_bytes`]).
     ///
     /// **Deliberately unclamped**, unlike [`Self::effective_weights_bytes`]:
-    /// spec §10 is explicit that a declared value SMALLER than the
-    /// GGUF-derived figure is the whole point (the pager's GGUF-derived
-    /// formula overcounts hybrid-DeltaNet architectures ~4×), and a declared
-    /// value LARGER is allowed too (extra conservative, never an OOM
+    /// a declared value is a *measured* override for geometries the formula
+    /// does not model; since turn 5 the formula itself counts only attention
+    /// layers (`GgufMeta::attention_layers`), so the override is no longer
+    /// needed for Qwen3.5/3.6 hybrids. A declared value LARGER than the
+    /// GGUF-derived figure is allowed too (extra conservative, never an OOM
     /// direction). Declaring too small IS the OOM direction — the window law
     /// would grant tokens whose real KV exceeds VRAM — so this never
     /// second-guesses the declared number the way the weights charge does.
     pub(crate) fn effective_kv_per_token(&self) -> u64 {
         self.kv_per_token_bytes.unwrap_or(self.kv_per_token)
+    }
+
+    /// Per-context recurrent-state charge (turn-5 spec §2) — a GGUF-derived
+    /// constant, never overridden: the override story is `kv_per_token_bytes`'s.
+    pub(crate) fn recurrent_state_bytes(&self) -> u64 {
+        self.meta.recurrent_state_bytes
     }
 }
 

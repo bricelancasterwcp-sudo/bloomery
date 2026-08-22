@@ -43,10 +43,12 @@ fn meta(weights_bytes: u64) -> bloomery_core::gguf::GgufMeta {
     bloomery_core::gguf::GgufMeta {
         arch: "qwen2".into(),
         layers: 28,
+        attention_layers: 28,
         kv_heads: 4,
         head_dim: 128,
         training_ctx: 4096,
         weights_bytes,
+        recurrent_state_bytes: 0,
     }
 }
 
@@ -544,5 +546,100 @@ fn a_sibling_blind_automatic_window_still_refuses_item_7_third_half() {
         events.iter().any(|e| matches!(e,
             Event::Refusal { id, detail, .. } if id == &a2.id && detail == &expected_detail)),
         "expected detail {expected_detail:?} not found in {events:?}"
+    );
+}
+
+fn hybrid_meta(weights_bytes: u64) -> bloomery_core::gguf::GgufMeta {
+    bloomery_core::gguf::GgufMeta {
+        arch: "qwen35moe".into(),
+        layers: 40,
+        attention_layers: 10,
+        kv_heads: 2,
+        head_dim: 256,
+        training_ctx: 4096,
+        weights_bytes,
+        recurrent_state_bytes: 65_863_680,
+    }
+}
+
+/// Turn-5 spec §2: a hybrid model's recurrent state is a per-context
+/// constant charged beside `ctx_overhead_bytes` — in the window law AND in
+/// the agent's reservation — and surfaced on `/status` per model.
+#[test]
+fn recurrent_state_is_charged_per_context_and_reported() {
+    let dir = fresh_dir("bloomery-resv-recurrent");
+    let (mut p, _j) = pager_in(&dir, 0, Some(4096 * MIB));
+    p.set_ctx_overhead_bytes(8 * MIB);
+    let gguf = write_gguf(&dir, "h.gguf");
+    p.register_model("h", &gguf, hybrid_meta(200 * MIB), None)
+        .unwrap();
+    let a = p.create_agent("h", 100, Some(WINDOW_CAP), 1000).unwrap();
+    assert_eq!(
+        a.window_tokens, WINDOW_CAP,
+        "the cap binds; the recurrent charge must not starve it at this budget"
+    );
+    let st = p.status();
+    let agent = st.agents.iter().find(|x| x.id == a.id).unwrap();
+    // kv = 1024 tokens * (2*10*2*256*2 = 20_480) = 20_971_520
+    assert_eq!(
+        agent.kv_bytes,
+        20_971_520 + 8 * MIB + 65_863_680,
+        "reserved = kv + ctx_overhead + recurrent_state"
+    );
+    let model = st.models.iter().find(|m| m.name == "h").unwrap();
+    assert_eq!(model.recurrent_state_bytes, 65_863_680);
+    assert_eq!(model.kv_per_token, 20_480);
+}
+
+/// The test above only ever asserts `window_tokens == WINDOW_CAP` — a value
+/// that would be identical whether or not the window law's `Vram` term
+/// charges `recurrent_state_bytes` at all, since the explicit `UserCap`
+/// binds regardless. This test pins the actual charge SITE: an agent with
+/// no `window_cap`, so the window law's own `Vram` candidate is what binds,
+/// and its exact closed form is `(free_vram − weights − overhead_bytes −
+/// ctx_overhead_bytes − recurrent_state_bytes) / kv_per_token`.
+///
+/// `free_vram` is chosen (via `post_fix_tokens`) so that closed form lands
+/// on a clean 1_000 tokens, comfortably under `hybrid_meta`'s
+/// `training_ctx` (4_096) so `Vram`, not `TrainingCtx`, is what binds.
+///
+/// `recurrent_state_bytes` (65_863_680) is itself an exact multiple of
+/// `kv_per_token` (20_480) — 3_216 tokens' worth — so a window law that
+/// forgot to fold it into `ctx_overhead_bytes` would land exactly 3_216
+/// tokens higher; that's asserted directly as a second, independent closed
+/// form, not merely restated from `window_tokens`.
+#[test]
+fn recurrent_state_binds_the_vram_term_of_the_window_law() {
+    let dir = fresh_dir("bloomery-resv-recurrent-vram-bound");
+    let weights = 200 * MIB;
+    let ctx_overhead = 8 * MIB;
+    let kv_per_token = 20_480u64;
+    let recurrent = 65_863_680u64;
+    let post_fix_tokens = 1_000u64;
+    let free_vram = post_fix_tokens * kv_per_token + weights + ctx_overhead + recurrent;
+
+    let (mut p, _j) = pager_in(&dir, 0, Some(free_vram));
+    p.set_ctx_overhead_bytes(ctx_overhead);
+    let gguf = write_gguf(&dir, "h.gguf");
+    p.register_model("h", &gguf, hybrid_meta(weights), None)
+        .unwrap();
+
+    // No window_cap: the window law's own Vram candidate must bind.
+    let a = p.create_agent("h", 100, None, 10_000).unwrap();
+    assert_eq!(
+        a.bound_by, "vram",
+        "this scenario must be VRAM-bound to pin the recurrent charge site"
+    );
+    assert_eq!(
+        a.window_tokens, post_fix_tokens as u32,
+        "window = (free_vram - weights - ctx_overhead - recurrent_state_bytes) / kv_per_token"
+    );
+
+    let no_recurrent_tokens = (free_vram - weights - ctx_overhead) / kv_per_token;
+    assert_eq!(
+        a.window_tokens as u64 + 3_216,
+        no_recurrent_tokens,
+        "a window law that forgot the recurrent term would land exactly 3_216 \
+         tokens (recurrent_state_bytes / kv_per_token) higher"
     );
 }

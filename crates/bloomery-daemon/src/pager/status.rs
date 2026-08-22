@@ -112,6 +112,12 @@ pub struct ModelStatus {
     /// measured one," restated for `/status` the same way
     /// `pager::tuning`'s refusal-string naming does for weights.
     pub kv_per_token_declared: bool,
+    /// This model's per-context recurrent-state charge
+    /// (`GgufMeta::recurrent_state_bytes`, turn-5 spec §2) — 0 for a dense
+    /// model, the llama.cpp-measured Gated-DeltaNet/SSM buffer for a hybrid
+    /// one. Charged beside [`StatusReport::ctx_overhead_bytes`] in both the
+    /// window law and [`AgentStatus::kv_bytes`], never overridden.
+    pub recurrent_state_bytes: u64,
     pub training_ctx: u32,
     /// The patch codec tasks on this model actually run under (protocol
     /// §4) — `"search_replace"` or `"whole_file"`. Always populated: an
@@ -238,6 +244,7 @@ impl<S: bloomery_substrate::Substrate> crate::pager::Pager<S> {
                 profiled: m.profile.is_some(),
                 kv_per_token: m.effective_kv_per_token(),
                 kv_per_token_declared: m.kv_per_token_bytes.is_some(),
+                recurrent_state_bytes: m.recurrent_state_bytes(),
                 training_ctx: m.meta.training_ctx,
                 patch_codec: codec_gate::patch_codec_str(codec_gate::resolve_patch_codec(
                     m.profile.as_ref(),

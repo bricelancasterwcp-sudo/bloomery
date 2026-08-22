@@ -302,6 +302,7 @@ fn run_one_fixture_mixed<S: Substrate + Send + 'static>(
             steps,
             &detail,
             expect_str(fixture.expect),
+            &agent.id,
         )
         .map_err(|e| {
             abort(format!(

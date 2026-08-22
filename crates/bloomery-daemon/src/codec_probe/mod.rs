@@ -443,6 +443,7 @@ fn run_one_fixture<S: Substrate + Send + 'static>(
             // not `scoring::expect_str(fixture.expect)` — G5's mixed engine
             // is the one that reads a fixture's real class.
             "patch",
+            &agent.id,
         )
         .map_err(|e| {
             abort(format!(
