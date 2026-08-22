@@ -230,3 +230,45 @@ yet; build it first to exercise it:
 ```bash
 cargo build --release -p bloomery-daemon --bin flywheel-tool
 ```
+
+## `prune/` — REAP expert pruning for `qwen3_5_moe`
+
+`tools/flywheel/prune/` is a self-contained, REAP-compatible expert pruner
+for Qwen3.5/3.6 MoE (hybrid Gated-DeltaNet + MoE). Upstream
+[CerebrasResearch/reap](https://github.com/CerebrasResearch/reap) cannot
+load, hook or slice this architecture — five verified blockers, recorded in
+`.superpowers/spikes/2026-08-21-runpod-reap-train-spike.md` §S4. We keep
+REAP's **saliency math** (cited by file:line in `saliency.py`) and replace
+the observer and the pruned-config/save path.
+
+```bash
+~/flywheel-venv/bin/python -m tools.flywheel.prune.cli \
+    --model ~/models/hf/Qwen3.6-35B-A3B \
+    --calib ~/flywheel4/corpus.jsonl \
+    --samples 512 --seq-len 4096 \
+    --compression 0.48 --seed 42 \
+    --out ~/models/hf/Qwen3.6-35B-A3B-reap48 \
+    --device cuda --dtype bf16
+```
+
+The keep-count rule is pinned in `saliency.py`:
+`n_prune = floor(E * compression)` (upstream's `int()` truncation,
+`reap/prune.py:261`), so **c=0.48 keeps 5 of 8 and 134 of 256**.
+`--rounding ceil` prunes `ceil(E * c)` instead and keeps **133 of 256** —
+crucible-labs' published REAP-48 count. No single rule gives both 5-of-8
+and 133-of-256; pick deliberately.
+
+`--metric`, `--renormalize-router-weights`, `--rounding`, `--seed` and the
+calibration description are all written into the output checkpoint
+(`config.json` → `reap_pruning`, plus the full kept-index lists in
+`reap_pruning.json`).
+
+### Running the prune tests
+
+They need torch + transformers, so use the venv interpreter; under the
+stdlib `python3` all four modules skip cleanly and the rest of the suite
+still runs.
+
+```bash
+~/flywheel-venv/bin/python -m unittest discover -s tools/flywheel/tests -t .
+```
