@@ -4,7 +4,7 @@ from pathlib import Path
 try:
     import torch
     from tools.flywheel import train_moe
-    from tools.flywheel.tests.prune_fixture import build_mini_model
+    from tools.flywheel.tests.prune_fixture import build_mini_dense_model, build_mini_model
     from tools.flywheel.tests.train_fixture import build_action_tokenizer, tiny_corpus
     HAVE_TORCH = True
 except Exception:
@@ -59,3 +59,20 @@ class CpuSmoke(unittest.TestCase):
             self.assertEqual((out / "EXIT").read_text().strip(), "0")
             self.assertTrue((out / "adapter_config.json").exists())
             self.assertTrue((out / "tokenizer_config.json").exists())
+
+
+@unittest.skipUnless(HAVE_TORCH, "needs ~/flywheel-venv")
+class WrongCheckpointRefusal(unittest.TestCase):
+    def test_non_moe_checkpoint_writes_exit_2_and_failed_marker(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            base = d / "base"; build_mini_dense_model().save_pretrained(base); build_action_tokenizer().save_pretrained(base)
+            corpus = d / "c.jsonl"; fp = d / "f.json"
+            corpus.write_text("".join(json.dumps(r) + "\n" for r in tiny_corpus(6)))
+            fp.write_text(json.dumps({"val_split_ids": ["task-5"]}))
+            out = d / "adapter"
+            rc = train_moe.main(["--corpus", str(corpus), "--fingerprint", str(fp), "--base", str(base),
+                                 "--out", str(out), "--max-steps", "1", "--device", "cpu", "--dtype", "float32"])
+            self.assertEqual(rc, 2)
+            self.assertEqual((out / "EXIT").read_text().strip(), "2")
+            self.assertEqual((out / "DONE").read_text().strip(), "failed")

@@ -352,12 +352,17 @@ bs-1, no-packing shape `train.py` already used.
 
 **Wrong-checkpoint refusal.** `main()` loads the checkpoint, then checks
 `type(model).__name__ == "Qwen3_5MoeForCausalLM"` before doing anything
-else; a mismatch prints to stderr and returns exit code 2 without touching
-LoRA, the corpus, or the trainer.
+else; a mismatch prints to stderr, writes `EXIT 2` / `DONE failed`, and
+returns exit code 2 without touching LoRA, the corpus, or the trainer.
 
-**Markers.** On both success and failure `main()` writes `EXIT` (the
-return code) and `DONE` (`ok`/`failed`) into `--out` — the pod's wrapper
-reads these instead of parsing training logs.
+**Markers.** `main()` wraps everything after `--out` is created (model
+load, LoRA, freeze assertion, data, trainer, save) in a single
+try/except, and writes `EXIT`/`DONE` on **every** exit path — the
+wrong-checkpoint refusal (`EXIT 2`/`DONE failed`), any other unexpected
+exception (`EXIT 1`/`DONE failed`, with `TRAINING FAILED: {e!r}` and the
+full traceback on stderr), and success (`EXIT 0`/`DONE ok`) — so the
+pod's wrapper can always read the outcome from `--out` instead of parsing
+training logs.
 
 Usage (turn 5, on the pod):
 

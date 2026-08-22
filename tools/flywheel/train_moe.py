@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import traceback
 from pathlib import Path
 
 import torch
@@ -63,6 +64,14 @@ def assert_frozen(model) -> dict:
     return {"trainable": trainable, "total": total}
 
 
+def _write_markers(out: Path, rc: int) -> None:
+    """The pod's wrapper reads these instead of parsing training logs —
+    every `main()` exit path (refusal, unexpected exception, success)
+    writes them, never just the happy path."""
+    (out / "EXIT").write_text(f"{rc}\n")
+    (out / "DONE").write_text("ok\n" if rc == 0 else "failed\n")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--corpus", required=True, type=Path)
@@ -75,45 +84,48 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     args.out.mkdir(parents=True, exist_ok=True)
 
-    dtype = torch.bfloat16 if args.dtype == "bfloat16" else torch.float32
-    model = AutoModelForCausalLM.from_pretrained(args.base, dtype=dtype, device_map=args.device)
-    if type(model).__name__ != EXPECTED_CLASS:
-        print(f"refusing: loaded {type(model).__name__}, expected {EXPECTED_CLASS}", file=sys.stderr)
-        return 2
-    print(f"model class {EXPECTED_CLASS}; num_experts={model.config.num_experts}; "
-          f"layers={model.config.num_hidden_layers}")
-    tokenizer = AutoTokenizer.from_pretrained(args.base)
-    model.gradient_checkpointing_enable()
-    model.enable_input_require_grads()
-    model = apply_lora(model)
-    stats = assert_frozen(model)
-    print(f"trainable {stats['trainable']} / total {stats['total']} "
-          f"({100.0 * stats['trainable'] / stats['total']:.4f}%) — experts+router frozen: asserted")
-
-    train_rows, val_rows = load_pairs(args.corpus, args.fingerprint)
-    print(f"pairs: train={len(train_rows)} val={len(val_rows)}")
-    fn = tokenize_fn(tokenizer)
-    train_ds = PairDataset([fn(r) for r in train_rows])
-    val_ds = PairDataset([fn(r) for r in val_rows])
-    assert_batch_shape(tokenizer, train_ds)
-
-    overrides = {} if args.device == "cuda" and args.dtype == "bfloat16" else {"bf16": False, "use_cpu": args.device == "cpu"}
-    targs = training_args(args.out, args.max_steps, **overrides)
-    trainer = Trainer(model=model, args=targs, data_collator=collate_single,
-                      train_dataset=train_ds, eval_dataset=val_ds)
-    rc = 0
     try:
+        dtype = torch.bfloat16 if args.dtype == "bfloat16" else torch.float32
+        model = AutoModelForCausalLM.from_pretrained(args.base, dtype=dtype, device_map=args.device)
+        if type(model).__name__ != EXPECTED_CLASS:
+            print(f"refusing: loaded {type(model).__name__}, expected {EXPECTED_CLASS}", file=sys.stderr)
+            _write_markers(args.out, 2)
+            return 2
+        print(f"model class {EXPECTED_CLASS}; num_experts={model.config.num_experts}; "
+              f"layers={model.config.num_hidden_layers}")
+        tokenizer = AutoTokenizer.from_pretrained(args.base)
+        model.gradient_checkpointing_enable()
+        model.enable_input_require_grads()
+        model = apply_lora(model)
+        stats = assert_frozen(model)
+        print(f"trainable {stats['trainable']} / total {stats['total']} "
+              f"({100.0 * stats['trainable'] / stats['total']:.4f}%) — experts+router frozen: asserted")
+
+        train_rows, val_rows = load_pairs(args.corpus, args.fingerprint)
+        print(f"pairs: train={len(train_rows)} val={len(val_rows)}")
+        fn = tokenize_fn(tokenizer)
+        train_ds = PairDataset([fn(r) for r in train_rows])
+        val_ds = PairDataset([fn(r) for r in val_rows])
+        assert_batch_shape(tokenizer, train_ds)
+
+        overrides = {} if args.device == "cuda" and args.dtype == "bfloat16" else {"bf16": False, "use_cpu": args.device == "cpu"}
+        targs = training_args(args.out, args.max_steps, **overrides)
+        trainer = Trainer(model=model, args=targs, data_collator=collate_single,
+                          train_dataset=train_ds, eval_dataset=val_ds)
         trainer.train()
         model.save_pretrained(str(args.out))
         tokenizer.save_pretrained(str(args.out))
         trainer.state.save_to_json(str(args.out / "trainer_state.json"))
     except Exception as e:  # the markers are how the pod's wrapper reads the outcome
         print(f"TRAINING FAILED: {e!r}", file=sys.stderr)
-        rc = 1
-    (args.out / "EXIT").write_text(f"{rc}\n")
-    (args.out / "DONE").write_text("ok\n" if rc == 0 else "failed\n")
-    print(f"adapter saved to {args.out}" if rc == 0 else "no adapter saved")
-    return rc
+        print(traceback.format_exc(), file=sys.stderr)
+        _write_markers(args.out, 1)
+        print("no adapter saved")
+        return 1
+
+    _write_markers(args.out, 0)
+    print(f"adapter saved to {args.out}")
+    return 0
 
 
 if __name__ == "__main__":
