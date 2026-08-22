@@ -113,6 +113,12 @@ class CliSmokeTest(unittest.TestCase):
 
             self.assertEqual(json.loads((out / "summary.json").read_text()),
                              summary)
+            # Task-B bug #2: the pruned dir must be standalone.
+            from transformers import AutoTokenizer
+            self.assertTrue((out / "tokenizer.json").exists())
+            self.assertEqual(
+                AutoTokenizer.from_pretrained(out)("t1 t2")["input_ids"],
+                [1, 2])
             reloaded = Qwen3_5MoeForCausalLM.from_pretrained(out)
             self.assertEqual(reloaded.config.num_experts, 5)
             self.assertEqual(

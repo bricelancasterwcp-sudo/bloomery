@@ -4,6 +4,10 @@ What must survive pruning untouched: the shared expert, the shared-expert
 gate, attention, and the Gated-DeltaNet token mixer. What must shrink:
 `experts.gate_up_proj`, `experts.down_proj`, `gate.weight`, and every
 config field that encodes the expert count.
+
+The three checkpoint-level guarantees the Task-B rental run taught us —
+device placement, tokenizer artifacts, and MTP block-count consistency —
+live in `test_prune_checkpoint.py`.
 """
 
 import json

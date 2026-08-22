@@ -156,7 +156,11 @@ def main(argv: list[str] | None = None) -> int:
         calibration=calib_stats,
         renormalize_router_weights=args.renormalize_router_weights,
         metric=args.metric)
-    save_pruned(model, args.out, provenance=provenance)
+    # `source_dir` as well as the tokenizer object: `save_pretrained` does
+    # not round-trip every artifact a base checkpoint carries, and a pruned
+    # directory that cannot be tokenized is not a usable checkpoint.
+    save_pruned(model, args.out, provenance=provenance, tokenizer=tokenizer,
+                source_dir=args.tokenizer or args.model)
     if args.save_observer:
         (args.out / "observer_state.json").write_text(
             json.dumps(observer.to_dict(), indent=2) + "\n")

@@ -277,3 +277,38 @@ still runs.
 ```bash
 ~/flywheel-venv/bin/python -m unittest discover -s tools/flywheel/tests -t .
 ```
+
+### Validated at full scale
+
+Task B ran this pruner on `Qwen3.6-35B-A3B` on a rented A100 80 GB:
+**256 → 133 experts uniformly across all 40 layers** (`--compression 0.48
+--rounding ceil`, 512 calibration samples at seq-len 2048, 233,159 tokens,
+seed 42), 71.9 min wall, 65.6 GiB peak CUDA. The result is coherent in pure
+transformers and boots as a GGUF at parity with crucible-labs' published
+REAP-48. The run also found three bugs the unit tests had missed — CUDA
+index placement, missing tokenizer files, and the MTP block-count
+mismatch — all now fixed and covered. See
+`.superpowers/sdd/2026-08-22-reap-observer/task-B-report.md`.
+
+Notably `saliency min = 0.0`: at least one expert took **zero** routed mass
+across 233k calibration tokens. Genuinely dead experts are what make 48%
+pruning survivable.
+
+### Operational rule: never `pip install` beside a running calibration
+
+On the first full-scale attempt, running llama.cpp's
+`pip install -r requirements-convert_hf_to_gguf.txt` concurrently with a
+512-sample calibration **rewrote the package tree under the running
+process**: transformers 5.5.0 → 4.57.6 (no `qwen3_5_moe` module at all),
+numpy 2.5.2 → 1.26.4, torch 2.9.1+cu129 → 2.11.0+cpu. The job died at
+sample 500/512 with garbled line numbers and
+
+```
+FileNotFoundError: .../transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py
+```
+
+Cost: 73 minutes and $1.70 of GPU time. **Garbled tracebacks plus a missing
+module file are the signature of a package tree mutating under a live
+process.** Build converter and tooling dependencies into a separate venv,
+or before the run starts — never alongside it. Re-verify `cuda_avail` and
+the `qwen3_5_moe` import before restarting.
