@@ -43,10 +43,12 @@ fn meta(weights_bytes: u64) -> bloomery_core::gguf::GgufMeta {
     bloomery_core::gguf::GgufMeta {
         arch: "qwen2".into(),
         layers: 28,
+        attention_layers: 28,
         kv_heads: 4,
         head_dim: 128,
         training_ctx: 4096,
         weights_bytes,
+        recurrent_state_bytes: 0,
     }
 }
 
@@ -545,4 +547,46 @@ fn a_sibling_blind_automatic_window_still_refuses_item_7_third_half() {
             Event::Refusal { id, detail, .. } if id == &a2.id && detail == &expected_detail)),
         "expected detail {expected_detail:?} not found in {events:?}"
     );
+}
+
+fn hybrid_meta(weights_bytes: u64) -> bloomery_core::gguf::GgufMeta {
+    bloomery_core::gguf::GgufMeta {
+        arch: "qwen35moe".into(),
+        layers: 40,
+        attention_layers: 10,
+        kv_heads: 2,
+        head_dim: 256,
+        training_ctx: 4096,
+        weights_bytes,
+        recurrent_state_bytes: 65_863_680,
+    }
+}
+
+/// Turn-5 spec §2: a hybrid model's recurrent state is a per-context
+/// constant charged beside `ctx_overhead_bytes` — in the window law AND in
+/// the agent's reservation — and surfaced on `/status` per model.
+#[test]
+fn recurrent_state_is_charged_per_context_and_reported() {
+    let dir = fresh_dir("bloomery-resv-recurrent");
+    let (mut p, _j) = pager_in(&dir, 0, Some(4096 * MIB));
+    p.set_ctx_overhead_bytes(8 * MIB);
+    let gguf = write_gguf(&dir, "h.gguf");
+    p.register_model("h", &gguf, hybrid_meta(200 * MIB), None)
+        .unwrap();
+    let a = p.create_agent("h", 100, Some(WINDOW_CAP), 1000).unwrap();
+    assert_eq!(
+        a.window_tokens, WINDOW_CAP,
+        "the cap binds; the recurrent charge must not starve it at this budget"
+    );
+    let st = p.status();
+    let agent = st.agents.iter().find(|x| x.id == a.id).unwrap();
+    // kv = 1024 tokens * (2*10*2*256*2 = 20_480) = 20_971_520
+    assert_eq!(
+        agent.kv_bytes,
+        20_971_520 + 8 * MIB + 65_863_680,
+        "reserved = kv + ctx_overhead + recurrent_state"
+    );
+    let model = st.models.iter().find(|m| m.name == "h").unwrap();
+    assert_eq!(model.recurrent_state_bytes, 65_863_680);
+    assert_eq!(model.kv_per_token, 20_480);
 }

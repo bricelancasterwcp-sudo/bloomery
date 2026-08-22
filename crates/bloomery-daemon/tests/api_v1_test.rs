@@ -137,10 +137,12 @@ fn pager_with_drift_blocked_qwen(
     let meta = bloomery_core::gguf::GgufMeta {
         arch: "qwen2".into(),
         layers: 28,
+        attention_layers: 28,
         kv_heads: 4,
         head_dim: 128,
         training_ctx: 4096,
         weights_bytes: 1000,
+        recurrent_state_bytes: 0,
     };
     pager.register_model("qwen", &gguf, meta, None).unwrap();
     pager
@@ -450,10 +452,12 @@ fn header_agent_model_mismatch_is_refused_matching_model_passes() {
         let meta = bloomery_core::gguf::GgufMeta {
             arch: "qwen2".into(),
             layers: 28,
+            attention_layers: 28,
             kv_heads: 4,
             head_dim: 128,
             training_ctx: 4096,
             weights_bytes: 1000,
+            recurrent_state_bytes: 0,
         };
         p.register_model("other", &gguf, meta, None).unwrap();
         p.create_agent("qwen", 100, None, 200_000).unwrap().id
@@ -553,10 +557,12 @@ fn pager_with_missing_stats_reply(
     let meta = bloomery_core::gguf::GgufMeta {
         arch: "qwen2".into(),
         layers: 28,
+        attention_layers: 28,
         kv_heads: 4,
         head_dim: 128,
         training_ctx: 4096,
         weights_bytes: 1000,
+        recurrent_state_bytes: 0,
     };
     pager.register_model("qwen", &gguf, meta, None).unwrap();
     std::sync::Mutex::new(pager)

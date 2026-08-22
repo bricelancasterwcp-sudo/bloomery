@@ -220,3 +220,83 @@ fn rejects_string_length_exceeding_file_size() {
         other => panic!("expected Io error (not a panic/abort), got {other:?}"),
     }
 }
+
+fn write_qwen35moe_like_gguf(
+    path: &std::path::Path,
+    full_attention_interval: Option<u32>,
+    ssm: bool,
+) {
+    let mut kvs = Vec::new();
+    let mut n = 0u64;
+    kv_string(&mut kvs, "general.architecture", "qwen35moe");
+    n += 1;
+    kv_u32(&mut kvs, "qwen35moe.block_count", 40);
+    n += 1;
+    kv_u32(&mut kvs, "qwen35moe.attention.head_count_kv", 2);
+    n += 1;
+    kv_u32(&mut kvs, "qwen35moe.attention.key_length", 256);
+    n += 1;
+    kv_u32(&mut kvs, "qwen35moe.context_length", 262144);
+    n += 1;
+    if let Some(k) = full_attention_interval {
+        kv_u32(&mut kvs, "qwen35moe.full_attention_interval", k);
+        n += 1;
+    }
+    if ssm {
+        kv_u32(&mut kvs, "qwen35moe.ssm.conv_kernel", 4);
+        n += 1;
+        kv_u32(&mut kvs, "qwen35moe.ssm.state_size", 128);
+        n += 1;
+        kv_u32(&mut kvs, "qwen35moe.ssm.group_count", 16);
+        n += 1;
+        kv_u32(&mut kvs, "qwen35moe.ssm.inner_size", 4096);
+        n += 1;
+    }
+    write_gguf(path, n, &kvs);
+}
+
+#[test]
+fn hybrid_meta_counts_attention_layers_and_derives_recurrent_state() {
+    let dir = std::env::temp_dir().join("bloomery-gguf-hybrid");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("hybrid.gguf");
+    write_qwen35moe_like_gguf(&path, Some(4), true);
+    let m = parse_gguf_meta(&path).unwrap();
+    assert_eq!(m.layers, 40);
+    assert_eq!(m.attention_layers, 10, "40 blocks / interval 4");
+    // 30 recurrent layers x [(4-1)*(4096 + 2*16*128) + 128*4096] x 4 bytes
+    assert_eq!(m.recurrent_state_bytes, 65_863_680);
+}
+
+#[test]
+fn dense_meta_keeps_attention_layers_equal_to_layers_and_zero_recurrent() {
+    let dir = std::env::temp_dir().join("bloomery-gguf-dense2");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("dense.gguf");
+    write_qwen_like_gguf(&path);
+    let m = parse_gguf_meta(&path).unwrap();
+    assert_eq!(m.attention_layers, m.layers);
+    assert_eq!(m.recurrent_state_bytes, 0);
+}
+
+#[test]
+fn interval_without_ssm_keys_still_counts_attention_layers_and_charges_no_state() {
+    let dir = std::env::temp_dir().join("bloomery-gguf-hybrid-nossm");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("h.gguf");
+    write_qwen35moe_like_gguf(&path, Some(4), false);
+    let m = parse_gguf_meta(&path).unwrap();
+    assert_eq!((m.attention_layers, m.recurrent_state_bytes), (10, 0));
+}
+
+#[test]
+fn zero_full_attention_interval_is_invalid_data() {
+    let dir = std::env::temp_dir().join("bloomery-gguf-hybrid-zero");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("z.gguf");
+    write_qwen35moe_like_gguf(&path, Some(0), true);
+    match parse_gguf_meta(&path) {
+        Err(GgufError::Io(e)) => assert_eq!(e.kind(), std::io::ErrorKind::InvalidData),
+        other => panic!("expected InvalidData, got {other:?}"),
+    }
+}

@@ -241,10 +241,12 @@ fn serve_drift_blocked_qwen() -> (u16, bloomery_daemon::http::ServerHandle) {
     let meta = bloomery_core::gguf::GgufMeta {
         arch: "qwen2".into(),
         layers: 28,
+        attention_layers: 28,
         kv_heads: 4,
         head_dim: 128,
         training_ctx: 4096,
         weights_bytes: 1000,
+        recurrent_state_bytes: 0,
     };
     pager.register_model("qwen", &gguf, meta, None).unwrap();
     pager
@@ -308,10 +310,12 @@ fn serve_drift_blocked_qwen_with_profiles() -> (u16, bloomery_daemon::http::Serv
     let meta = bloomery_core::gguf::GgufMeta {
         arch: "qwen2".into(),
         layers: 28,
+        attention_layers: 28,
         kv_heads: 4,
         head_dim: 128,
         training_ctx: 4096,
         weights_bytes: 1000,
+        recurrent_state_bytes: 0,
     };
     pager.register_model("qwen", &gguf, meta, None).unwrap();
     pager
@@ -429,10 +433,12 @@ fn serve_with_missing_stats() -> (u16, bloomery_daemon::http::ServerHandle, Stri
     let meta = bloomery_core::gguf::GgufMeta {
         arch: "qwen2".into(),
         layers: 28,
+        attention_layers: 28,
         kv_heads: 4,
         head_dim: 128,
         training_ctx: 4096,
         weights_bytes: 1000,
+        recurrent_state_bytes: 0,
     };
     pager.register_model("qwen", &gguf, meta, None).unwrap();
     let info = pager.create_agent("qwen", 100, None, 200_000).unwrap();
@@ -612,10 +618,12 @@ fn serve_panicking() -> (u16, bloomery_daemon::http::ServerHandle, String) {
     let meta = bloomery_core::gguf::GgufMeta {
         arch: "qwen2".into(),
         layers: 1,
+        attention_layers: 1,
         kv_heads: 1,
         head_dim: 1,
         training_ctx: 4096,
         weights_bytes: 1,
+        recurrent_state_bytes: 0,
     };
     pager
         .register_model("panic-model", &gguf, meta, None)
@@ -746,10 +754,12 @@ fn serve_with_profiles(
     let meta = bloomery_core::gguf::GgufMeta {
         arch: "qwen2".into(),
         layers: 28,
+        attention_layers: 28,
         kv_heads: 4,
         head_dim: 128,
         training_ctx: 4096,
         weights_bytes: 1000,
+        recurrent_state_bytes: 0,
     };
     pager.register_model("qwen", &gguf, meta, None).unwrap();
 

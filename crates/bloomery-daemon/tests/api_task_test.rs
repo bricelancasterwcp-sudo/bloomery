@@ -362,10 +362,12 @@ fn serve_panicking_task() -> (
     let meta = bloomery_core::gguf::GgufMeta {
         arch: "qwen2".into(),
         layers: 1,
+        attention_layers: 1,
         kv_heads: 1,
         head_dim: 1,
         training_ctx: 65536,
         weights_bytes: 1,
+        recurrent_state_bytes: 0,
     };
     pager
         .register_model("panic-model", &gguf, meta, None)
@@ -547,10 +549,12 @@ fn serve_codec_gate_fixture(
     let meta = bloomery_core::gguf::GgufMeta {
         arch: "qwen2".into(),
         layers: 4,
+        attention_layers: 4,
         kv_heads: 2,
         head_dim: 32,
         training_ctx: 65536,
         weights_bytes: 1000,
+        recurrent_state_bytes: 0,
     };
     pager.register_model("qwen", &gguf, meta, None).unwrap();
 

@@ -577,7 +577,7 @@ impl<S: Substrate> Pager<S> {
         window_cap: Option<u32>,
         budget_tokens: u64,
     ) -> Result<AgentInfo, PagerError> {
-        let (kv_per_token, training_ctx, weights_bytes, measured_ceiling) = {
+        let (kv_per_token, training_ctx, weights_bytes, measured_ceiling, recurrent_state_bytes) = {
             let entry = self
                 .models
                 .get(model)
@@ -594,6 +594,7 @@ impl<S: Substrate> Pager<S> {
                     .as_ref()
                     .filter(|_| !entry.profile_self_measured)
                     .and_then(|p| p.measured_ceiling()),
+                entry.recurrent_state_bytes(), // turn-5 spec §2: see `pager::tuning`
             )
         };
         self.admit(model)?;
@@ -604,7 +605,9 @@ impl<S: Substrate> Pager<S> {
             weights_bytes,
             free_vram_bytes,
             overhead_bytes: self.overhead_bytes,
-            ctx_overhead_bytes: self.ctx_overhead_bytes,
+            ctx_overhead_bytes: self
+                .ctx_overhead_bytes
+                .saturating_add(recurrent_state_bytes),
             user_cap: window_cap,
             measured_ceiling,
         });
@@ -633,7 +636,9 @@ impl<S: Substrate> Pager<S> {
             model: model.to_string(),
             priority,
             kv_bytes,
-            reserved_bytes: kv_bytes.saturating_add(self.ctx_overhead_bytes),
+            reserved_bytes: kv_bytes
+                .saturating_add(self.ctx_overhead_bytes)
+                .saturating_add(recurrent_state_bytes),
             window,
             budget: Budget::new(budget_tokens),
             state: AgentState::Fresh,

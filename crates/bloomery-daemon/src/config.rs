@@ -173,15 +173,16 @@ pub enum ModelSpec {
         /// `weights_vram_mib`). Absent -> the GGUF-derived value, unchanged.
         ///
         /// **No clamp against the GGUF-derived value** (unlike
-        /// `weights_vram_mib`'s `min(declared, file)`): declaring a SMALLER
-        /// number than GGUF derives is the whole point (hybrid-DeltaNet
-        /// architectures the pager's GGUF-derived formula overcounts ~4×,
-        /// per the spec's measured qwen3.8-27b figure), and a LARGER
-        /// declared number is allowed too (extra conservative). **Declaring
-        /// too small is the OOM direction**: the window law would then grant
-        /// tokens whose real KV exceeds VRAM — this is a declared, measured-
-        /// once-with-headroom number, not something this daemon ever
-        /// verifies against the model's actual runtime KV footprint.
+        /// `weights_vram_mib`'s `min(declared, file)`): a declared value is a
+        /// *measured* override for geometries the formula does not model;
+        /// since turn 5 the formula itself counts only attention layers
+        /// (`GgufMeta::attention_layers`), so the override is no longer
+        /// needed for Qwen3.5/3.6 hybrids, and a LARGER declared number is
+        /// allowed too (extra conservative). **Declaring too small is the
+        /// OOM direction**: the window law would then grant tokens whose
+        /// real KV exceeds VRAM — this is a declared, measured-once-with-
+        /// headroom number, not something this daemon ever verifies against
+        /// the model's actual runtime KV footprint.
         #[serde(default)]
         kv_per_token_bytes: Option<u64>,
         /// Opts this model into the G5 refusal-honesty probe

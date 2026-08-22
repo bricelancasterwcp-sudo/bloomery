@@ -22,10 +22,12 @@ fn meta() -> bloomery_core::gguf::GgufMeta {
     bloomery_core::gguf::GgufMeta {
         arch: "qwen2".into(),
         layers: 28,
+        attention_layers: 28,
         kv_heads: 4,
         head_dim: 128,
         training_ctx: 4096,
         weights_bytes: 1000,
+        recurrent_state_bytes: 0,
     }
 }
 

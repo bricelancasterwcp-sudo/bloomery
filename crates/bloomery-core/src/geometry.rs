@@ -14,12 +14,17 @@ const F16_BYTES: u64 = 2;
 /// K and V are each stored, hence the leading factor of 2.
 const KV_TENSORS: u64 = 2;
 
-/// Computes the per-token KV-cache footprint in bytes for a model's
-/// geometry: `2 (K and V) * layers * kv_heads * head_dim * 2 (f16 bytes)`.
+/// `2 (K and V) * attention_layers * kv_heads * head_dim * 2 (f16 bytes)`.
+/// Only layers that own a KV cache count — hybrid models' recurrent layers
+/// are charged by `GgufMeta::recurrent_state_bytes` instead (turn-5 spec §2).
 ///
 /// All math is done in `u64` to avoid overflow on large models.
 pub fn kv_bytes_per_token(m: &GgufMeta) -> u64 {
-    KV_TENSORS * u64::from(m.layers) * u64::from(m.kv_heads) * u64::from(m.head_dim) * F16_BYTES
+    KV_TENSORS
+        * u64::from(m.attention_layers)
+        * u64::from(m.kv_heads)
+        * u64::from(m.head_dim)
+        * F16_BYTES
 }
 
 /// Which term of the window law bound the final `usable_window` result.

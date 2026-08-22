@@ -1053,10 +1053,12 @@ fn qwen_like_meta() -> bloomery_core::gguf::GgufMeta {
     bloomery_core::gguf::GgufMeta {
         arch: "qwen2".into(),
         layers: 28,
+        attention_layers: 28,
         kv_heads: 4,
         head_dim: 128,
         training_ctx: 4096,
         weights_bytes: 1000,
+        recurrent_state_bytes: 0,
     }
 }
 
@@ -1224,7 +1226,7 @@ impl Boot {
         bloomery_daemon::post::run_post_with_gate(
             &self.pager,
             runner,
-            &[self.model.clone()],
+            std::slice::from_ref(&self.model),
             8181,
             &tier(),
             &self.profiles,
