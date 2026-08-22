@@ -21,6 +21,15 @@ python3 -m tools.evidence.recompute \
 Prints the JSON report to stdout; exits 2 if the CodecFixture<->TaskStep
 join reports any violations, else 0.
 
+## Running the tests
+
+There is deliberately no `tools/__init__.py` (CPython 3.14's
+`unittest` loader requires an `__init__.py` in the *start* directory, which
+is why `-s tools -t .` does not work): the factory suite runs with
+`python3 -m unittest discover -s tools/flywheel/tests -t .` and this suite
+with `python3 -m unittest discover -s tools/evidence/tests -t .` (equivalently,
+the dotted form `python3 -m unittest tools.evidence.tests.test_recompute_turn4`).
+
 ## Turn-4 pins
 
 `tools/evidence/tests/test_recompute_turn4.py` pins this tool against the
