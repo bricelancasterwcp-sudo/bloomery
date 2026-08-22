@@ -45,7 +45,8 @@ class Flywheel4Battery(unittest.TestCase):
         self.assertEqual(e["malformed_find"], [0, 6]); self.assertEqual(e["run_before_done"], [5, 5])
         self.assertEqual(e["any_run"], [5, 5]); self.assertEqual(e["productive_run"], [5, 5])
         self.assertEqual(e["reason_grounding"], {"eligible": 11, "landed_eligible": 11, "measured_rows": 4,
-                                                 "unmeasured_rows": 7, "grounded": 6, "spans": 6})
+                                                 "unmeasured_rows": 7, "grounded": 6, "spans": 6,
+                                                 "missing_fixtures": []})
         self.assertEqual(r["grant_violation_rows"], 0)
         self.assertEqual(r["verb_histogram"], {"done": 52, "find": 6, "patch": 36, "read": 52, "run": 5})
 
@@ -62,7 +63,8 @@ class G5v4Baselines(unittest.TestCase):
         self.assertEqual(e["malformed_find"], [0, 6]); self.assertEqual(e["run_before_done"], [5, 5])
         self.assertEqual(e["any_run"], [5, 5]); self.assertEqual(e["productive_run"], [0, 5])
         self.assertEqual(e["reason_grounding"], {"eligible": 11, "landed_eligible": 11, "measured_rows": 5,
-                                                 "unmeasured_rows": 6, "grounded": 16, "spans": 19})
+                                                 "unmeasured_rows": 6, "grounded": 16, "spans": 19,
+                                                 "missing_fixtures": []})
         self.assertEqual(r["grant_violation_rows"], 5)
         self.assertEqual(r["verb_histogram"], {"done": 52, "find": 6, "patch": 35, "read": 51, "run": 5})
 
@@ -76,7 +78,8 @@ class G5v4Baselines(unittest.TestCase):
         self.assertEqual(e["productive_find"], [0, 6]); self.assertEqual(e["find_usage"], [6, 6])
         self.assertEqual(e["run_before_done"], [0, 5]); self.assertEqual(e["productive_run"], [0, 5])
         self.assertEqual(e["reason_grounding"], {"eligible": 11, "landed_eligible": 7, "measured_rows": 0,
-                                                 "unmeasured_rows": 7, "grounded": 0, "spans": 0})
+                                                 "unmeasured_rows": 7, "grounded": 0, "spans": 0,
+                                                 "missing_fixtures": []})
         self.assertEqual(r["grant_violation_rows"], 42)
         self.assertEqual(r["verb_histogram"], {"done": 32, "find": 9, "patch": 94, "read": 68})
 

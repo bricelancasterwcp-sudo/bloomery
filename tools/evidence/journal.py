@@ -43,6 +43,11 @@ class JoinReport:
     fixtures: int
     groups: int
     violations: list[str] = field(default_factory=list)
+    # The ordinal join's own violations, computed alongside a keyed join for
+    # comparison but never folded into `violations` (which drives the exit
+    # code) — surfaced here for a reader instead of silently discarded.
+    # Empty in ordinal mode, where `violations` already IS this list.
+    ordinal_violations: list[str] = field(default_factory=list)
 
 
 def _ordinal(fixtures: list[dict], groups: dict[str, list[dict]]) -> tuple[list[Joined], list[str]]:
@@ -85,8 +90,14 @@ def join(journal: list[dict], tasks: list[dict]) -> tuple[list[Joined], JoinRepo
     ordinal, ov = _ordinal(fixtures, groups)
     if fixtures and all(fx.get("agent") for fx in fixtures):
         keyed, kv = _keyed(fixtures, groups)
-        same = [(a.fixture["fixture"], [s["step"] for s in a.steps]) for a in keyed] == \
-               [(b.fixture["fixture"], [s["step"] for s in b.steps]) for b in ordinal]
-        report = JoinReport("keyed", same, len(fixtures), len(groups), kv + ([] if same else ["keyed != ordinal"]))
+        # Compare the joined ROWS themselves, not just their shapes: two
+        # equal-length groups whose `agent` keys are swapped have identical
+        # (fixture, [step numbers]) shapes (each group's steps are numbered
+        # 1..N locally) but join different TaskStep rows — `s["id"]` is the
+        # field that actually differs between them.
+        same = [(a.fixture["fixture"], [s["id"] for s in a.steps]) for a in keyed] == \
+               [(b.fixture["fixture"], [s["id"] for s in b.steps]) for b in ordinal]
+        report = JoinReport("keyed", same, len(fixtures), len(groups),
+                             kv + ([] if same else ["keyed != ordinal"]), ov)
         return keyed, report
     return ordinal, JoinReport("ordinal", None, len(fixtures), len(groups), ov)

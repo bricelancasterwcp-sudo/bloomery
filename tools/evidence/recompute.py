@@ -34,7 +34,8 @@ def recompute(journal: Path, tasks: Path, g5_fixtures: Path | None, g4_set: str 
     jrows, trows = load_rows(journal), load_rows(tasks)
     joined, jr = join(jrows, trows)
     report = {"join": {"mode": jr.mode, "keyed_equals_ordinal": jr.keyed_equals_ordinal,
-                       "fixtures": jr.fixtures, "groups": jr.groups, "violations": jr.violations}}
+                       "fixtures": jr.fixtures, "groups": jr.groups, "violations": jr.violations,
+                       "ordinal_violations": jr.ordinal_violations}}
 
     g4_rows = [j for j in joined if j.fixture["fixture_set"] == g4_set]
     if g4_rows:
@@ -56,8 +57,10 @@ def recompute(journal: Path, tasks: Path, g5_fixtures: Path | None, g4_set: str 
               "refuse": ep.leg(sum(bool(j.fixture["landed"]) for j in refuse), len(refuse))}
         jv = _journaled_g5(jrows, g5_set)
         g5["journaled_verdict_matches"] = bool(jv) and (
-            (jv["patch_landed"], jv["refuse_landed"], jv["patch_provisional"], jv["refuse_provisional"]) ==
-            (g5["patch"]["landed"], g5["refuse"]["landed"], g5["patch"]["provisional"], g5["refuse"]["provisional"]))
+            (jv["patch_landed"], jv["patch_n"], jv["refuse_landed"], jv["refuse_n"],
+             jv["patch_provisional"], jv["refuse_provisional"]) ==
+            (g5["patch"]["landed"], g5["patch"]["n"], g5["refuse"]["landed"], g5["refuse"]["n"],
+             g5["patch"]["provisional"], g5["refuse"]["provisional"]))
         report["g5"] = g5
         report["composition"] = ep.composition(g5_rows)
         report["endpoints"] = ep.endpoints(g5_rows, fx)

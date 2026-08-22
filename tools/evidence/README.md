@@ -19,7 +19,12 @@ python3 -m tools.evidence.recompute \
 ```
 
 Prints the JSON report to stdout; exits 2 if the CodecFixture<->TaskStep
-join reports any violations, else 0.
+join reports any violations, else 0. In keyed mode, `join.ordinal_violations`
+carries the ordinal join's own violations (computed for the keyed/ordinal
+agreement check) — reported for a reader only, never folded into
+`join.violations` and never affecting the exit code. `endpoints.reason_grounding`
+carries a `missing_fixtures` list: journaled fixture names absent from the
+frozen TOML, counted as unmeasured rather than raising.
 
 ## Running the tests
 

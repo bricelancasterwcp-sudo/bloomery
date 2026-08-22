@@ -82,6 +82,7 @@ def reason_grounding(rows: list[Joined], fixtures: dict[str, dict]) -> dict:
                 and "missing-target" not in j.fixture["fixture"]]
     landed = [j for j in eligible if j.fixture["landed"]]
     measured = unmeasured = grounded = spans = 0
+    missing_fixtures: list[str] = []
     for j in landed:
         done = [s for s in j.steps if s["verb"] == "done"]
         text = done[-1]["outcome"] if done else ""
@@ -89,8 +90,16 @@ def reason_grounding(rows: list[Joined], fixtures: dict[str, dict]) -> dict:
         if not found:
             unmeasured += 1
             continue
+        # A journaled fixture name absent from the frozen TOML (e.g. a
+        # journal that outran the fixture file, or a hand-edited journal)
+        # must not raise KeyError: recorded as unmeasured, with the name
+        # surfaced for a reader rather than crashing the whole recompute.
+        fx = fixtures.get(j.fixture["fixture"])
+        if fx is None:
+            missing_fixtures.append(j.fixture["fixture"])
+            unmeasured += 1
+            continue
         measured += 1
-        fx = fixtures[j.fixture["fixture"]]
         contents = [f.get("contents", "") for f in fx.get("file", [])]
         paths = [f.get("path", "") for f in fx.get("file", [])]
         for span in found:
@@ -98,7 +107,8 @@ def reason_grounding(rows: list[Joined], fixtures: dict[str, dict]) -> dict:
             if any(span in c for c in contents) or any(span in p for p in paths):
                 grounded += 1
     return {"eligible": len(eligible), "landed_eligible": len(landed), "measured_rows": measured,
-            "unmeasured_rows": unmeasured, "grounded": grounded, "spans": spans}
+            "unmeasured_rows": unmeasured, "grounded": grounded, "spans": spans,
+            "missing_fixtures": missing_fixtures}
 
 
 def endpoints(rows: list[Joined], fixtures: dict[str, dict]) -> dict:

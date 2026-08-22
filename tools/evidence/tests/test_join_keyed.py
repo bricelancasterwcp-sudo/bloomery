@@ -32,6 +32,14 @@ def _write(tmp, name, rows):
 
 TASKS = [_step("a1", 1, 100), _step("a1", 2, 500), _step("a2", 1, 1500)]
 
+# Two EQUAL-length groups (both 2 steps) so a swap can't be caught by the
+# `len(steps) != fx.get("steps")` check alone — it must be caught by
+# comparing the joined rows themselves (item 1).
+SWAP_TASKS = [
+    _step("a1", 1, 100), _step("a1", 2, 500),
+    _step("a2", 1, 1500), _step("a2", 2, 1800),
+]
+
 
 def _join(fixtures, tasks=TASKS):
     with tempfile.TemporaryDirectory() as tmp:
@@ -52,9 +60,12 @@ class KeyedJoin(unittest.TestCase):
             self.assertEqual(len(j.steps), expected_len)
 
     def test_swapped_keys_flag_keyed_ne_ordinal(self):
+        # Both fixtures claim `steps=2`, matching BOTH groups' length (2
+        # each) — the length check in `_keyed`/`_ordinal` cannot catch this
+        # swap, only a row-level comparison can.
         fixtures = [_fixture("v4-patch-find-1", "a2", 2, "patch", 1000),
-                    _fixture("v4-refuse-defect-absent-1", "a1", 1, "refuse", 2000)]
-        _, report = _join(fixtures)
+                    _fixture("v4-refuse-defect-absent-1", "a1", 2, "refuse", 2000)]
+        _, report = _join(fixtures, tasks=SWAP_TASKS)
         self.assertIn("keyed != ordinal", report.violations)
 
     def test_old_style_journal_is_ordinal_only(self):
