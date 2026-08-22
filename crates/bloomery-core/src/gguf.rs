@@ -28,7 +28,9 @@ pub struct GgufMeta {
     /// sum over `layers - attention_layers` of `[(conv_kernel-1) *
     /// (inner_size + 2*group_count*state_size) + state_size*inner_size] * 4`
     /// bytes (llama.cpp's `n_embd_r + n_embd_s`, f32). 0 when the
-    /// `{arch}.ssm.*` keys are absent. Independent of the window.
+    /// `{arch}.ssm.*` keys are absent. Independent of the window. 0 when
+    /// any of the four keys is absent — a partial set is not modeled,
+    /// recorded in the turn-5 spec (2026-08-22 §2).
     pub recurrent_state_bytes: u64,
 }
 
@@ -276,7 +278,23 @@ fn resolve_attention_layers(
             io::ErrorKind::InvalidData,
             format!("{key} is zero"),
         ))),
-        Some(k) => Ok(layers / k),
+        Some(k) => {
+            let attention_layers = layers / k;
+            // `layers / k == 0` means the interval is larger than
+            // block_count: no layer satisfies llama.cpp's `(i+1) % k == 0`
+            // rule. Mathematically that IS zero full-attention layers, but
+            // zero routes `kv_bytes_per_token` to the kv_per_token == 0
+            // unbounded-window path (geometry.rs) — a silent "this model
+            // has no context limit at all" rather than the config error it
+            // almost certainly is. Reject instead of laundering it through.
+            if layers > 0 && attention_layers == 0 {
+                return Err(GgufError::Io(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("{key} exceeds block_count"),
+                )));
+            }
+            Ok(attention_layers)
+        }
     }
 }
 

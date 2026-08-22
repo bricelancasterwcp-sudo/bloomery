@@ -590,3 +590,56 @@ fn recurrent_state_is_charged_per_context_and_reported() {
     assert_eq!(model.recurrent_state_bytes, 65_863_680);
     assert_eq!(model.kv_per_token, 20_480);
 }
+
+/// The test above only ever asserts `window_tokens == WINDOW_CAP` — a value
+/// that would be identical whether or not the window law's `Vram` term
+/// charges `recurrent_state_bytes` at all, since the explicit `UserCap`
+/// binds regardless. This test pins the actual charge SITE: an agent with
+/// no `window_cap`, so the window law's own `Vram` candidate is what binds,
+/// and its exact closed form is `(free_vram − weights − overhead_bytes −
+/// ctx_overhead_bytes − recurrent_state_bytes) / kv_per_token`.
+///
+/// `free_vram` is chosen (via `post_fix_tokens`) so that closed form lands
+/// on a clean 1_000 tokens, comfortably under `hybrid_meta`'s
+/// `training_ctx` (4_096) so `Vram`, not `TrainingCtx`, is what binds.
+///
+/// `recurrent_state_bytes` (65_863_680) is itself an exact multiple of
+/// `kv_per_token` (20_480) — 3_216 tokens' worth — so a window law that
+/// forgot to fold it into `ctx_overhead_bytes` would land exactly 3_216
+/// tokens higher; that's asserted directly as a second, independent closed
+/// form, not merely restated from `window_tokens`.
+#[test]
+fn recurrent_state_binds_the_vram_term_of_the_window_law() {
+    let dir = fresh_dir("bloomery-resv-recurrent-vram-bound");
+    let weights = 200 * MIB;
+    let ctx_overhead = 8 * MIB;
+    let kv_per_token = 20_480u64;
+    let recurrent = 65_863_680u64;
+    let post_fix_tokens = 1_000u64;
+    let free_vram = post_fix_tokens * kv_per_token + weights + ctx_overhead + recurrent;
+
+    let (mut p, _j) = pager_in(&dir, 0, Some(free_vram));
+    p.set_ctx_overhead_bytes(ctx_overhead);
+    let gguf = write_gguf(&dir, "h.gguf");
+    p.register_model("h", &gguf, hybrid_meta(weights), None)
+        .unwrap();
+
+    // No window_cap: the window law's own Vram candidate must bind.
+    let a = p.create_agent("h", 100, None, 10_000).unwrap();
+    assert_eq!(
+        a.bound_by, "vram",
+        "this scenario must be VRAM-bound to pin the recurrent charge site"
+    );
+    assert_eq!(
+        a.window_tokens, post_fix_tokens as u32,
+        "window = (free_vram - weights - ctx_overhead - recurrent_state_bytes) / kv_per_token"
+    );
+
+    let no_recurrent_tokens = (free_vram - weights - ctx_overhead) / kv_per_token;
+    assert_eq!(
+        a.window_tokens as u64 + 3_216,
+        no_recurrent_tokens,
+        "a window law that forgot the recurrent term would land exactly 3_216 \
+         tokens (recurrent_state_bytes / kv_per_token) higher"
+    );
+}

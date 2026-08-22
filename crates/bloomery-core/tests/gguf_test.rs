@@ -300,3 +300,81 @@ fn zero_full_attention_interval_is_invalid_data() {
         other => panic!("expected InvalidData, got {other:?}"),
     }
 }
+
+/// An interval larger than block_count means no layer ever satisfies
+/// llama.cpp's `(i+1) % k == 0` rule — `layers / k` floors to 0. Zero would
+/// silently route `kv_bytes_per_token` to the unbounded-window path
+/// (geometry.rs), so this must be a clean `InvalidData` error instead.
+#[test]
+fn full_attention_interval_exceeding_block_count_is_invalid_data() {
+    let dir = std::env::temp_dir().join("bloomery-gguf-hybrid-interval-too-big");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("interval_too_big.gguf");
+    let mut kvs = Vec::new();
+    kv_string(&mut kvs, "general.architecture", "qwen35moe");
+    kv_u32(&mut kvs, "qwen35moe.block_count", 3);
+    kv_u32(&mut kvs, "qwen35moe.attention.head_count_kv", 2);
+    kv_u32(&mut kvs, "qwen35moe.attention.key_length", 256);
+    kv_u32(&mut kvs, "qwen35moe.context_length", 262144);
+    kv_u32(&mut kvs, "qwen35moe.full_attention_interval", 4);
+    write_gguf(&path, 6, &kvs);
+
+    match parse_gguf_meta(&path) {
+        Err(GgufError::Io(e)) => {
+            assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+            assert!(
+                e.to_string()
+                    .contains("full_attention_interval exceeds block_count"),
+                "expected the exceeds-block_count message, got {e}"
+            );
+        }
+        other => panic!("expected InvalidData, got {other:?}"),
+    }
+}
+
+/// A non-divisible interval floors per llama.cpp's `(i+1) % k == 0` rule:
+/// block_count 42 / interval 4 has layer indices (1-based) 4, 8, ..., 40
+/// satisfy the rule — 10 layers, not 10.5 rounded up.
+#[test]
+fn non_divisible_full_attention_interval_floors() {
+    let dir = std::env::temp_dir().join("bloomery-gguf-hybrid-nondivisible");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("nondiv.gguf");
+    let mut kvs = Vec::new();
+    kv_string(&mut kvs, "general.architecture", "qwen35moe");
+    kv_u32(&mut kvs, "qwen35moe.block_count", 42);
+    kv_u32(&mut kvs, "qwen35moe.attention.head_count_kv", 2);
+    kv_u32(&mut kvs, "qwen35moe.attention.key_length", 256);
+    kv_u32(&mut kvs, "qwen35moe.context_length", 262144);
+    kv_u32(&mut kvs, "qwen35moe.full_attention_interval", 4);
+    write_gguf(&path, 6, &kvs);
+
+    let m = parse_gguf_meta(&path).unwrap();
+    assert_eq!(m.attention_layers, 10, "floor(42/4)");
+}
+
+/// Controller ruling: a PARTIAL `{arch}.ssm.*` key set (e.g. a Mamba-1 GGUF
+/// missing `ssm.group_count`) must still parse cleanly and yields
+/// `recurrent_state_bytes == 0` — a partial set is not modeled, so the KV
+/// over-count on such a model stays conservative rather than guessing.
+#[test]
+fn partial_ssm_keys_yield_zero_recurrent_state_bytes() {
+    let dir = std::env::temp_dir().join("bloomery-gguf-hybrid-partial-ssm");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("partial_ssm.gguf");
+    let mut kvs = Vec::new();
+    kv_string(&mut kvs, "general.architecture", "qwen35moe");
+    kv_u32(&mut kvs, "qwen35moe.block_count", 40);
+    kv_u32(&mut kvs, "qwen35moe.attention.head_count_kv", 2);
+    kv_u32(&mut kvs, "qwen35moe.attention.key_length", 256);
+    kv_u32(&mut kvs, "qwen35moe.context_length", 262144);
+    kv_u32(&mut kvs, "qwen35moe.full_attention_interval", 4);
+    kv_u32(&mut kvs, "qwen35moe.ssm.conv_kernel", 4);
+    kv_u32(&mut kvs, "qwen35moe.ssm.state_size", 128);
+    kv_u32(&mut kvs, "qwen35moe.ssm.inner_size", 4096);
+    // qwen35moe.ssm.group_count intentionally absent (Mamba-1-style partial set).
+    write_gguf(&path, 9, &kvs);
+
+    let m = parse_gguf_meta(&path).unwrap();
+    assert_eq!((m.attention_layers, m.recurrent_state_bytes), (10, 0));
+}

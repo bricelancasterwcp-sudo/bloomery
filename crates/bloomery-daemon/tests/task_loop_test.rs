@@ -266,6 +266,55 @@ fn task_step_args_carry_the_action_arguments_per_verb() {
     assert_eq!(result.steps[1].args, vec!["python3", "-c", "print(1)"]);
 }
 
+/// Turn-5 spec §3, the `read` verb's `lines="A-B"` shape:
+/// `action_args(&Action::Read { path, lines: Some((a, b)) })` -> `[path,
+/// "lines=a-b"]` — the one `read` shape the args-per-verb test above
+/// doesn't script (it only covers the no-`lines` case).
+#[test]
+fn task_step_args_carry_a_read_lines_range() {
+    let dir = fresh_dir("args-lines-range");
+    let (sb, g) = sandbox(&dir);
+    let (mut pager, agent_id) = fixture(
+        &dir,
+        1_000_000,
+        vec![
+            scripted("<action verb=\"read\" path=\"file.txt\" lines=\"1-2\">\n</action>"),
+            scripted("<action verb=\"done\">\nread the range\n</action>"),
+        ],
+    );
+    let task_journal_path = dir.join("task.jsonl");
+    let mut task_journal = Journal::open(&task_journal_path).unwrap();
+    let spec = spec(g, sb, 5);
+
+    let result = run_task(&mut pager, &agent_id, &spec, &mut task_journal);
+
+    assert_eq!(result.status, TaskStatus::Done);
+    assert_eq!(result.steps.len(), 2, "got {:?}", result.steps);
+    assert_eq!(result.steps[0].verb, "read");
+    assert_eq!(
+        result.steps[0].args,
+        vec!["file.txt".to_string(), "lines=1-2".to_string()],
+        "a lines-range read -> [path, \"lines=a-b\"], turn-5 spec §3"
+    );
+
+    let rows: Vec<(String, Vec<String>)> = replay(&task_journal_path)
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::TaskStep { verb, args, .. } => Some((verb, args)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        rows[0],
+        (
+            "read".to_string(),
+            vec!["file.txt".to_string(), "lines=1-2".to_string()]
+        ),
+        "the journaled read row must carry the same lines-range args"
+    );
+}
+
 #[test]
 fn an_unparseable_turn_is_re_asked_then_the_step_fails() {
     let dir = fresh_dir("reask");
@@ -296,16 +345,28 @@ fn an_unparseable_turn_is_re_asked_then_the_step_fails() {
         "expected an 'unparseable after 2 re-asks' step, got {:?}",
         result.steps
     );
+    assert!(
+        failed_step.unwrap().args.is_empty(),
+        "an unparseable ('?') step's args must be empty, turn-5 spec §3: got {:?}",
+        failed_step.unwrap().args
+    );
     assert_eq!(result.steps.last().unwrap().verb, "done");
 
     let events = replay(&task_journal_path).unwrap();
-    let question_mark_steps = events
+    let question_mark_steps: Vec<Vec<String>> = events
         .iter()
-        .filter(|e| matches!(e, Event::TaskStep { verb, .. } if verb == "?"))
-        .count();
+        .filter_map(|e| match e {
+            Event::TaskStep { verb, args, .. } if verb == "?" => Some(args.clone()),
+            _ => None,
+        })
+        .collect();
     assert!(
-        question_mark_steps >= 1,
+        !question_mark_steps.is_empty(),
         "expected at least one '?' TaskStep journaled for the re-asked step"
+    );
+    assert!(
+        question_mark_steps.iter().all(|a| a.is_empty()),
+        "every journaled '?' row's args must be empty: {question_mark_steps:?}"
     );
     let done_steps = events
         .iter()
@@ -481,6 +542,11 @@ fn a_find_resolves_against_the_task_cwd_not_the_process_cwd() {
         "expected the match to name the needle file, got {:?}",
         result.steps[0].content
     );
+    assert_eq!(
+        result.steps[0].args,
+        vec![needle.clone(), ".".to_string()],
+        "find -> [pattern, path], verbatim (not the absolutized path), turn-5 spec §3"
+    );
     assert_eq!(result.steps[1].verb, "done");
 }
 
@@ -540,6 +606,19 @@ fn a_demoted_spec_refuses_patch_and_leaves_the_file_untouched() {
     );
     assert_eq!(result.steps[0].outcome, MUTATING_VERB_DEMOTED);
     assert_eq!(result.steps[0].content, MUTATING_VERB_DEMOTED);
+    assert_eq!(
+        result.steps[0].args,
+        vec!["file.txt".to_string()],
+        "patch -> [path], turn-5 spec §3"
+    );
+    assert!(
+        !result.steps[0]
+            .args
+            .iter()
+            .any(|a| a.contains("goodbye") || a.contains("SEARCH") || a.contains("REPLACE")),
+        "the patch body must never leak into args, got {:?}",
+        result.steps[0].args
+    );
     assert_eq!(result.steps[1].verb, "done");
     assert!(!result.steps[1].failed);
 
@@ -561,6 +640,18 @@ fn a_demoted_spec_refuses_patch_and_leaves_the_file_untouched() {
         patch_steps,
         vec![MUTATING_VERB_DEMOTED.to_string()],
         "the journal must carry the same pinned refusal outcome"
+    );
+    let patch_args: Vec<Vec<String>> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::TaskStep { verb, args, .. } if verb == "patch" => Some(args.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        patch_args,
+        vec![vec!["file.txt".to_string()]],
+        "the journaled patch row's args must equal [path], never the body"
     );
 }
 

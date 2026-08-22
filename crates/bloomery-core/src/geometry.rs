@@ -67,6 +67,9 @@ pub struct GeometryInput {
     /// get. Closes carried-debt item 7 (docs/CARRIED-DEBT.md) — see
     /// `docs/superpowers/specs/2026-08-15-partial-offload-capability-window-design.md`
     /// §3b for the derivation and the live 14B attempt that found it.
+    /// Since turn 5 the pager also folds the model's derived per-context
+    /// recurrent-state charge (`GgufMeta::recurrent_state_bytes`) into this
+    /// term (spec 2026-08-22 §2).
     pub ctx_overhead_bytes: u64,
     pub user_cap: Option<u32>,
     /// assay ceiling.max_verified
