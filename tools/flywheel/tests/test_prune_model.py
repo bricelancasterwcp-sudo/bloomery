@@ -21,6 +21,7 @@ import torch
 import torch.nn.functional as F
 from transformers import Qwen3_5MoeForCausalLM
 
+from tools.flywheel.prune import PruneConfigurationError
 from tools.flywheel.prune.blocks import find_moe_blocks
 from tools.flywheel.prune.prune import build_provenance, prune_model, save_pruned
 from tools.flywheel.tests.prune_fixture import (
@@ -142,6 +143,20 @@ class PruneValidationTest(unittest.TestCase):
         model = build_mini_model()
         with self.assertRaises(ValueError):
             prune_model(model, {0: [0, 1], 1: [0, 1, 2], 2: [0, 1], 3: [0, 1]})
+
+    def test_rejects_keeping_fewer_experts_than_top_k(self):
+        model = build_mini_model()  # top_k = 2
+        before = {ref.layer_index: ref.experts.gate_up_proj.shape[0]
+                  for ref in find_moe_blocks(model)}
+        with self.assertRaises(PruneConfigurationError) as ctx:
+            prune_model(model, {i: [3] for i in range(4)})
+        self.assertIn("num_experts_per_tok=2", str(ctx.exception))
+        self.assertIn("layer 0", str(ctx.exception))
+        # Refused before any tensor was touched.
+        self.assertEqual(
+            {ref.layer_index: ref.experts.gate_up_proj.shape[0]
+             for ref in find_moe_blocks(model)}, before)
+        self.assertEqual(model.config.num_experts, NUM_EXPERTS)
 
 
 class SavePrunedTest(unittest.TestCase):

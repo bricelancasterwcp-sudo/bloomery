@@ -53,6 +53,7 @@ import math
 
 import torch
 
+from . import PruneConfigurationError
 from .observer import LayerSaliencyState
 
 REAP_FORMULA_REF = ("CerebrasResearch/reap@1970473c "
@@ -107,8 +108,14 @@ def saliency_matrix(states: dict[int, LayerSaliencyState],
 
 
 def keep_count(num_experts: int, compression_ratio: float,
-               rounding: str = "floor") -> int:
-    """How many experts survive. See the module docstring for the rule."""
+               rounding: str = "floor",
+               num_experts_per_tok: int | None = None) -> int:
+    """How many experts survive. See the module docstring for the rule.
+
+    When `num_experts_per_tok` is supplied, a compression that would leave
+    a layer with fewer experts than the router selects per token is
+    refused with `PruneConfigurationError` — see `_check_routable`.
+    """
     if num_experts < 1:
         raise ValueError(f"num_experts must be >= 1, got {num_experts}")
     if not 0.0 <= compression_ratio < 1.0:
@@ -119,13 +126,45 @@ def keep_count(num_experts: int, compression_ratio: float,
                          f"expected one of {ROUNDINGS}")
     scaled = num_experts * compression_ratio
     n_prune = math.floor(scaled) if rounding == "floor" else math.ceil(scaled)
-    return max(1, num_experts - n_prune)
+    kept = max(1, num_experts - n_prune)
+    if num_experts_per_tok is not None:
+        _check_routable(kept, num_experts, num_experts_per_tok,
+                        compression_ratio=compression_ratio)
+    return kept
+
+
+def _check_routable(kept: int, num_experts: int, num_experts_per_tok: int,
+                    compression_ratio: float | None = None,
+                    layer: int | None = None) -> None:
+    """Refuse a layer that would keep fewer experts than top-k selects.
+
+    `Qwen3_5MoeTopKRouter.forward` does `torch.topk(probs, self.top_k)`
+    (modeling_qwen3_5_moe.py:766) and `Qwen3_5MoeExperts.forward` one-hots
+    the result against `num_experts` (modeling:735). With fewer experts
+    than `top_k` the topk itself raises, so such a checkpoint is dead on
+    arrival — better to refuse before spending a calibration pass on it.
+    """
+    if kept >= num_experts_per_tok:
+        return
+    where = "" if layer is None else f"layer {layer}: "
+    ceiling = (num_experts - num_experts_per_tok) / num_experts
+    detail = ""
+    if compression_ratio is not None:
+        detail = (f" (compression {compression_ratio}; the most this model "
+                  f"can take is {math.floor(ceiling * 10000) / 10000})")
+    raise PruneConfigurationError(
+        f"{where}pruning would keep {kept} of {num_experts} experts, below "
+        f"num_experts_per_tok={num_experts_per_tok}: the router selects "
+        f"top-{num_experts_per_tok} for every token, so the pruned model "
+        f"could not route at all{detail}")
 
 
 def select_experts_to_prune(saliency: dict[int, torch.Tensor],
                             compression_ratio: float,
                             mode: str = "per_layer",
-                            rounding: str = "floor") -> dict[int, list[int]]:
+                            rounding: str = "floor",
+                            num_experts_per_tok: int | None = None
+                            ) -> dict[int, list[int]]:
     """Per layer, the ascending indices of the experts to **keep**.
 
     Despite the upstream-matching name, the return value is the retained
@@ -146,7 +185,8 @@ def select_experts_to_prune(saliency: dict[int, torch.Tensor],
     if len(counts) != 1:
         raise ValueError(f"layers disagree on the expert count: {sorted(counts)}")
     num_experts = counts.pop()
-    keep = keep_count(num_experts, compression_ratio, rounding=rounding)
+    keep = keep_count(num_experts, compression_ratio, rounding=rounding,
+                      num_experts_per_tok=num_experts_per_tok)
     n_prune = num_experts - keep
 
     selection: dict[int, list[int]] = {}

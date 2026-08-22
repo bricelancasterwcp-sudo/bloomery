@@ -93,9 +93,39 @@ def _dense_reference(model, input_ids, attention_mask=None):
     return out
 
 
+def _run_capturing_routing(model, input_ids):
+    """Logits plus the per-layer top-k routing indices for one forward."""
+    routing = {}
+
+    def make(idx):
+        def hook(module, args, output):
+            routing[idx] = output[2].detach().clone()
+        return hook
+
+    handles = [ref.gate.register_forward_hook(make(ref.layer_index))
+               for ref in find_moe_blocks(model)]
+    try:
+        with torch.no_grad():
+            logits = model(input_ids=input_ids).logits.clone()
+    finally:
+        for handle in handles:
+            handle.remove()
+    return logits, routing
+
+
 class NonPerturbationTest(unittest.TestCase):
-    def test_hooked_forward_produces_identical_logits(self):
-        model = build_mini_model()
+    """What the observer does and does not change.
+
+    The hooks return `None`, so they cannot perturb the forward pass. The
+    one visible effect of *installing* the observer is that it pins the
+    expert kernel to eager for the calibration pass (see
+    `blocks.eager_experts`). Both halves are asserted: exact equality when
+    the model is already eager, and `allclose` + identical routing when it
+    is not.
+    """
+
+    def test_hooked_forward_is_exact_when_the_model_is_already_eager(self):
+        model = build_mini_model()  # pinned eager: the switch is a no-op
         ids = mini_input_ids()
         with torch.no_grad():
             clean = model(input_ids=ids).logits.clone()
@@ -105,6 +135,38 @@ class NonPerturbationTest(unittest.TestCase):
                 hooked = model(input_ids=ids).logits.clone()
         self.assertTrue(torch.equal(clean, hooked),
                         f"max delta {(clean - hooked).abs().max().item()}")
+
+    def test_grouped_mm_model_is_switched_to_eager_and_restored(self):
+        model = build_mini_model(pin_eager=False)
+        if model.config._experts_implementation != "grouped_mm":
+            self.skipTest("this box does not dispatch grouped_mm; "
+                          "nothing to compare eager against")
+        ids = mini_input_ids()
+        clean_logits, clean_routing = _run_capturing_routing(model, ids)
+
+        observer = ExpertSaliencyObserver(model)
+        with observer:
+            self.assertEqual(model.config._experts_implementation, "eager")
+            hooked_logits, hooked_routing = _run_capturing_routing(model, ids)
+        self.assertEqual(model.config._experts_implementation, "grouped_mm")
+
+        # The kernel swap is worth order 1e-7 on the logits (measured
+        # 1.19e-7 max abs delta), not zero — the honest claim.
+        delta = (clean_logits - hooked_logits).abs().max().item()
+        self.assertLess(delta, 1e-5, f"kernel swap moved logits by {delta}")
+        # Routing is unaffected at that scale: same experts, same order.
+        self.assertEqual(sorted(clean_routing), sorted(hooked_routing))
+        for layer, indices in clean_routing.items():
+            self.assertTrue(torch.equal(indices, hooked_routing[layer]),
+                            f"layer {layer} routing changed")
+
+    def test_none_experts_implementation_is_restored_as_none(self):
+        model = build_mini_model()
+        model.config._experts_implementation = None
+        observer = ExpertSaliencyObserver(model)
+        with observer:
+            self.assertEqual(model.config._experts_implementation, "eager")
+        self.assertIsNone(model.config._experts_implementation)
 
     def test_hooks_are_removed_on_exit(self):
         model = build_mini_model()

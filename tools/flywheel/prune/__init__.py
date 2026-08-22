@@ -25,3 +25,12 @@ Requires torch + transformers>=5.5 (use `~/flywheel-venv/bin/python`).
 """
 
 REAP_UPSTREAM = "CerebrasResearch/reap@1970473c51ca3caeb98c10392f15b3a08a672974"
+
+
+class PruneConfigurationError(ValueError):
+    """A prune that would produce an unusable model was refused.
+
+    Raised before any calibration, surgery or write happens — the caller
+    gets a named error and an untouched output directory, not a corrupt
+    checkpoint discovered at load time.
+    """

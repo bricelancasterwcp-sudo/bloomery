@@ -62,15 +62,34 @@ def mini_config(**overrides) -> Qwen3_5MoeTextConfig:
     return cfg
 
 
-def build_mini_model(seed: int = 20260822, **overrides) -> Qwen3_5MoeForCausalLM:
-    """Randomly-initialised miniature model in eval mode, eager experts."""
+def build_mini_model(seed: int = 20260822, pin_eager: bool = True,
+                     **overrides) -> Qwen3_5MoeForCausalLM:
+    """Randomly-initialised miniature model in eval mode.
+
+    `pin_eager=True` (the default) pins the eager expert kernel so tests
+    compare like with like. `pin_eager=False` leaves whatever transformers
+    picks — `grouped_mm` on this box — which is what the observer's kernel
+    swap has to be measured against.
+    """
     torch.manual_seed(seed)
     model = Qwen3_5MoeForCausalLM(mini_config(**overrides))
     model.eval()
-    # Calibration always runs the eager (python-loop) expert kernel; pin it
-    # here too so tests compare like with like. See observer docstring.
-    model.set_experts_implementation("eager")
+    if pin_eager:
+        model.set_experts_implementation("eager")
     return model
+
+
+def build_mini_dense_model(seed: int = 20260822):
+    """A tiny NON-MoE causal LM, for the architecture-rejection test."""
+    from transformers import Qwen3Config, Qwen3ForCausalLM
+
+    torch.manual_seed(seed)
+    config = Qwen3Config(
+        vocab_size=VOCAB_SIZE, hidden_size=32, num_hidden_layers=2,
+        num_attention_heads=2, num_key_value_heads=1, head_dim=16,
+        intermediate_size=32, max_position_embeddings=64,
+        tie_word_embeddings=False)
+    return Qwen3ForCausalLM(config).eval()
 
 
 def mini_input_ids(seed: int = 7, batch: int = 1, seq: int = 12) -> torch.Tensor:

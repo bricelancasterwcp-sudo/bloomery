@@ -31,10 +31,12 @@ from pathlib import Path
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from . import PruneConfigurationError
 from .calib import load_calibration_texts, run_calibration, select_samples
 from .prune import build_provenance, prune_model, save_pruned
-from .saliency import (METRICS, ROUNDINGS, metrics_help, saliency_matrix,
-                       saliency_quantiles, select_experts_to_prune)
+from .saliency import (METRICS, ROUNDINGS, keep_count, metrics_help,
+                       saliency_matrix, saliency_quantiles,
+                       select_experts_to_prune)
 
 DTYPES = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}
 
@@ -118,6 +120,15 @@ def main(argv: list[str] | None = None) -> int:
     _log(f"loaded {model.__class__.__name__}, "
          f"{model.config.num_experts} experts / "
          f"{model.config.num_experts_per_tok} per token")
+
+    # Decide the keep count BEFORE spending a calibration pass, so an
+    # impossible compression costs nothing and writes nothing.
+    planned_keep = keep_count(
+        model.config.num_experts, args.compression, rounding=args.rounding,
+        num_experts_per_tok=model.config.num_experts_per_tok)
+    _log(f"plan: keep {planned_keep} of {model.config.num_experts} experts "
+         f"per layer (compression {args.compression}, {args.rounding})")
+
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer or args.model)
 
     texts = select_samples(load_calibration_texts(args.calib), args.samples,
@@ -132,8 +143,9 @@ def main(argv: list[str] | None = None) -> int:
     calib_stats["requested_samples"] = args.samples
 
     saliency = saliency_matrix(observer.state, metric=args.metric)
-    keep = select_experts_to_prune(saliency, args.compression,
-                                   rounding=args.rounding)
+    keep = select_experts_to_prune(
+        saliency, args.compression, rounding=args.rounding,
+        num_experts_per_tok=model.config.num_experts_per_tok)
     _log(f"keeping {len(next(iter(keep.values())))} experts per layer "
          f"across {len(keep)} layers")
 
@@ -176,5 +188,14 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def run(argv: list[str] | None = None) -> int:
+    """`main` with the refusals turned into a named message and exit 2."""
+    try:
+        return main(argv)
+    except PruneConfigurationError as exc:
+        _log(f"PruneConfigurationError: {exc}")
+        return 2
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run())

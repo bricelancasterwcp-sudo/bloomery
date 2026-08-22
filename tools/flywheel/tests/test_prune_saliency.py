@@ -21,6 +21,7 @@ except ImportError as exc:  # pragma: no cover
 
 import torch
 
+from tools.flywheel.prune import PruneConfigurationError
 from tools.flywheel.prune import saliency as sal
 from tools.flywheel.prune.observer import LayerSaliencyState
 
@@ -73,6 +74,32 @@ class KeepCountRuleTest(unittest.TestCase):
     def test_rejects_unknown_rounding(self):
         with self.assertRaises(ValueError):
             sal.keep_count(8, 0.5, rounding="banker")
+
+
+class RoutableGuardTest(unittest.TestCase):
+    """A layer that keeps fewer experts than top-k cannot route at all."""
+
+    def test_refuses_to_keep_fewer_experts_than_top_k(self):
+        with self.assertRaises(PruneConfigurationError) as ctx:
+            sal.keep_count(8, 0.98, num_experts_per_tok=2)
+        message = str(ctx.exception)
+        self.assertIn("keep 1 of 8", message)
+        self.assertIn("num_experts_per_tok=2", message)
+        self.assertIn("0.75", message)  # the stated ceiling: (8-2)/8
+
+    def test_allows_keeping_exactly_top_k(self):
+        self.assertEqual(sal.keep_count(8, 0.75, num_experts_per_tok=2), 2)
+
+    def test_real_geometry_at_048_is_far_above_top_k(self):
+        self.assertEqual(sal.keep_count(256, 0.48, num_experts_per_tok=8), 134)
+
+    def test_guard_is_off_when_top_k_is_not_supplied(self):
+        self.assertEqual(sal.keep_count(8, 0.98), 1)
+
+    def test_selection_refuses_the_same_case(self):
+        with self.assertRaises(PruneConfigurationError):
+            sal.select_experts_to_prune({0: torch.zeros(8)}, 0.98,
+                                        num_experts_per_tok=2)
 
 
 class ReapScoreTest(unittest.TestCase):

@@ -263,6 +263,11 @@ calibration description are all written into the output checkpoint
 (`config.json` → `reap_pruning`, plus the full kept-index lists in
 `reap_pruning.json`).
 
+A compression that would leave a layer with fewer experts than
+`num_experts_per_tok` is refused with `PruneConfigurationError` and exit 2
+**before** the model is calibrated or anything is written — the router
+selects top-k for every token, so such a checkpoint could not route.
+
 ### Running the prune tests
 
 They need torch + transformers, so use the venv interpreter; under the

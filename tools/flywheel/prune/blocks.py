@@ -72,6 +72,21 @@ def find_moe_blocks(model: nn.Module) -> list[MoEBlockRef]:
     return sorted(refs, key=lambda ref: ref.layer_index)
 
 
+def set_experts_implementation(model: nn.Module, value: str | None) -> None:
+    """Set the expert kernel, `None` included.
+
+    `PreTrainedModel.set_experts_implementation(None)` does NOT restore
+    `None`: it routes through `get_correct_experts_implementation`, which
+    maps `None` to the concrete default (`modeling_utils.py:1927`). Only
+    the config property setter (`configuration_utils.py:378-394`) stores
+    `None` verbatim, so that is the path used to put `None` back.
+    """
+    if value is None:
+        model.config._experts_implementation = None
+    else:
+        model.set_experts_implementation(value)
+
+
 @contextmanager
 def eager_experts(model: nn.Module):
     """Force `experts_implementation="eager"` for the duration of a block.
@@ -80,19 +95,27 @@ def eager_experts(model: nn.Module):
     contribution by replaying the eager kernel body
     (`Qwen3_5MoeExperts.forward`, modeling_qwen3_5_moe.py:745-747) on the
     routed tokens. The default on this box is `grouped_mm`, a batched
-    kernel whose numerics differ and whose fused output is already
-    gate-weighted and summed, so the per-expert term is not recoverable
-    from it. Pinning eager makes the arithmetic the observer records and
-    the arithmetic the model runs the same arithmetic.
+    kernel whose fused output is already gate-weighted and summed, so the
+    per-expert term is not recoverable from it. Pinning eager makes the
+    arithmetic the observer records and the arithmetic the model runs the
+    same arithmetic.
 
-    The previous setting is restored on exit.
+    **This kernel swap is the one way installing the observer is visible
+    from outside.** The hooks themselves cannot perturb anything (they
+    return `None`), but replacing grouped_mm with eager moves the model's
+    own logits by order 1e-7 — measured 1.19e-7 max abs delta on the
+    miniature model. Routing indices are unaffected at that scale. See
+    `test_prune_observer.py::NonPerturbationTest`, which asserts exact
+    equality for an already-eager model and `allclose` plus identical
+    routing for a grouped_mm one.
+
+    The previous setting — `None` included — is restored on exit.
     """
     previous = getattr(model.config, "_experts_implementation", None)
-    changed = previous is not None and previous != "eager"
     if previous != "eager":
         model.set_experts_implementation("eager")
     try:
         yield
     finally:
-        if changed:
-            model.set_experts_implementation(previous)
+        if getattr(model.config, "_experts_implementation", None) != previous:
+            set_experts_implementation(model, previous)

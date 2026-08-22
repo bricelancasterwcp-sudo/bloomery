@@ -33,7 +33,7 @@ import torch.nn as nn
 
 from . import REAP_UPSTREAM
 from .blocks import find_moe_blocks
-from .saliency import KEEP_RULE_REF, REAP_FORMULA_REF
+from .saliency import KEEP_RULE_REF, REAP_FORMULA_REF, _check_routable
 
 PROVENANCE_KEY = "reap_pruning"
 SIDECAR_NAME = "reap_pruning.json"
@@ -59,6 +59,10 @@ def _validate(keep_indices_per_layer: dict[int, list[int]],
             raise ValueError(
                 f"layer {ref.layer_index}: keep indices {bad} outside "
                 f"[0, {ref.num_experts})")
+        # Last line of defence before any tensor is touched: a layer that
+        # keeps fewer experts than top_k cannot route.
+        _check_routable(len(keep), ref.num_experts, ref.top_k,
+                        layer=ref.layer_index)
         sizes.add(len(keep))
     if len(sizes) != 1:
         raise ValueError(

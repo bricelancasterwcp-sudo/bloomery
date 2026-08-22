@@ -36,9 +36,22 @@ exclusive of line 748's `* top_k_weights`, because REAP records the
 *unweighted* activation ("we do not apply router_scores",
 reap/observer.py:369-372) and applies the router weight itself.
 
-Forward hooks that return `None` cannot perturb the forward pass, so the
-model's logits are bit-identical with the observer installed — asserted in
-`test_prune_observer.py::NonPerturbationTest`.
+WHAT INSTALLING THE OBSERVER DOES AND DOES NOT CHANGE
+-----------------------------------------------------
+The **hooks** cannot perturb anything: they return `None`, so the forward
+pass is untouched. **Installing the observer** does change one thing — it
+pins the expert kernel to eager for the calibration pass (see
+`blocks.eager_experts` for why it must). Against a model already running
+eager that is a no-op and the logits are bit-identical; against the
+default `grouped_mm` it swaps kernels, which moves the model's own logits
+by order 1e-7 (measured 1.19e-7 max abs delta on the miniature model).
+Routing indices are identical at that scale, and the previous kernel —
+`None` included — is restored on exit.
+
+Both halves are asserted in `test_prune_observer.py::NonPerturbationTest`:
+exact `torch.equal` for the eager-pinned case, and `allclose` at
+`atol=1e-5` plus identical top-k routing plus kernel restoration for the
+grouped_mm case.
 
 DELIBERATE DIVERGENCES FROM UPSTREAM (same math, different cost)
 ---------------------------------------------------------------

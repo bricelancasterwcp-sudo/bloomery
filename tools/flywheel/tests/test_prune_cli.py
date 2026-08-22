@@ -17,12 +17,19 @@ except ImportError as exc:  # pragma: no cover
 
 from tools.flywheel.prune.calib import load_calibration_texts
 from tools.flywheel.tests.prune_fixture import (
+    build_mini_dense_model,
     build_mini_model,
     build_mini_tokenizer,
     mini_calibration_texts,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _run_cli(argv: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "-m", "tools.flywheel.prune.cli", *argv],
+        cwd=REPO_ROOT, capture_output=True, text=True)
 
 
 class CalibrationLoaderTest(unittest.TestCase):
@@ -84,13 +91,11 @@ class CliSmokeTest(unittest.TestCase):
                 for t in mini_calibration_texts(n=5)))
 
             out = root / "pruned"
-            proc = subprocess.run(
-                [sys.executable, "-m", "tools.flywheel.prune.cli",
-                 "--model", str(src), "--calib", str(calib),
+            proc = _run_cli(
+                ["--model", str(src), "--calib", str(calib),
                  "--samples", "4", "--seq-len", "8",
                  "--compression", "0.48", "--seed", "42",
-                 "--out", str(out), "--device", "cpu", "--dtype", "fp32"],
-                cwd=REPO_ROOT, capture_output=True, text=True)
+                 "--out", str(out), "--device", "cpu", "--dtype", "fp32"])
             self.assertEqual(proc.returncode, 0, proc.stderr[-4000:])
 
             summary = json.loads(proc.stdout)
@@ -114,17 +119,55 @@ class CliSmokeTest(unittest.TestCase):
                 reloaded.model.layers[0].mlp.experts.gate_up_proj.shape[0], 5)
             self.assertEqual(reloaded.config.reap_pruning["seed"], 42)
 
-    def test_rejects_a_non_moe_checkpoint(self):
+    def test_rejects_a_missing_model_directory(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             calib = root / "c.jsonl"
             calib.write_text('{"text": "t1 t2"}\n')
-            proc = subprocess.run(
-                [sys.executable, "-m", "tools.flywheel.prune.cli",
-                 "--model", str(root / "missing"), "--calib", str(calib),
-                 "--out", str(root / "o")],
-                cwd=REPO_ROOT, capture_output=True, text=True)
+            proc = _run_cli(["--model", str(root / "missing"),
+                             "--calib", str(calib), "--out", str(root / "o")])
             self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("--model is not a directory", proc.stderr)
+
+    def test_rejects_a_non_moe_checkpoint(self):
+        """Reaches the architecture check, not the missing-directory check."""
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dense = root / "dense"
+            build_mini_dense_model().save_pretrained(dense)
+            build_mini_tokenizer().save_pretrained(dense)
+            calib = root / "c.jsonl"
+            calib.write_text('{"text": "t1 t2"}\n')
+
+            proc = _run_cli(["--model", str(dense), "--calib", str(calib),
+                             "--out", str(root / "o"), "--device", "cpu",
+                             "--dtype", "fp32"])
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("Qwen3ForCausalLM", proc.stderr)
+            self.assertIn("only prunes qwen3_5_moe checkpoints", proc.stderr)
+            self.assertFalse((root / "o").exists())
+
+    def test_refuses_a_compression_that_would_break_routing(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "mini"
+            build_mini_model().save_pretrained(src)
+            build_mini_tokenizer().save_pretrained(src)
+            calib = root / "calib.jsonl"
+            calib.write_text("".join(json.dumps({"text": t}) + "\n"
+                                     for t in mini_calibration_texts(n=3)))
+
+            out = root / "pruned"
+            proc = _run_cli(["--model", str(src), "--calib", str(calib),
+                             "--seq-len", "8", "--compression", "0.98",
+                             "--out", str(out), "--device", "cpu",
+                             "--dtype", "fp32"])
+            self.assertEqual(proc.returncode, 2, proc.stderr[-2000:])
+            self.assertIn("PruneConfigurationError", proc.stderr)
+            self.assertIn("num_experts_per_tok=2", proc.stderr)
+            # Nothing written, and it never reached calibration.
+            self.assertFalse(out.exists())
+            self.assertNotIn("calibrating on", proc.stderr)
 
 
 if __name__ == "__main__":
