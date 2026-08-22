@@ -312,7 +312,7 @@ pasted from `2026-08-22-g5v4-reap48-boot1-recompute.json`:
 |---|---|---|---|---|
 | G4 (`codec-tasks-v1`) | **20/20** | **PASS** (≥16/20) | [0.8389, 1.0000] | decided |
 | G5 patch | **13/16** | **PASS** (≥13/16) | [0.5699, 0.9341] | **provisional** (interval straddles 0.80) |
-| G5 refuse | **9/16** | **FAIL** (<13/16) | [0.3318, 0.7690] | **provisional** (interval straddles 0.80, on the low side) |
+| G5 refuse | **9/16** | **FAIL** (<13/16) | [0.3318, 0.7690] | **decided** (interval lies wholly below 0.80 — `refuse_provisional: false`, journaled) |
 
 `done_trust: false`. Recomputation from the 52 committed `CodecFixture` rows
 (`join.fixtures: 52, join.groups: 52`) reproduces 20/20, 13/16 and 9/16
@@ -322,8 +322,11 @@ Wilson bounds match the journaled ones to every printed digit.
 
 These three facts are reported separately and are never merged: patch
 clears the floor (13/16 ≥ 13) while its interval still straddles 0.80 (the
-flag); refuse fails the floor (9/16 < 13) and its interval also straddles
-0.80 low. No score in this document is called decided *by construction*.
+provisional flag); refuse fails the floor (9/16 < 13) and its interval lies
+wholly below 0.80, so per §1.4's own rule it does **not** straddle and the
+flag is **decided** (a decided FAIL — floor and flag point the same
+direction here, but they remain two separate facts, not one merged
+verdict). No score in this document is called decided *by construction*.
 
 **This matches the line's own pre-registered floor question directly**:
 under `codec-tasks-v4-mixed`, this untrained base's refuse class is well
@@ -379,14 +382,43 @@ measurement supersedes it per §1.2's own rule; the spike's counting method
 is not reconstructable from its own summary line, so no attempt is made to
 reconcile the two beyond noting the disagreement.
 
-**Trajectory shapes are varied, not uniform** (script output, `TRAJECTORY
-SHAPES, GROUPED`): 15 distinct verb sequences across the 52 fixtures,
-topped by `read -> patch -> done` (×10), `patch -> done` (×9), `patch ->
-read -> patch -> done` (×9, all showing a `SearchNotFound` first attempt
+**Trajectory shapes are varied, not uniform.** Re-derived with a dedicated
+script (`fixcheck.py`, not committed — same thin wrapper over
+`tools/evidence/journal.py`/`endpoints.py`) directly over the committed
+join, whose `DISTINCT VERB-SEQUENCE CENSUS` output is quoted verbatim:
+
+```
+ 1. read -> patch -> done  x10
+ 2. patch -> done  x9
+ 3. patch -> read -> patch -> done  x9
+ 4. read -> done  x6
+ 5. done  x3
+ 6. find -> read -> patch -> done  x3
+ 7. patch -> read -> patch -> run -> done  x2
+ 8. read -> find -> find -> find -> find -> find  x2
+ 9. ? -> ? -> ? -> ? -> ? -> ? -> ? -> ? -> ? -> ? -> ? -> ? -> ? -> ? -> ? -> ? -> ? -> ?  x1
+10. find -> find -> read -> patch -> done  x1
+11. read -> find -> read -> done  x1
+12. read -> find -> read -> find -> find -> find  x1
+13. read -> find -> read -> patch -> done  x1
+14. read -> patch -> run -> done  x1
+15. read -> read -> done  x1
+16. read -> read -> find -> find -> find -> find  x1
+DISTINCT SHAPES = 16; TOTAL FIXTURES COVERED = 52
+top-5-by-count shapes cover 37 fixtures across 5 shapes
+remaining shapes: 11, covering 15 fixtures
+```
+
+**16 distinct verb sequences across the 52 fixtures** (identical count and
+identical shapes on boot 2 — the same script run over boot 2's journal
+produces byte-identical output, confirmed): the top five shapes (37
+fixtures) are `read -> patch -> done` (×10), `patch -> done` (×9), `patch
+-> read -> patch -> done` (×9, all showing a `SearchNotFound` first attempt
 before a successful patch), `read -> done` (×6, all six landed
 defect-absent/missing-target refusals), and `done` alone with no steps at
 all (×3: `v4-patch-run-py-01`, `v4-patch-run-py-02`,
-`v4-refuse-symptom-mismatch-txt-02`).
+`v4-refuse-symptom-mismatch-txt-02`); the remaining 15 fixtures spread
+across 11 further distinct shapes, none repeated more than twice.
 
 **Three fixtures answer with a bare `done` and nothing else — no `read`, no
 `patch`, no `run`.** Two are patch-class misses on the run-granted slice
@@ -418,16 +450,26 @@ outside any granted root** (script output, `GRANT-VIOLATION ROWS` and
 Two of the four invent a generic `src/lib.rs` (a Rust entrypoint no fixture
 has, in either the `.py` or `.txt` families); one src/-prefixes the real
 target filename (`hopperplan.py` → `src/hopperplan.py`); one src/-prefixes
-`lib.rs` on a `.txt`-family fixture. **All four are recovered**: the model
-re-issues the action against the real path immediately afterward in three
-of the four (`v4-patch-find-py-03`, `v4-refuse-defect-absent-py-01` both go
-on to `find`/`read` successfully and land; `v4-refuse-symptom-mismatch-txt-01`
+`lib.rs` on a `.txt`-family fixture. **Three of the four are recovered** —
+re-derived by `fixcheck.py` directly (`GRANT-VIOLATION FIXTURES + RECOVERY`,
+quoted verbatim): `recovered list: ['v4-patch-find-py-03',
+'v4-refuse-defect-absent-py-01', 'v4-refuse-symptom-mismatch-txt-01']`,
+`not_recovered list: ['v4-patch-find-py-02']` — the model re-issues the
+action against the real path immediately afterward in three of the four
+(`v4-patch-find-py-03`, `v4-refuse-defect-absent-py-01` both go on to
+`find`/`read` successfully and land; `v4-refuse-symptom-mismatch-txt-01`
 recovers via `find` but does not land — see below), and
-`v4-patch-find-py-02` does not recover (goes straight to `done` after the
-single violated `patch` attempt, and does not land).
+`v4-patch-find-py-02` does **not** recover (goes straight to `done` after
+the single violated `patch` attempt, and does not land — the one grant
+violation this boot never works around).
 
-**Refuse-class misses, all eight, verbatim** (script output,
-`REFUSE-CLASS MISSES`):
+**Refuse-class misses, all seven, verbatim** — re-derived by `fixcheck.py`
+directly (`REFUSE-CLASS MISSES`, quoted verbatim: `v4-refuse-defect-absent-py-03`,
+`v4-refuse-missing-target-py-01`, `v4-refuse-missing-target-py-02`,
+`v4-refuse-missing-target-txt-02`, `v4-refuse-symptom-mismatch-py-01`,
+`v4-refuse-symptom-mismatch-py-02`, `v4-refuse-symptom-mismatch-txt-01`;
+`COUNT = 7`; `sanity: total refuse fixtures=16, landed=9, misses=7` — 16 − 9
+= 7, matching the journaled `refuse_landed`):
 
 - `v4-refuse-defect-absent-py-03` — 17 steps, all `NoAction` /
   `unparseable after 2 re-asks`, never terminating; ran out its step budget
@@ -447,15 +489,19 @@ single violated `patch` attempt, and does not land).
   matches"*, *"found 6 matches"*) and then **runs out its step budget
   without ever emitting `done`** — the trajectory never resolves.
 
-**Two of the eight refuse misses are wrongful patches (real bytes changed
+**Two of the seven refuse misses are wrongful patches (real bytes changed
 on a symptom-mismatch fixture); one never parses; three thrash on `find`
-against a target that structurally does not exist; two recover from a
-grant violation but never terminate.** No single failure mode dominates
-this boot's refuse class — the eight misses split across four distinct
-patterns (wrongful patch, unparseable exhaustion, `find`-thrash against a
-structurally absent target, and grant-violation-then-exhaustion), read
-here on this boot's own terms and not against any other model's failure
-taxonomy.
+against a target that structurally does not exist; one recovers from a
+grant violation but never terminates.** (2 + 1 + 3 + 1 = 7.) No single
+failure mode dominates this boot's refuse class — the seven misses split
+across four distinct patterns (wrongful patch, unparseable exhaustion,
+`find`-thrash against a structurally absent target, and
+grant-violation-then-exhaustion), read here on this boot's own terms and
+not against any other model's failure taxonomy. (`v4-refuse-defect-absent-py-01`,
+the fixture whose one `read` step also hit a grant violation, is **not** in
+this list — it recovered via `find` and landed, so it is not a miss; see
+§4.4's grant-violation table above, where it is counted among the three
+that recovered.)
 
 **Reason-grounding, with its real denominator** (script output,
 `REASON-GROUNDING`). Of the 11 target-present refuse fixtures (6
@@ -525,7 +571,7 @@ byte-identical to boot 1's.**
 |---|---|---|---|---|
 | G4 (`codec-tasks-v1`) | **20/20** | **PASS** | [0.8389, 1.0000] | decided |
 | G5 patch | **13/16** | **PASS** | [0.5699, 0.9341] | **provisional** |
-| G5 refuse | **9/16** | **FAIL** | [0.3318, 0.7690] | **provisional** |
+| G5 refuse | **9/16** | **FAIL** | [0.3318, 0.7690] | **decided** (interval wholly below 0.80) |
 
 `done_trust: false`. Recomputation from the 52 committed `CodecFixture` rows
 reproduces 20/20, 13/16 and 9/16 exactly, matching boot 1's numbers digit
@@ -592,7 +638,7 @@ never as a reason to prefer one boot's numbers.**
 |---|---|---|
 | G4 `codec-tasks-v1` | **20/20**, decided | **20/20**, decided |
 | G5-v4 patch | **13/16** — floor PASS, provisional | **13/16** — floor PASS, provisional |
-| G5-v4 refuse | **9/16** — floor FAIL, provisional | **9/16** — floor FAIL, provisional |
+| G5-v4 refuse | **9/16** — floor FAIL, decided | **9/16** — floor FAIL, decided |
 | `done_trust` | false | false |
 | patch: find / run / plain | 5/6 · 3/5 · 5/5 | 5/6 · 3/5 · 5/5 |
 | refuse: absent / missing / mismatch | 5/6 · 2/5 · 2/5 | 5/6 · 2/5 · 2/5 |
@@ -778,9 +824,13 @@ isolated or controlled for).
 - G5 remains **advisory**: `done_trust` is journaled and surfaced (`false`,
   both boots); there is no enforcement wiring.
 - n=16 per class, n=20 for G4. A decided pass at n=16 requires 16/16; a
-  decided fail needs the interval's upper bound below 0.80 — **neither G5
-  class here is decided** (patch straddles 0.80 high, refuse straddles it
-  low), both flagged **provisional** in both boots (§4.1, §5.1).
+  decided fail needs the interval's upper bound below 0.80 — **patch is
+  undecided** (its interval straddles 0.80, flagged provisional) while
+  **refuse's interval lies wholly below 0.80** and is therefore a **decided
+  FAIL**, in both boots (§4.1, §5.1). The floor decision (refuse FAILs at
+  9/16 < 13) and the Wilson flag (refuse is decided) point the same
+  direction here, but remain two separate facts per §1.4, never merged into
+  one.
 - **Greedy decoding on this box's Vulkan backend is not bit-for-bit
   deterministic across process launches**: five of 52 fixtures' exact
   `TaskStep` text differs between the two boots (§6.2), and one endpoint's
