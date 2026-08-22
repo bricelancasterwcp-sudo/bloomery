@@ -453,6 +453,53 @@ fn all_fixtures_landing_keeps_mutating_verbs_and_journals_one_verdict() {
     );
 }
 
+/// `(fixture, agent)` for every CodecFixture event, in journal order.
+fn fixture_agents(events: &[Event]) -> Vec<(String, Option<String>)> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::CodecFixture { fixture, agent, .. } => Some((fixture.clone(), agent.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Turn-5 spec §3: every CodecFixture row names the agent that ran it, and
+/// the sequence equals the AgentCreated sequence — the keyed join.
+#[test]
+fn codec_fixture_rows_carry_the_agent_that_ran_them() {
+    let dir = fresh_dir("agent-join");
+    let pager = Mutex::new(build_pager(
+        &dir,
+        vec![
+            sr_patch("a.txt", "broken", "fixed"),
+            done("repaired a.txt"),
+            sr_patch("b.txt", "broken", "fixed"),
+            done("repaired b.txt"),
+        ],
+    ));
+
+    run_codec_probe(&pager, MODEL, &test_set(), &dir.join("scratch")).expect("probe completes");
+
+    let events = pager_events(&dir);
+    let created: Vec<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::AgentCreated { id, .. } => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    let rows = fixture_agents(&events);
+    assert_eq!(rows.len(), created.len(), "one agent per fixture");
+    for (i, (fixture, agent)) in rows.iter().enumerate() {
+        assert_eq!(
+            agent.as_deref(),
+            Some(created[i].as_str()),
+            "fixture {fixture} joins to its own agent"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Protocol §10, Amendment 2: the envelope-v2 (think-preseeded) lens
 // ---------------------------------------------------------------------------
@@ -1443,6 +1490,26 @@ fn mixed_set_verdict_carries_distinct_per_class_numbers_with_no_class_swap() {
     );
     let p3 = rows.iter().find(|r| r.0 == "p3-misses").unwrap();
     assert!(!p3.2, "p3's missed patch must not land");
+
+    // Turn-5 spec §3: the refusal engine's CodecFixture rows carry the same
+    // keyed join as the classic G4 engine — one agent per fixture, in
+    // journal order.
+    let created: Vec<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::AgentCreated { id, .. } => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    let agent_rows = fixture_agents(&events);
+    assert_eq!(agent_rows.len(), created.len(), "one agent per fixture");
+    for (i, (fixture, agent)) in agent_rows.iter().enumerate() {
+        assert_eq!(
+            agent.as_deref(),
+            Some(created[i].as_str()),
+            "fixture {fixture} joins to its own agent"
+        );
+    }
 }
 
 /// A mixed-set probe run against a set with zero fixtures in one class

@@ -301,6 +301,7 @@ fn journal_codec_fixture_round_trips_through_replay() {
         4,
         "applies_and_parses",
         "patch",
+        "a1",
     )
     .unwrap();
 
@@ -316,6 +317,7 @@ fn journal_codec_fixture_round_trips_through_replay() {
             steps: 4,
             detail: "applies_and_parses".to_string(),
             expect: "patch".to_string(),
+            agent: Some("a1".to_string()),
         }]
     );
 }
@@ -338,6 +340,7 @@ fn journal_codec_fixture_round_trips_a_refuse_class_row() {
         2,
         "refuse leg (a) failed: a patch step succeeded — not a refusal",
         "refuse",
+        "a2",
     )
     .unwrap();
 
@@ -353,6 +356,7 @@ fn journal_codec_fixture_round_trips_a_refuse_class_row() {
             steps: 2,
             detail: "refuse leg (a) failed: a patch step succeeded — not a refusal".to_string(),
             expect: "refuse".to_string(),
+            agent: Some("a2".to_string()),
         }]
     );
 }

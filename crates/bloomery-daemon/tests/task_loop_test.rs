@@ -194,6 +194,78 @@ fn a_read_then_done_task_completes() {
     assert_eq!(task_steps, 2, "journal has 2 TaskStep events");
 }
 
+/// Like [`sandbox`], but the `Grant`'s `commands` also grant the `python3`
+/// prefix (mirroring `task_exec_run_test.rs::sandbox`'s command-grant
+/// shape) — needed for a scripted `run` turn.
+fn sandbox_with_python(dir: &std::path::Path) -> (PathBuf, Grant) {
+    let sb = dir.join("sandbox");
+    std::fs::create_dir_all(&sb).unwrap();
+    std::fs::write(sb.join("file.txt"), "hello\nworld\n").unwrap();
+    let sb = std::fs::canonicalize(&sb).unwrap();
+    let g = Grant::from_json(&format!(
+        r#"{{"read_roots":["{s}"],"write_roots":["{s}"],"commands":[["python3"]]}}"#,
+        s = sb.display()
+    ))
+    .unwrap();
+    (sb, g)
+}
+
+/// Turn-5 spec §3: `Event::TaskStep.args` and `TaskStepRecord.args` carry
+/// the action's model-supplied arguments, verbatim and in order, per the
+/// per-verb mapping (`read` -> `[path]`, `run` -> the argv, `done` -> `[]`).
+/// Scripts read -> run -> done, and pins the args on all three journaled
+/// rows plus the in-memory record for the `run` step.
+#[test]
+fn task_step_args_carry_the_action_arguments_per_verb() {
+    let dir = fresh_dir("args");
+    let (sb, g) = sandbox_with_python(&dir);
+    let target_rel_path = "file.txt";
+    let (mut pager, agent_id) = fixture(
+        &dir,
+        1_000_000,
+        vec![
+            scripted(&format!(
+                "<action verb=\"read\" path=\"{target_rel_path}\">\n</action>"
+            )),
+            scripted("<action verb=\"run\">\n[\"python3\", \"-c\", \"print(1)\"]\n</action>"),
+            scripted("<action verb=\"done\">\nall done\n</action>"),
+        ],
+    );
+    let task_journal_path = dir.join("task.jsonl");
+    let mut task_journal = Journal::open(&task_journal_path).unwrap();
+    let spec = spec(g, sb, 5);
+
+    let result = run_task(&mut pager, &agent_id, &spec, &mut task_journal);
+
+    assert_eq!(result.status, TaskStatus::Done);
+    assert_eq!(result.steps.len(), 3, "got {:?}", result.steps);
+
+    let rows: Vec<(String, Vec<String>)> = replay(&task_journal_path)
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::TaskStep { verb, args, .. } => Some((verb, args)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(rows[0].0, "read");
+    assert_eq!(
+        rows[0].1,
+        vec![target_rel_path.to_string()],
+        "read -> [path]"
+    );
+    assert_eq!(rows[1].0, "run");
+    assert_eq!(
+        rows[1].1,
+        vec!["python3", "-c", "print(1)"],
+        "run -> argv verbatim"
+    );
+    assert_eq!(rows[2].0, "done");
+    assert!(rows[2].1.is_empty(), "done -> []");
+    // and the in-memory record mirrors the journal
+    assert_eq!(result.steps[1].args, vec!["python3", "-c", "print(1)"]);
+}
+
 #[test]
 fn an_unparseable_turn_is_re_asked_then_the_step_fails() {
     let dir = fresh_dir("reask");
@@ -275,6 +347,11 @@ fn a_grant_violation_is_a_failed_step_not_a_task_abort() {
     assert!(
         result.steps[0].failed,
         "a grant-violating step must be marked failed"
+    );
+    assert_eq!(
+        result.steps[0].args,
+        vec!["/etc/passwd".to_string()],
+        "the refused read step's args must equal the refused path, turn-5 spec §3"
     );
     assert_eq!(result.steps[1].verb, "done");
     assert!(!result.steps[1].failed, "the done step is never failed");

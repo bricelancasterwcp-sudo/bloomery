@@ -269,7 +269,9 @@ pub(crate) fn post(
 /// about [`bloomery_core::action::PatchCodec`]. `expect` is the fixture's
 /// class wire spelling (`"patch"`/`"refuse"`, G5 design doc §2) — every
 /// caller before G5 passed `"patch"` implicitly by being the only class that
-/// existed; now it is explicit at every call site.
+/// existed; now it is explicit at every call site. `agent` is the agent that
+/// ran this fixture — the keyed join to its `TaskStep` rows (turn-5 spec
+/// §3); `None` when the caller has no agent to name.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn codec_fixture(
     j: &mut Journal,
@@ -281,6 +283,7 @@ pub(crate) fn codec_fixture(
     steps: u32,
     detail: &str,
     expect: &str,
+    agent: Option<&str>,
 ) -> Result<(), PagerError> {
     append(
         j,
@@ -293,6 +296,7 @@ pub(crate) fn codec_fixture(
             steps,
             detail: detail.to_string(),
             expect: expect.to_string(),
+            agent: agent.map(str::to_string),
         },
     )
 }

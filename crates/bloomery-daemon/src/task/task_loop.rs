@@ -117,6 +117,8 @@ pub struct TaskStepRecord {
     pub outcome: String,
     pub content: String,
     pub failed: bool,
+    /// Same list `Event::TaskStep::args` carries (turn-5 spec §3).
+    pub args: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -161,6 +163,24 @@ struct StepReport<'a> {
     content: &'a str,
     duration_ms: u64,
     failed: bool,
+    args: Vec<String>,
+}
+
+/// The action's arguments as the journal records them (turn-5 spec §3).
+/// Never the patch body: landing is re-derivable from the frozen fixture
+/// and the scratch dir, and the body would bloat every journal.
+fn action_args(action: &Action) -> Vec<String> {
+    match action {
+        Action::Read { path, lines: None } => vec![path.clone()],
+        Action::Read {
+            path,
+            lines: Some((a, b)),
+        } => vec![path.clone(), format!("lines={a}-{b}")],
+        Action::Find { pattern, path } => vec![pattern.clone(), path.clone()],
+        Action::Patch { path, .. } => vec![path.clone()],
+        Action::Run { argv } => argv.clone(),
+        Action::Done { .. } => Vec::new(),
+    }
 }
 
 /// One step's transcript entry — the exact text `record_step` folds into
@@ -204,6 +224,7 @@ fn record_step(
             verb: report.verb.to_string(),
             outcome: report.outcome.to_string(),
             duration_ms: report.duration_ms,
+            args: report.args.clone(),
         })
         .map_err(|e| format!("journal write failed: {e}"))?;
     state.steps.push(TaskStepRecord {
@@ -212,6 +233,7 @@ fn record_step(
         outcome: report.outcome.to_string(),
         content: report.content.to_string(),
         failed: report.failed,
+        args: report.args,
     });
     state.transcript.push_str(&transcript_entry(
         step,
@@ -461,6 +483,7 @@ fn propose_action<S: Substrate>(
                     content: &outcome,
                     duration_ms,
                     failed: true,
+                    args: Vec::new(),
                 };
                 if let Err(msg) = record_step(journal, agent_id, state, step, report) {
                     return ProposeOutcome::Terminate(TaskStatus::Error, Some(msg));
@@ -542,6 +565,7 @@ pub fn run_task<S: Substrate>(
                 content: summary,
                 duration_ms: propose_duration_ms,
                 failed: false,
+                args: Vec::new(),
             };
             if let Err(msg) = record_step(journal, agent_id, &mut state, step, report) {
                 return TaskResult {
@@ -581,6 +605,7 @@ pub fn run_task<S: Substrate>(
                     content: MUTATING_VERB_DEMOTED,
                     duration_ms: propose_duration_ms,
                     failed: true,
+                    args: action_args(&action),
                 };
                 if let Err(msg) = record_step(journal, agent_id, &mut state, step, report) {
                     return TaskResult {
@@ -602,6 +627,7 @@ pub fn run_task<S: Substrate>(
             content: &obs.content,
             duration_ms,
             failed: obs.failed,
+            args: action_args(&action),
         };
         if let Err(msg) = record_step(journal, agent_id, &mut state, step, report) {
             return TaskResult {
