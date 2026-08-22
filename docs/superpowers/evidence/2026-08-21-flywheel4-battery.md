@@ -10,11 +10,12 @@ legs.** G4 **20/20**; G5-v4 **patch 16/16** (floor PASS, **decided**) and
 
 The pre-registered question this turn owned was **productive run**, measured
 **0/5 for both v4 anchors**. It reads **5/5**, and the five runs are not
-bookkeeping: the retained probe scratch shows the planted `unittest` and the
-patched target both compiled to bytecode *after* the patch step, on all five
-(§6.1). The other pre-registered worry — that the visible grant would
-over-trigger `run` off its slice — produced **zero** grant-violation rows in
-either boot, the first boot pair in this program with none anywhere.
+bookkeeping: the committed journal carries the child process's own captured
+output — `Ran 1 test in 0.000s` / `OK`, byte-identical on all five — replayed
+into the next step's prompt (§5.4). The other pre-registered worry — that the
+visible grant would over-trigger `run` off its slice — produced **zero**
+grant-violation rows in either boot, the first boot pair in this program with
+none anywhere.
 
 **Every number below is compared only to the two v4 anchors**
 (`2026-08-21-g5v4-baselines.md`). Turn-3 results are prior records under a
@@ -111,7 +112,7 @@ Everything the verdict rests on, with the check that was actually run.
 | daemon PID, boot 1 | **1023087** | `readlink /proc/1023087/exe` = the featured binary, asserted **before** the kill |
 | daemon PID, boot 2 | **1037093** | same assertion |
 | **GGUF** | `/home/brice/flywheel4/qwen3-14b-flywheel4-Q4_K_M.gguf`, 9,001,752,960 bytes, sha256 **`5de74418bfb542f2e73b129640e364321965f01f3bbf06f729058338128a4b2e`** | recomputed with `sha256sum`; **equal to `~/flywheel4/SHAS.txt`** and to the value in the task brief |
-| **daemon-reported model digest** | **`5de74418bfb542f2e73b129640e364321965f01f3bbf06f729058338128a4b2e`**, on **both** boots | read live from `GET /status` during each boot and **saved**: `target/fw4-live/g4/status-boot1.json`, `…/status-boot1-final.json`, `target/fw4-live/g5/status-boot2.json`, `…/status-boot2-final.json`. **Byte-identical to the GGUF sha above → MATCH; nothing BLOCKED.** **The durable route, not just the live read:** the retained boot configs `target/fw4-live/g4/bloomery-fw4-g4.toml:9` and `target/fw4-live/g5/bloomery-fw4-g5.toml:9` each name `path = "/home/brice/flywheel4/qwen3-14b-flywheel4-Q4_K_M.gguf"`, and `sha256sum` of that file is the digest above — so the chain config → file → sha is re-runnable by anyone with the box, and the `/status` read corroborates it rather than being its only support. |
+| **daemon-reported model digest** | **`5de74418bfb542f2e73b129640e364321965f01f3bbf06f729058338128a4b2e`**, on **both** boots | read live from `GET /status` during each boot and **saved**: `target/fw4-live/g4/status-boot1.json`, `…/status-boot1-final.json`, `target/fw4-live/g5/status-boot2.json`, `…/status-boot2-final.json`. **Byte-identical to the GGUF sha above → MATCH; nothing BLOCKED.** **The durable route, not just the live read:** the retained boot configs `target/fw4-live/g4/bloomery-fw4-g4.toml:9` and `target/fw4-live/g5/bloomery-fw4-g5.toml:10` each name `path = "/home/brice/flywheel4/qwen3-14b-flywheel4-Q4_K_M.gguf"` (the line numbers differ by one because boot 2's config carries the extra `g5_probe = true` line), and `sha256sum` of that file is the digest above — so the chain config → file → sha is re-runnable by anyone with the box, and the `/status` read corroborates it rather than being its only support. |
 | adapter | `439656c6f9cba0eb9831171e91493aa57d10bb0563d5e4a989461e273ad7fd48` | `~/flywheel4/SHAS.txt` |
 | corpus | `9c51a8668b4ce861dbe3c8528f59655a9a78eee12523f397b33e28d5d7928a7d` | equals the pre-registration's recorded value; re-verified after training and after quantize (`SHAS.txt`) |
 | gate `codec-tasks-v1.toml` | `ab64a38f67b9dc7b97edd8bcbb18fe5803aaaae7745425ae5d8e24afab5ab972` | recomputed; **equals** the pre-registration's recorded sha |
@@ -142,7 +143,10 @@ Two dedicated boots on `master` @ `96c05fe`, G4 first then G5, mirroring
   (`provenance: auto-first-profile`).
 - Each daemon was launched **detached** (`setsid nohup`) so a harness hiccup
   could not take the measurement down with the agent — the turn-4 training
-  lesson applied — and each was brought down by **verified PID**, with
+  lesson applied, where the agent was killed at **step 539 of 1,086** (about
+  50 minutes in, after one controller resume) and the `setsid`-detached
+  training ran to completion untouched — and each was brought down by
+  **verified PID**, with
   `readlink /proc/<pid>/exe` asserted against the featured release binary
   first. No `pkill`. Nothing was wrapped in `timeout` (this box's `timeout`
   segfaults on multithreaded children).
@@ -361,23 +365,52 @@ never the argv. So the rows themselves prove two things and not a third:
    commands cleared the prefix the prompt granted.
 2. **The process exited 0.** All five read `ran python3 exit 0`, with
    `duration_ms` 85-87.
-3. **What the journal does not carry is the argv *tail*** — whether the model
-   wrote `python3 -m unittest test_<stem>.py` (the trained form) or a bare
-   `python3 -m unittest` (discovery, which finds the same file). This is
+3. **What the `TaskStep` row does not carry is the argv *tail*** — whether the
+   model wrote `python3 -m unittest test_<stem>.py` (the trained form) or a
+   bare `python3 -m unittest` (discovery, which finds the same file). This is
    baselines §8.5's recorded limitation biting in the direction it predicted:
    *"a `run` that had been granted would journal only 'ran python3 exit 0', so
    the same finding would have been invisible had the model guessed the right
    command."* It is stated as a limit, not filled in with a guess.
 
-**The retained probe scratch closes the part that matters, and it is
-mechanical.** The worry a bare `exit 0` leaves open is a vacuous run — a
-command that exits 0 without executing the planted test. Checked on all five
-fixtures from `target/fw4-live/g5/data/codec-probe/g5/qwen3-14b-flywheel4/`:
+**The committed journal already proves the run was not vacuous, in the run's
+own captured output.** The worry a bare `exit 0` leaves open is a command that
+exits 0 without executing the planted test. It does not survive the record:
+`exec_run` builds the observation's **`content`** as
+`format!("exit {code}\n{output}")` — the child's real captured stdout+stderr
+(`crates/bloomery-daemon/src/task/exec_run.rs:299`) — and that content is
+replayed into the **next** step's prompt, which the boot journals as an
+`InferStarted` row. So the `run` step's output is durable in a **committed
+artifact**. Byte-exact from
+`2026-08-21-flywheel4-g5-journal.jsonl`, the `InferStarted` row for agent
+`a138` (`epoch_ms 1787363595588`), the segment of its `prompt` from the step-3
+observation up to the model's `<think>`:
+
+```text
+[step 3 run] ran python3 exit 0
+exit 0
+.
+----------------------------------------------------------------------
+Ran 1 test in 0.000s
+
+OK
+
+```
+
+That is **unittest's own output**: one test collected, one test run, `OK`.
+**All five run-granted fixtures carry this block, and the five segments are
+byte-identical to each other** (agents `a138`-`a142`; checked by extracting
+the segment from every `InferStarted` row in the committed journal and
+comparing — one distinct value across the five). A run that executed nothing
+prints `Ran 0 tests`; a failing one prints `FAILED`. Neither appears.
+
+**And the retained probe scratch corroborates it independently.** Checked on
+all five fixtures under
+`target/fw4-live/g5/data/codec-probe/g5/qwen3-14b-flywheel4/`:
 
 - each directory holds **`__pycache__/test_<stem>.cpython-314.pyc` *and*
   `__pycache__/<stem>.cpython-314.pyc`** — the planted test module and the
-  module under test were both **imported**, which a run that executed nothing
-  cannot produce;
+  module under test were both imported;
 - **both `.pyc` files are stamped after the patched `.py`** (target written at
   T, bytecode at T+0.6 s, all five);
 - the target's bytes at that moment are the **reference-patched** bytes, and
@@ -385,9 +418,16 @@ fixtures from `target/fw4-live/g5/data/codec-probe/g5/qwen3-14b-flywheel4/`:
 
 Since the frozen fixtures' planted tests are proved to fail against the
 unpatched file (the factory's fails-before rule, executed at freeze) and to
-pass against the reference-patched file, an `exit 0` on the reference-patched
-bytes with both modules imported is a **real verification of the repair**.
-**Productive run 5/5 is verification behaviour, not a bookkeeping artifact.**
+pass against the reference-patched file, a `Ran 1 test … OK` against the
+reference-patched bytes is a **real verification of the repair**.
+**Productive run 5/5 is verification behaviour, not a bookkeeping artifact —
+and it rests on committed journal bytes, with the out-of-repo scratch as
+corroboration rather than as its support.**
+
+**None of this recovers the argv tail, and none of it is used to.**
+`Ran 1 test in 0.000s` is equally consistent with `python3 -m unittest
+test_<stem>.py` and with bare `python3 -m unittest` discovering the same
+file. The limit in point 3 stands exactly as written.
 
 **What that means for the turn's thesis, stated as a v4 fact.** Under
 envelope-v4 on `codec-tasks-v4-mixed`, the incumbent emitted `run` at the
@@ -456,6 +496,30 @@ as written, with `duration_ms` and `epoch_ms` retained):
 `2026-08-21-flywheel4-g5-tasks.jsonl` — nothing elided, nothing reformatted.
 The table below renders the other four fixtures' rows as `verb "outcome"`
 pairs for width; the committed JSONL carries all of them unedited.*
+
+**And the run step's own output is committed too**, in the next step's prompt
+(§5.4): the `InferStarted` row for each of the five agents carries the
+child's real captured output, byte-identical across all five —
+
+```text
+[step 3 run] ran python3 exit 0
+exit 0
+.
+----------------------------------------------------------------------
+Ran 1 test in 0.000s
+
+OK
+
+```
+
+— i.e. **one test collected, run, and passed** on every one of the five, from
+a committed artifact. `Ran 1 test` occurs **5 times** in the boot-2 journal
+and **0 times** in boot 1's (which has no run-granted slice); `Ran 0 tests`
+occurs **0 times in either**. (`FAILED` does occur 3 times in each journal —
+in **assay's own POST loop-probe prompts**, `"The patch FAILED to apply:
+SEARCH text not found in \`tiny.py\`"` on agents a91/a93/a95 — never as a
+unittest banner. Counted rather than asserted, because the string is not
+unique to unittest.)
 
 | fixture | agent | steps | landed | exact reference patch | `__pycache__` after patch |
 |---|---|---|---|---|---|
@@ -701,8 +765,12 @@ those two failure modes holds here, and this boot lands on the second.
 
 ## 7. The verdict against the pre-registration, stated plainly
 
-The pre-registration's decision rule, verbatim: "**Success = both pass. Kill:**
-G4 < 16/20 OR refuse-class < 8/16 → adapter shelved, recorded with anatomy."
+The pre-registration's decision rule, verbatim and complete: "**Success = both
+pass. Kill:** G4 < 16/20 OR refuse-class < 8/16 → adapter shelved, recorded
+with anatomy; **secondary endpoints never kill material.**" The trailing
+clause is restored here rather than trimmed, because it is the half that
+governs how §5.3 is read: productive run 5/5 would not have saved a failing
+class, and it does not add anything to a passing one.
 
 | leg | threshold | measured | outcome |
 |---|---|---|---|
@@ -723,7 +791,7 @@ measurement that was pre-registered to decide it.
 | G4 ≥16/20 is a live failure mode and is kill material (the v4 prompt perturbs the trained prefix on every task) | **did not break** — 20/20 on the dedicated leg and 20/20 again on boot 2, identical fixture for fixture and string for string |
 | patch has two fixtures of headroom; a find-shaped win traded for a run or plain loss is worth nothing | **nothing traded** — 10/10 held on run + plain, find went 6/6, class 16/16 |
 | a 13-15/16 refuse score would clear the floor while losing the incumbent's decided flag, and would be reported as a regression | **did not happen** — 16/16, decided flag held; the patch class gained one the incumbent's patch class did not hold |
-| **the productive-run question: does flywheel4 emit `run` with the granted argv?** | **YES, 5/5** — all five cleared the grant check (zero grant-violation rows), exited 0, and landed; the retained scratch shows the planted test and the patched target both imported after the patch. **Productive run 5/5** against 0/5 for both anchors. The argv *tail* is not recoverable from the journal and is not guessed (§5.4) |
+| **the productive-run question: does flywheel4 emit `run` with the granted argv?** | **YES, 5/5** — all five cleared the grant check (zero grant-violation rows), exited 0, and landed, and the **committed journal carries the child's own output** (`Ran 1 test in 0.000s` / `OK`, byte-identical on all five), with the retained scratch corroborating. **Productive run 5/5** against 0/5 for both anchors. The argv *tail* is not recoverable from the journal and is not guessed (§5.4) |
 | the grant line might over-trigger `run` on ungranted fixtures | **did not happen** — zero `run` verbs off the granted slice, zero grant violations of any verb, in either boot |
 | a new trajectory shape competes with find; a patch regression or a drop in productive find is how that shows | **did not happen** — productive find 6/6, every shape ran its ideal path |
 | reason-grounding may reveal confabulation, bounded by the endpoint's blindness to bare prose | **the bound is what showed.** The endpoint returned its ceiling (6/6 over 4 measured rows of 11, 7 unmeasured) while three of those four rows carry a false claim built from grounded spans, and the boot's one false *repair* claim sits in a row scored unmeasured (§6.3) |
@@ -815,10 +883,13 @@ measures it.
   the by-eye reading beside it says the opposite on three of those four rows.
 - **`TaskStep` rows carry no fixture key and no action arguments.** The join
   is ordinal (all three validations pass on both boots, and on both committed
-  v4 baselines), and the argv of a *granted* run is not journaled — which is
-  why §5.4 has to reason from the grant check and the retained scratch rather
-  than read the command. Recurring observability debt, now carried across
-  three turns.
+  v4 baselines), and a *granted* run's `TaskStep` row carries only
+  `ran python3 exit 0` — the argv never appears, which is why §5.4 reasons
+  from the grant check rather than reading the command. **What the record does
+  carry, in a place a reader would not look for it, is the run's real captured
+  output**, replayed into the next step's prompt and journaled as an
+  `InferStarted` row (§5.4); the argv tail remains unrecoverable. Recurring
+  observability debt, now carried across three turns.
 - **The eval-loss drift from training is uninterpreted here.** `eval_loss`
   bottomed at 0.0009852 at epoch 0.74 and finished at 0.001118 (`SHAS.txt`).
   No interpretation was pre-registered and none is offered; the battery

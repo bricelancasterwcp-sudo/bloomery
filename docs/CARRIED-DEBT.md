@@ -991,9 +991,10 @@ each; per-task detail lives in the SDD ledger at
   generation-side numbers rest on an ad-hoc harness (descriptive only); a
   truncated verb-card header quote; the Task-1 `(spec §3, carried into turn 4)`
   cite is ambiguous on first read.
-- `codec_probe_test.rs` grew +21 lines rather than staying flat, on a file
-  already over the test-file cap (pre-existing, tracked in the *Smaller items*
-  list).
+- `codec_probe_test.rs` grew +21 lines rather than staying flat at Task 5's
+  commit (+51/-30) **(branch-net vs master +4: +17/-13 over
+  `0056f72..HEAD`)**, on a file already over the test-file cap (pre-existing,
+  tracked in the *Smaller items* list).
 - **Uninterpreted, deliberately:** `eval_loss` bottomed at 0.0009852 at epoch
   0.74 and finished at 0.001118. No interpretation was pre-registered and none
   is offered — the battery decides, and it did.
@@ -1028,14 +1029,27 @@ each; per-task detail lives in the SDD ledger at
   bytes before commit rather than trusting the sentence that felt right.
   Verdicts get recomputed because they are obviously numbers; prose about
   *why* is just as much a claim about the journal.
-- **When the journal cannot carry the fact, look for what the run left on
-  disk.** A granted `run` journals the program name and the exit code, never
-  the argv, so `ran python3 exit 0` alone cannot distinguish a real test run
-  from a command that exited 0 doing nothing. The retained probe scratch
-  settles it: `__pycache__/test_<stem>.pyc` **and** `__pycache__/<stem>.pyc`,
-  both stamped after the patched source, on all five fixtures. The headline
-  secondary of the whole turn rests on filesystem residue, and it is stronger
-  evidence than the row that prompted the question.
+- **The journal carries a step's executor output in the NEXT step's prompt —
+  look there before reaching outside the record.** A granted `run`'s
+  `TaskStep` row carries only `ran python3 exit 0`: no argv, no output. That
+  is a real limit, and the first instinct it provokes — go and find what the
+  run left on disk — produced a *correct but weaker* answer (the retained
+  probe scratch's `__pycache__/test_<stem>.pyc` and `__pycache__/<stem>.pyc`,
+  both stamped after the patched source, on all five fixtures), resting on an
+  **out-of-repo artifact the evidence doc itself lists as uncommitted**. The
+  stronger answer was already committed: `exec_run` builds the observation's
+  `content` as `format!("exit {code}\n{output}")` — the child's real captured
+  output — and that content is replayed into the next step's prompt, which the
+  boot journals as an `InferStarted` row. So the committed journal holds
+  unittest's own `Ran 1 test in 0.000s` / `OK`, byte-identical on all five
+  run-granted fixtures. **The headline secondary of the whole turn rests on
+  committed journal bytes, with the scratch as corroboration.** The rule:
+  before concluding that the record cannot answer a question, check the
+  *downstream* rows — a loop that feeds observations back to the model has
+  already written them down. (And the limit that genuinely survives is
+  narrower than it first looked: the argv *tail* is still unrecoverable, and
+  `Ran 1 test` is consistent with both the explicit-file and the
+  bare-discovery form, so it was not guessed either way.)
 - **The executed-audit standard, from the Task-5 fixture review.** All 32
   frozen fixtures were re-derived from their own bytes by *execution and
   arithmetic* — the five run fixtures actually run `rc=1 → rc=0`, the
