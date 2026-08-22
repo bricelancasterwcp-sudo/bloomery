@@ -79,4 +79,24 @@ per-(model, envelope): codec-tasks-v3-mixed under envelope-v3 remains the
 recorded turn-3 instrument, frozen and unamended; no cross-envelope comparison
 is written.
 
+**Amendment (2026-08-22, recorded before any measurement of the new line):**
+turn 5's decided-G5 instrument is **unchanged** — fixture set
+codec-tasks-v4-mixed (16 `expect="patch"` + 16 `expect="refuse"`) under
+`bloomery-task-envelope-v4`, scored per
+docs/superpowers/evidence/2026-08-21-g5v4-protocol.md (with its dated §5
+amendment), floor ≥13/16 per class, decided/provisional by the two-sided
+Wilson rule (bT10/R1) stated apart from the floor — now applied to a second
+model line, `qwen36-reap48` (REAP-48-pruned Qwen3.6-35B-A3B; base
+`~/models/hf/Qwen3.6-35B-A3B-REAP48-ours`, served as Q4_K_M). Results
+remain per-(model, envelope): turn-4's 14B numbers and turn-5's REAP-48
+numbers are both envelope-v4 numbers and may appear in one descriptive
+ladder; no causal sentence across bases, and no cross-envelope comparison,
+is ever written. The anchors for the new line are the pre-registered
+baseline boots of the **untrained** base recorded in
+docs/superpowers/evidence/<date>-g5v4-reap48-baselines.md (two identical
+boots; boot 1 is the anchor, declared before the first boot); the
+2026-08-21 REAP-48 spike numbers are superseded as anchors. G4 on
+codec-tasks-v1 is unchanged. No fixture set, scoring rule, or envelope is
+amended by this note.
+
 ---
