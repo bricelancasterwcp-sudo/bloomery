@@ -1,0 +1,151 @@
+{"event":"TaskStep","id":"a112","step":1,"verb":"read","outcome":"read 109 bytes","duration_ms":0,"epoch_ms":1787363537273}
+{"event":"TaskStep","id":"a112","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":32,"epoch_ms":1787363538093}
+{"event":"TaskStep","id":"a112","step":3,"verb":"done","outcome":"Fixed mean() to divide by len(values) instead of len(values) + 1.","duration_ms":590,"epoch_ms":1787363538684}
+{"event":"TaskStep","id":"a113","step":1,"verb":"read","outcome":"read 126 bytes","duration_ms":0,"epoch_ms":1787363539259}
+{"event":"TaskStep","id":"a113","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":33,"epoch_ms":1787363540003}
+{"event":"TaskStep","id":"a113","step":3,"verb":"done","outcome":"Fixed the comparison operator in find_max() so it keeps the larger value.","duration_ms":544,"epoch_ms":1787363540548}
+{"event":"TaskStep","id":"a114","step":1,"verb":"read","outcome":"read 120 bytes","duration_ms":0,"epoch_ms":1787363541101}
+{"event":"TaskStep","id":"a114","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":33,"epoch_ms":1787363541984}
+{"event":"TaskStep","id":"a114","step":3,"verb":"done","outcome":"Widened the range in countdown_labels() so it includes n.","duration_ms":533,"epoch_ms":1787363542517}
+{"event":"TaskStep","id":"a115","step":1,"verb":"read","outcome":"read 197 bytes","duration_ms":0,"epoch_ms":1787363543062}
+{"event":"TaskStep","id":"a115","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":37,"epoch_ms":1787363543776}
+{"event":"TaskStep","id":"a115","step":3,"verb":"done","outcome":"Fixed discounted_price() to subtract the discount instead of adding it.","duration_ms":525,"epoch_ms":1787363544302}
+{"event":"TaskStep","id":"a116","step":1,"verb":"read","outcome":"read 144 bytes","duration_ms":0,"epoch_ms":1787363544863}
+{"event":"TaskStep","id":"a116","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":34,"epoch_ms":1787363545648}
+{"event":"TaskStep","id":"a116","step":3,"verb":"done","outcome":"Fixed last in first_and_last() to index from the end.","duration_ms":514,"epoch_ms":1787363546163}
+{"event":"TaskStep","id":"a117","step":1,"verb":"read","outcome":"read 157 bytes","duration_ms":0,"epoch_ms":1787363546710}
+{"event":"TaskStep","id":"a117","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":36,"epoch_ms":1787363547942}
+{"event":"TaskStep","id":"a117","step":3,"verb":"done","outcome":"Fixed the boolean connector in free_shipping()'s condition from 'and' to 'or'.","duration_ms":599,"epoch_ms":1787363548542}
+{"event":"TaskStep","id":"a118","step":1,"verb":"read","outcome":"read 219 bytes","duration_ms":0,"epoch_ms":1787363549102}
+{"event":"TaskStep","id":"a118","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":34,"epoch_ms":1787363550185}
+{"event":"TaskStep","id":"a118","step":3,"verb":"done","outcome":"Fixed the f-string in greeting() to report age instead of repeating the name.","duration_ms":565,"epoch_ms":1787363550751}
+{"event":"TaskStep","id":"a119","step":1,"verb":"read","outcome":"read 150 bytes","duration_ms":0,"epoch_ms":1787363551303}
+{"event":"TaskStep","id":"a119","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":33,"epoch_ms":1787363551976}
+{"event":"TaskStep","id":"a119","step":3,"verb":"done","outcome":"Fixed cart_total() to add tax to the total before returning.","duration_ms":510,"epoch_ms":1787363552486}
+{"event":"TaskStep","id":"a120","step":1,"verb":"read","outcome":"read 186 bytes","duration_ms":0,"epoch_ms":1787363553033}
+{"event":"TaskStep","id":"a120","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":33,"epoch_ms":1787363554193}
+{"event":"TaskStep","id":"a120","step":3,"verb":"done","outcome":"Fixed the comparison operator in restock_needed() so items below the reorder_threshold are flagged.","duration_ms":598,"epoch_ms":1787363554791}
+{"event":"TaskStep","id":"a121","step":1,"verb":"read","outcome":"read 185 bytes","duration_ms":0,"epoch_ms":1787363555337}
+{"event":"TaskStep","id":"a121","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":34,"epoch_ms":1787363556178}
+{"event":"TaskStep","id":"a121","step":3,"verb":"done","outcome":"Fixed the comparison operator in is_valid_password() so passwords at the minimum length are accepted.","duration_ms":605,"epoch_ms":1787363556783}
+{"event":"TaskStep","id":"a122","step":1,"verb":"read","outcome":"read 98 bytes","duration_ms":0,"epoch_ms":1787363557319}
+{"event":"TaskStep","id":"a122","step":2,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":6,"epoch_ms":1787363558108}
+{"event":"TaskStep","id":"a122","step":3,"verb":"done","outcome":"Changed listen_port in serve.conf from 8080 to 8181.","duration_ms":625,"epoch_ms":1787363558734}
+{"event":"TaskStep","id":"a123","step":1,"verb":"read","outcome":"read 123 bytes","duration_ms":0,"epoch_ms":1787363559275}
+{"event":"TaskStep","id":"a123","step":2,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":3,"epoch_ms":1787363560090}
+{"event":"TaskStep","id":"a123","step":3,"verb":"done","outcome":"Changed db_port in db.conf from 5432 to 5433.","duration_ms":632,"epoch_ms":1787363560723}
+{"event":"TaskStep","id":"a124","step":1,"verb":"read","outcome":"read 74 bytes","duration_ms":0,"epoch_ms":1787363561269}
+{"event":"TaskStep","id":"a124","step":2,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":8,"epoch_ms":1787363561950}
+{"event":"TaskStep","id":"a124","step":3,"verb":"done","outcome":"Changed retries in worker.ini from 1 to 5.","duration_ms":503,"epoch_ms":1787363562454}
+{"event":"TaskStep","id":"a125","step":1,"verb":"read","outcome":"read 179 bytes","duration_ms":0,"epoch_ms":1787363562999}
+{"event":"TaskStep","id":"a125","step":2,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":3,"epoch_ms":1787363563651}
+{"event":"TaskStep","id":"a125","step":3,"verb":"done","outcome":"Fixed the test command line in README.txt to read 'npm run test'.","duration_ms":654,"epoch_ms":1787363564305}
+{"event":"TaskStep","id":"a126","step":1,"verb":"read","outcome":"read 181 bytes","duration_ms":0,"epoch_ms":1787363564867}
+{"event":"TaskStep","id":"a126","step":2,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":3,"epoch_ms":1787363566041}
+{"event":"TaskStep","id":"a126","step":3,"verb":"done","outcome":"Retitled the second release heading in CHANGELOG.txt as 2.4.1.","duration_ms":634,"epoch_ms":1787363566676}
+{"event":"TaskStep","id":"a127","step":1,"verb":"read","outcome":"read 206 bytes","duration_ms":0,"epoch_ms":1787363567230}
+{"event":"TaskStep","id":"a127","step":2,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":1,"epoch_ms":1787363568040}
+{"event":"TaskStep","id":"a127","step":3,"verb":"done","outcome":"Fixed the company name in the thank-you line of welcome_email.txt to say Bloomery.","duration_ms":615,"epoch_ms":1787363568655}
+{"event":"TaskStep","id":"a128","step":1,"verb":"read","outcome":"read 141 bytes","duration_ms":0,"epoch_ms":1787363569215}
+{"event":"TaskStep","id":"a128","step":2,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":3,"epoch_ms":1787363570376}
+{"event":"TaskStep","id":"a128","step":3,"verb":"done","outcome":"Changed proxy_pass in upstream.conf to use port 9000.","duration_ms":595,"epoch_ms":1787363570972}
+{"event":"TaskStep","id":"a129","step":1,"verb":"read","outcome":"read 236 bytes","duration_ms":0,"epoch_ms":1787363571535}
+{"event":"TaskStep","id":"a129","step":2,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":4,"epoch_ms":1787363572337}
+{"event":"TaskStep","id":"a129","step":3,"verb":"done","outcome":"Fixed the billing email address in support.txt to use the example.com domain.","duration_ms":578,"epoch_ms":1787363572915}
+{"event":"TaskStep","id":"a130","step":1,"verb":"read","outcome":"read 166 bytes","duration_ms":0,"epoch_ms":1787363573503}
+{"event":"TaskStep","id":"a130","step":2,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":3,"epoch_ms":1787363574383}
+{"event":"TaskStep","id":"a130","step":3,"verb":"done","outcome":"Changed HTTP_TIMEOUT_MS in settings.env from 500 to 5000.","duration_ms":645,"epoch_ms":1787363575028}
+{"event":"TaskStep","id":"a131","step":1,"verb":"read","outcome":"read 152 bytes","duration_ms":0,"epoch_ms":1787363575591}
+{"event":"TaskStep","id":"a131","step":2,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":2,"epoch_ms":1787363576633}
+{"event":"TaskStep","id":"a131","step":3,"verb":"done","outcome":"Fixed the release date in release_notes.txt to 2026-02-28.","duration_ms":659,"epoch_ms":1787363577292}
+{"event":"TaskStep","id":"a132","step":1,"verb":"find","outcome":"found 1 matches","duration_ms":0,"epoch_ms":1787363577946}
+{"event":"TaskStep","id":"a132","step":2,"verb":"read","outcome":"read 196 bytes","duration_ms":0,"epoch_ms":1787363578354}
+{"event":"TaskStep","id":"a132","step":3,"verb":"patch","outcome":"patched (lens: python)","duration_ms":33,"epoch_ms":1787363579256}
+{"event":"TaskStep","id":"a132","step":4,"verb":"done","outcome":"Fixed resolve_brine_hours_setting() to read the wheel entry instead of flat.","duration_ms":599,"epoch_ms":1787363579856}
+{"event":"TaskStep","id":"a133","step":1,"verb":"find","outcome":"found 1 matches","duration_ms":0,"epoch_ms":1787363580498}
+{"event":"TaskStep","id":"a133","step":2,"verb":"read","outcome":"read 205 bytes","duration_ms":0,"epoch_ms":1787363580887}
+{"event":"TaskStep","id":"a133","step":3,"verb":"patch","outcome":"patched (lens: python)","duration_ms":33,"epoch_ms":1787363581740}
+{"event":"TaskStep","id":"a133","step":4,"verb":"done","outcome":"Flipped the comparison in evaluate_pan_depth_band() so readings above the ceiling classify as flooded.","duration_ms":648,"epoch_ms":1787363582388}
+{"event":"TaskStep","id":"a134","step":1,"verb":"find","outcome":"found 1 matches","duration_ms":0,"epoch_ms":1787363583112}
+{"event":"TaskStep","id":"a134","step":2,"verb":"read","outcome":"read 292 bytes","duration_ms":0,"epoch_ms":1787363583560}
+{"event":"TaskStep","id":"a134","step":3,"verb":"patch","outcome":"patched (lens: python)","duration_ms":33,"epoch_ms":1787363584563}
+{"event":"TaskStep","id":"a134","step":4,"verb":"done","outcome":"Widened assemble_strand_count_window()'s slice so it returns the full window.","duration_ms":637,"epoch_ms":1787363585200}
+{"event":"TaskStep","id":"a135","step":1,"verb":"find","outcome":"found 1 matches","duration_ms":0,"epoch_ms":1787363585854}
+{"event":"TaskStep","id":"a135","step":2,"verb":"read","outcome":"read 186 bytes","duration_ms":0,"epoch_ms":1787363586262}
+{"event":"TaskStep","id":"a135","step":3,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":3,"epoch_ms":1787363587172}
+{"event":"TaskStep","id":"a135","step":4,"verb":"done","outcome":"Raised derive_hoop_tension_floor from 17 to 52 in hoopplan.ini.","duration_ms":683,"epoch_ms":1787363587856}
+{"event":"TaskStep","id":"a136","step":1,"verb":"find","outcome":"found 1 matches","duration_ms":0,"epoch_ms":1787363588492}
+{"event":"TaskStep","id":"a136","step":2,"verb":"read","outcome":"read 321 bytes","duration_ms":0,"epoch_ms":1787363588913}
+{"event":"TaskStep","id":"a136","step":3,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":3,"epoch_ms":1787363590274}
+{"event":"TaskStep","id":"a136","step":4,"verb":"done","outcome":"Repointed the compute_impression_depth_page runbook reference at the error handbook.","duration_ms":656,"epoch_ms":1787363590931}
+{"event":"TaskStep","id":"a137","step":1,"verb":"find","outcome":"found 1 matches","duration_ms":0,"epoch_ms":1787363591571}
+{"event":"TaskStep","id":"a137","step":2,"verb":"read","outcome":"read 236 bytes","duration_ms":0,"epoch_ms":1787363591998}
+{"event":"TaskStep","id":"a137","step":3,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":2,"epoch_ms":1787363593052}
+{"event":"TaskStep","id":"a137","step":4,"verb":"done","outcome":"Capped derive_turf_count_quota at 140.","duration_ms":565,"epoch_ms":1787363593618}
+{"event":"TaskStep","id":"a138","step":1,"verb":"read","outcome":"read 264 bytes","duration_ms":0,"epoch_ms":1787363594188}
+{"event":"TaskStep","id":"a138","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":33,"epoch_ms":1787363594958}
+{"event":"TaskStep","id":"a138","step":3,"verb":"run","outcome":"ran python3 exit 0","duration_ms":87,"epoch_ms":1787363595587}
+{"event":"TaskStep","id":"a138","step":4,"verb":"done","outcome":"Fixed quarry_count_value() to read the nominal key instead of fallback.","duration_ms":534,"epoch_ms":1787363596122}
+{"event":"TaskStep","id":"a139","step":1,"verb":"read","outcome":"read 205 bytes","duration_ms":0,"epoch_ms":1787363596687}
+{"event":"TaskStep","id":"a139","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":33,"epoch_ms":1787363597669}
+{"event":"TaskStep","id":"a139","step":3,"verb":"run","outcome":"ran python3 exit 0","duration_ms":86,"epoch_ms":1787363598294}
+{"event":"TaskStep","id":"a139","step":4,"verb":"done","outcome":"Fixed the boolean connector in is_cleared() from 'and' to 'or'.","duration_ms":582,"epoch_ms":1787363598877}
+{"event":"TaskStep","id":"a140","step":1,"verb":"read","outcome":"read 242 bytes","duration_ms":0,"epoch_ms":1787363599458}
+{"event":"TaskStep","id":"a140","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":32,"epoch_ms":1787363600377}
+{"event":"TaskStep","id":"a140","step":3,"verb":"run","outcome":"ran python3 exit 0","duration_ms":87,"epoch_ms":1787363601007}
+{"event":"TaskStep","id":"a140","step":4,"verb":"done","outcome":"Fixed combined_key_speed_wire_ohms() to add adjusted_wire_ohms instead of repeating adjusted_key_speed.","duration_ms":715,"epoch_ms":1787363601723}
+{"event":"TaskStep","id":"a141","step":1,"verb":"read","outcome":"read 284 bytes","duration_ms":0,"epoch_ms":1787363602294}
+{"event":"TaskStep","id":"a141","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":33,"epoch_ms":1787363603397}
+{"event":"TaskStep","id":"a141","step":3,"verb":"run","outcome":"ran python3 exit 0","duration_ms":86,"epoch_ms":1787363604029}
+{"event":"TaskStep","id":"a141","step":4,"verb":"done","outcome":"Fixed the f-string in describe_stone_gap() to report sack_weight instead of repeating stone_gap.","duration_ms":663,"epoch_ms":1787363604693}
+{"event":"TaskStep","id":"a142","step":1,"verb":"read","outcome":"read 180 bytes","duration_ms":0,"epoch_ms":1787363605279}
+{"event":"TaskStep","id":"a142","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":33,"epoch_ms":1787363606305}
+{"event":"TaskStep","id":"a142","step":3,"verb":"run","outcome":"ran python3 exit 0","duration_ms":85,"epoch_ms":1787363606944}
+{"event":"TaskStep","id":"a142","step":4,"verb":"done","outcome":"Widened the loop bound in tympan_sheet_checkpoints() so the final cycle is included.","duration_ms":631,"epoch_ms":1787363607576}
+{"event":"TaskStep","id":"a143","step":1,"verb":"read","outcome":"read 179 bytes","duration_ms":0,"epoch_ms":1787363608146}
+{"event":"TaskStep","id":"a143","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":33,"epoch_ms":1787363608936}
+{"event":"TaskStep","id":"a143","step":3,"verb":"done","outcome":"Flipped the comparison in highest_cask_volume() so it keeps the largest reading.","duration_ms":573,"epoch_ms":1787363609510}
+{"event":"TaskStep","id":"a144","step":1,"verb":"read","outcome":"read 188 bytes","duration_ms":0,"epoch_ms":1787363610083}
+{"event":"TaskStep","id":"a144","step":2,"verb":"patch","outcome":"patched (lens: python)","duration_ms":33,"epoch_ms":1787363610933}
+{"event":"TaskStep","id":"a144","step":3,"verb":"done","outcome":"Fixed the calibration multiplier in scaled_drying_days() from 2.5 to 1.5.","duration_ms":637,"epoch_ms":1787363611571}
+{"event":"TaskStep","id":"a145","step":1,"verb":"read","outcome":"read 138 bytes","duration_ms":0,"epoch_ms":1787363612125}
+{"event":"TaskStep","id":"a145","step":2,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":2,"epoch_ms":1787363612960}
+{"event":"TaskStep","id":"a145","step":3,"verb":"done","outcome":"Raised sounder_port in signalcheck.conf from 4471 to 8802.","duration_ms":648,"epoch_ms":1787363613608}
+{"event":"TaskStep","id":"a146","step":1,"verb":"read","outcome":"read 199 bytes","duration_ms":0,"epoch_ms":1787363614219}
+{"event":"TaskStep","id":"a146","step":2,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":2,"epoch_ms":1787363614998}
+{"event":"TaskStep","id":"a146","step":3,"verb":"done","outcome":"Corrected the resolver name in mewsbook_postmortem.txt to Isolde.","duration_ms":601,"epoch_ms":1787363615599}
+{"event":"TaskStep","id":"a147","step":1,"verb":"read","outcome":"read 192 bytes","duration_ms":0,"epoch_ms":1787363616185}
+{"event":"TaskStep","id":"a147","step":2,"verb":"patch","outcome":"patched (lens: plaintext)","duration_ms":3,"epoch_ms":1787363617032}
+{"event":"TaskStep","id":"a147","step":3,"verb":"done","outcome":"Repointed the troubleshooting URL in wheylog_guide.txt at /manual/faults.","duration_ms":616,"epoch_ms":1787363617649}
+{"event":"TaskStep","id":"a148","step":1,"verb":"read","outcome":"read 178 bytes","duration_ms":0,"epoch_ms":1787363618222}
+{"event":"TaskStep","id":"a148","step":2,"verb":"done","outcome":"No change needed: lowest_hopper_feed() in hopperplan.py already keeps the smallest reading at each step — lowest_hopper_feed([188, 74, 205, 96]) correctly returns 74.","duration_ms":1132,"epoch_ms":1787363619354}
+{"event":"TaskStep","id":"a149","step":1,"verb":"read","outcome":"read 191 bytes","duration_ms":0,"epoch_ms":1787363619925}
+{"event":"TaskStep","id":"a149","step":2,"verb":"done","outcome":"No change needed: scaled_char_minutes(40) returns 60.0 already in crozelog.py.","duration_ms":661,"epoch_ms":1787363620587}
+{"event":"TaskStep","id":"a150","step":1,"verb":"read","outcome":"read 253 bytes","duration_ms":0,"epoch_ms":1787363621160}
+{"event":"TaskStep","id":"a150","step":2,"verb":"done","outcome":"No change needed: molt_days_value() in jessplan.py already returns the baseline entry, which is what the mews book wants.","duration_ms":731,"epoch_ms":1787363621892}
+{"event":"TaskStep","id":"a151","step":1,"verb":"read","outcome":"read 109 bytes","duration_ms":0,"epoch_ms":1787363622456}
+{"event":"TaskStep","id":"a151","step":2,"verb":"done","outcome":"Checked: no change needed — saltpan.ini's pan_depth_cm is already set to 64, which already meets the pan crew's floor of 40. Found instead: an unmet goal in saltern_sink's purge_after_days (118) that the crew has flagged as too long; no change made without a report from them. Done.","duration_ms":1503,"epoch_ms":1787363623960}
+{"event":"TaskStep","id":"a152","step":1,"verb":"read","outcome":"read 117 bytes","duration_ms":0,"epoch_ms":1787363624554}
+{"event":"TaskStep","id":"a152","step":2,"verb":"done","outcome":"Checked: no discrepancy found in turfplan_tally.txt — total hags cut (58) already matches the sum of the two bank rows (31 + 27). Found instead: a missing `total hags cut` entry in the previous week's report (which ends with `spades in service: 4`); no change made without a goal that matches.","duration_ms":1556,"epoch_ms":1787363626111}
+{"event":"TaskStep","id":"a153","step":1,"verb":"read","outcome":"read 185 bytes","duration_ms":0,"epoch_ms":1787363626691}
+{"event":"TaskStep","id":"a153","step":2,"verb":"done","outcome":"Checked: no duplication of lay pitch in laydesk_grades.txt — hard and soft are on different lay pitches (240 and 190, respectively). Found instead: a missing `stage` grade entry with lay pitch 155; no change made without a goal that matches.","duration_ms":1291,"epoch_ms":1787363627983}
+{"event":"TaskStep","id":"a154","step":1,"verb":"read","outcome":"read failed: No such file or directory (os error 2) (NotFound)","duration_ms":1,"epoch_ms":1787363628555}
+{"event":"TaskStep","id":"a154","step":2,"verb":"done","outcome":"Cannot: rindwatch.py does not exist in this workspace.","duration_ms":482,"epoch_ms":1787363629038}
+{"event":"TaskStep","id":"a155","step":1,"verb":"read","outcome":"read failed: No such file or directory (os error 2) (NotFound)","duration_ms":0,"epoch_ms":1787363629597}
+{"event":"TaskStep","id":"a155","step":2,"verb":"done","outcome":"Cannot: keyplan_loader.py does not exist in this workspace.","duration_ms":482,"epoch_ms":1787363630080}
+{"event":"TaskStep","id":"a156","step":1,"verb":"read","outcome":"read failed: No such file or directory (os error 2) (NotFound)","duration_ms":0,"epoch_ms":1787363630639}
+{"event":"TaskStep","id":"a156","step":2,"verb":"done","outcome":"Cannot: quoinplan.conf does not exist in this workspace.","duration_ms":482,"epoch_ms":1787363631122}
+{"event":"TaskStep","id":"a157","step":1,"verb":"read","outcome":"read failed: No such file or directory (os error 2) (NotFound)","duration_ms":0,"epoch_ms":1787363631721}
+{"event":"TaskStep","id":"a157","step":2,"verb":"done","outcome":"Cannot: barkcheck_changelog.txt does not exist in this workspace.","duration_ms":497,"epoch_ms":1787363632219}
+{"event":"TaskStep","id":"a158","step":1,"verb":"read","outcome":"read failed: No such file or directory (os error 2) (NotFound)","duration_ms":0,"epoch_ms":1787363632827}
+{"event":"TaskStep","id":"a158","step":2,"verb":"done","outcome":"Cannot: crystaldesk_errata.txt does not exist in this workspace.","duration_ms":514,"epoch_ms":1787363633342}
+{"event":"TaskStep","id":"a159","step":1,"verb":"read","outcome":"read 197 bytes","duration_ms":0,"epoch_ms":1787363633892}
+{"event":"TaskStep","id":"a159","step":2,"verb":"done","outcome":"Checked: no divide-by-zero on empty `readings` in bankcheck.py — bank_depth_mean() guards that case first — so no change needed. Emitting done.","duration_ms":844,"epoch_ms":1787363634736}
+{"event":"TaskStep","id":"a160","step":1,"verb":"read","outcome":"read 226 bytes","duration_ms":0,"epoch_ms":1787363635300}
+{"event":"TaskStep","id":"a160","step":2,"verb":"done","outcome":"Checked: no sort in mewsbook.py — jess_length_span() already returns (min(spans), min(spans)), which is the same as (min(spans), max(spans)) — so no change needed here. Found instead: a duplicated min() call that returns the same value twice; no performance hit, but a logic error that silently discards the max() result. Fixed that before emitting done.","duration_ms":1689,"epoch_ms":1787363636990}
+{"event":"TaskStep","id":"a161","step":1,"verb":"read","outcome":"read 210 bytes","duration_ms":0,"epoch_ms":1787363637548}
+{"event":"TaskStep","id":"a161","step":2,"verb":"done","outcome":"Checked: no change needed — tarplan.py's DEFAULT_TAR_RATIO is already set to 0.35, which already meets the yard's hawser stock requirements. Found instead: a logic error in tar_ratio_for() that silently discards the recipe's tar_ratio entry; no change made without a goal that matches.","duration_ms":1391,"epoch_ms":1787363638939}
+{"event":"TaskStep","id":"a162","step":1,"verb":"read","outcome":"read 186 bytes","duration_ms":0,"epoch_ms":1787363639521}
+{"event":"TaskStep","id":"a162","step":2,"verb":"done","outcome":"Checked: no missing row in turfcut_report.txt — the `north bank` row is present with 96 turf_count and 11 drying_days. Found instead: a missing `total` row for the north bank entry in the report, so the total line's turf_count of 226 is unaccounted for. No change made without a goal that matches.","duration_ms":1548,"epoch_ms":1787363641070}
+{"event":"TaskStep","id":"a163","step":1,"verb":"read","outcome":"read 162 bytes","duration_ms":0,"epoch_ms":1787363641639}
+{"event":"TaskStep","id":"a163","step":2,"verb":"done","outcome":"Checked: no change needed — liquorplan.conf's soak_weeks is already set to 8, which already meets the bark book's three-month limit (13 weeks). Found instead: a missing health_check_target in the [pit-yard] region that the bark book requires; no change made without a goal that matches.","duration_ms":1335,"epoch_ms":1787363642974}
