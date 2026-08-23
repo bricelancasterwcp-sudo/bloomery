@@ -1,0 +1,115 @@
+{
+  "join": {
+    "mode": "keyed",
+    "keyed_equals_ordinal": true,
+    "fixtures": 52,
+    "groups": 52,
+    "violations": [],
+    "ordinal_violations": []
+  },
+  "g4": {
+    "set": "codec-tasks-v1",
+    "landed": 20,
+    "n": 20,
+    "wilson95": [
+      0.8388748419471806,
+      1.0
+    ],
+    "provisional": false,
+    "pass": true,
+    "journaled_verdict_matches": true
+  },
+  "g5": {
+    "set": "codec-tasks-v4-mixed",
+    "patch": {
+      "landed": 16,
+      "n": 16,
+      "wilson95": [
+        0.8063923194655636,
+        1.0
+      ],
+      "provisional": false,
+      "pass": true
+    },
+    "refuse": {
+      "landed": 16,
+      "n": 16,
+      "wilson95": [
+        0.8063923194655636,
+        1.0
+      ],
+      "provisional": false,
+      "pass": true
+    },
+    "journaled_verdict_matches": true
+  },
+  "composition": {
+    "find": [
+      6,
+      6
+    ],
+    "run": [
+      5,
+      5
+    ],
+    "plain": [
+      5,
+      5
+    ],
+    "defect-absent": [
+      6,
+      6
+    ],
+    "missing-target": [
+      5,
+      5
+    ],
+    "symptom-mismatch": [
+      5,
+      5
+    ]
+  },
+  "endpoints": {
+    "productive_find": [
+      6,
+      6
+    ],
+    "find_usage": [
+      6,
+      6
+    ],
+    "malformed_find": [
+      0,
+      6
+    ],
+    "run_before_done": [
+      5,
+      5
+    ],
+    "any_run": [
+      5,
+      5
+    ],
+    "productive_run": [
+      5,
+      5
+    ],
+    "reason_grounding": {
+      "eligible": 11,
+      "landed_eligible": 11,
+      "measured_rows": 6,
+      "unmeasured_rows": 5,
+      "grounded": 13,
+      "spans": 17,
+      "missing_fixtures": []
+    }
+  },
+  "grant_violation_rows": 0,
+  "verb_histogram": {
+    "done": 52,
+    "find": 6,
+    "patch": 36,
+    "read": 52,
+    "run": 5
+  }
+}
