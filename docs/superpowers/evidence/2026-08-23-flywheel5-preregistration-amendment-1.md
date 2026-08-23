@@ -79,9 +79,9 @@ training-record file).
 Re-hashing the ledger's own balance readings: a **baseline** quiet-window
 storage trickle (prereg-time → pod-1 cut, ≈3.99 h, no upload active) of
 $0.019444 (≈$0.00487/h, consistent with ≈$3.50/mo at 50 GB) versus the
-**S3-upload window**'s drawdown (pod-1 teardown $12.4848233407 ~00:02 CDT →
-pod-2 pre-cut $12.4074403658 ~05:06 CDT, a ≈5.06 h window almost entirely
-coincident with the upload's active span 00:36→04:58 CDT) of $0.077383
+**S3-upload window**'s drawdown (pod-1 teardown $12.4848233407 ~00:02Z →
+pod-2 pre-cut $12.4074403658 ~05:06Z, a ≈5.06 h window almost entirely
+coincident with the upload's active span 00:36→04:58Z) of $0.077383
 (≈$0.0153/h) — **≈3.1× the baseline rate**. This is real, measured account
 cost during the "no pod running" window, distinct from and additional to
 pod-billing cost. **Hypothesis, flagged unverified**: an in-progress
@@ -103,7 +103,7 @@ method, not a training-recipe fact.
 
 Pod 1 (`7al24l12yuhaqs`) ran ≈17-19 minutes before the SSH-path upload's
 infeasibility was discovered and the stop rule invoked. Spend:
-**$0.4605308916**, included in this turn's cost total (§4 of the
+**$0.4605308916**, included in this turn's cost total (§10, and §1, of the
 training-record file). This was not wasted exploration — it is the
 measurement that motivated the S3-path switch in §2 above.
 

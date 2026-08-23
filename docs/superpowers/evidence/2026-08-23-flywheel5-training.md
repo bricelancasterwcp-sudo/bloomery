@@ -41,9 +41,8 @@ that ever showed any stock). This is a datacenter-availability fact, not a
 recipe change — recorded formally in the amendment file.
 
 Pod 2's `machineId`: `2kbys5tpjs02`. `memoryInGb: 250` (host RAM, ample for
-the CPU merge step later). 32 vCPU. Public IP `195.26.233.70`, SSH port
-`48640` (appeared on the 7th poll of a 25s cadence, ≈3 min, within the 5-min
-budget).
+the CPU merge step later). 32 vCPU. SSH access appeared on the 7th poll of
+a 25s cadence (≈3 min), within the 5-min budget.
 
 ---
 
@@ -74,15 +73,20 @@ long it took — but, per the balance re-hash below, **not $0 account cost**.
 - **Timeline**: started ≈2026-08-22T19:36 CDT, last part (4572/4572)
   completed 2026-08-22T23:57:40 CDT — **≈4h22m wall time**, entirely
   off the RunPod billing clock.
-- **Client-side crash on the last part, recorded honestly**: the uploader's
-  `save_state()` writes a temp file and `os.replace()`s it into place after
-  every part; on the very last part this raced with something else touching
-  the same directory and threw
+- **Client-side crash on the last part, root-caused**: the uploader's
+  `save_state()` (`~/flywheel5/s3_upload.py:58-61`) writes one shared
+  `path + ".tmp"` file and `os.replace()`s it into place; `multipart_upload`'s
+  2-worker `ThreadPoolExecutor` (`--concurrency 2`) calls it from
+  `persist_part` in each worker thread, so on the last two parts finishing
+  close together, one thread's `os.replace` consumed the shared tmp file
+  out from under the other, throwing
   `FileNotFoundError: [Errno 2] No such file or directory:
   '/home/brice/flywheel5/s3-upload.state.json.tmp' ->
-  '/home/brice/flywheel5/s3-upload.state.json'` — a real bug in the
-  uploader's state-file handling under concurrent access, not investigated
-  further since it didn't affect correctness (below).
+  '/home/brice/flywheel5/s3-upload.state.json'` — the two threads raced
+  each other on `os.replace`, not a conflict with something else in the
+  directory. A real bug in the uploader's state-file handling under
+  concurrent access (fix: a lock around `save_state`, or per-thread tmp
+  names); not applied here since it didn't affect correctness (below).
 - **The multipart upload itself completed successfully server-side** despite
   the client crash: `~/flywheel5/s3-upload.DONE` records
   `38349435696 (HEAD OK 2026-08-23T00:05:14 CDT; completed server-side
@@ -97,9 +101,9 @@ long it took — but, per the balance re-hash below, **not $0 account cost**.
   two quiet windows (no pod running) gives a **baseline** storage trickle —
   prereg-time balance → pod-1 cut, ≈3.99 h of quiet — of $0.019444 (≈
   $0.00487/h, consistent with ≈$3.50/mo at 50 GB) — against the **S3-upload
-  window**'s drawdown — pod-1 teardown $12.4848233407 (~00:02 CDT) → pod-2
-  pre-cut $12.4074403658 (~05:06 CDT), a window almost entirely coincident
-  with the upload's active span (00:36→04:58 CDT) — of $0.077383 over ≈5.06 h
+  window**'s drawdown — pod-1 teardown $12.4848233407 (~00:02Z) → pod-2
+  pre-cut $12.4074403658 (~05:06Z), a window almost entirely coincident
+  with the upload's active span (00:36→04:58Z) — of $0.077383 over ≈5.06 h
   (≈$0.0153/h), **≈3.1× the baseline rate**. This is a real, measured
   drawdown that is **not** the "$0 pod cost" the framing above describes —
   it is unattributed account cost, not pod-billing cost. **Hypothesis, not
@@ -120,7 +124,7 @@ pod before anything else**, run detached (`setsid nohup sha256sum … &`,
 polled via the output file, never `pgrep -f`).
 
 - `ls -la /workspace/Qwen3.6-35B-A3B-REAP48-ours/`: all 9 expected sidecar
-  files present (`config.json generation_config.json generation_config.json
+  files present (`config.json generation_config.json
   tokenizer.json tokenizer_config.json vocab.json merges.txt
   chat_template.jinja reap_pruning.json summary.json`) plus
   `model.safetensors` at exactly **38,349,435,696 bytes** — matches the
@@ -231,7 +235,7 @@ full eval pass over 221 val rows + 5 train micro-steps).
 
 `train.DONE` + `train.EXIT` = **0**, launched via `setsid nohup
 train-wrapper.sh` (byte-identical to the brief's Step 5 script) at
-`2026-08-23T05:26:xxZ`, done `08:17:13Z`.
+`≈2026-08-23T05:26Z`, done `08:17:13Z`.
 
 **`train_moe.py`'s live tqdm stream did not print intermediate `{'loss':
 ...}` dicts during the full run** — a property of this HF Trainer /

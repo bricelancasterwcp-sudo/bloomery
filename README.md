@@ -165,8 +165,12 @@ Limits after Phase 2a, all known and none hidden:
   than the dense-model default.** The first trained member of a hybrid MoE
   line — `qwen36-reap48-flywheel5` (Gated-DeltaNet + full-attention, 133
   experts, LoRA on attention + shared-expert modules, experts/router frozen)
-  — measured a 493 MiB Vulkan compute buffer at its serving context, so its
-  boot config sets `ctx_overhead_mib = 512` rather than the 384 default;
+  — inherits this from the 2026-08-21 spike's measurement on the untrained
+  base: a 493 MiB Vulkan compute buffer at n_ctx 54,784
+  ([turn-5 design spec](docs/superpowers/specs/2026-08-22-flywheel5-turn5-design.md)
+  §2). The buffer grows with `n_ctx` (a named residual, not modeled);
+  `ctx_overhead_mib = 512` is the operator setting this turn's boots use,
+  chosen to cover the measured 493 MiB rather than the 384 default.
   `kv_per_token` and `recurrent_state_bytes` are still derived from the
   GGUF's own `full_attention_interval`/`ssm.*` metadata, unchanged by
   training. The line's battery (G4 20/20, G5-v4 patch 16/16 and refuse

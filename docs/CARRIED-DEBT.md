@@ -1107,10 +1107,10 @@ program's evidence docs point back to):**
   names its `agent`, enabling a **keyed** join) and `7ad4df5`
   (`tools/evidence/recompute` — the keyed+ordinal join, Wilson, endpoints,
   pinned against the committed turn-4 journals), both merged via PR #19
-  (`71415e8`) before this turn's own boots ran. The argv itself is still
-  not journaled on a granted `run`'s own row — that half of the debt is
-  unchanged and is not claimed closed (battery §6.5 states the limit again
-  rather than assuming the fix reached further than it did).
+  (`71415e8`) before this turn's own boots ran. The argv itself is now
+  journaled on a granted `run`'s own row too — `args` carries the executed
+  argv directly (`20d83b1`), so both halves of the debt are struck, with
+  the battery's five quoted `run` rows as the evidence (battery §6.5).
 - **Hybrid-geometry defects 1 (KV over-counted the recurrent layers) and 4
   (recurrent state never charged to VRAM)**, both named in the 2026-08-21
   REAP-48 spike. Closed by `882ee91` (hybrid-aware pager geometry: KV
@@ -1143,15 +1143,20 @@ requested context window; still unaddressed, unchanged by this turn.
   discovered one; the prune GGUF test must cover this converter path so the
   next MTP-free checkpoint does not rediscover the same assertion.
 - **The S3 uploader's state-file has a tmp-name race under concurrent
-  access.** `~/flywheel5/s3_upload.py`'s `save_state()` writes a temp file
-  and `os.replace()`s it into place after every part; on the very last part
-  of this turn's upload this raced with something else touching the same
-  directory and threw `FileNotFoundError` on the rename (amendment-1 §2,
-  training record §2). The multipart upload itself completed correctly
-  server-side despite the crash (verified independently by `head_object`
-  size and a post-hoc sha256 match on the pod) — not investigated further
-  since it did not affect correctness, but the race itself is a real bug in
-  a tool this program will likely reuse.
+  access, root-caused.** `~/flywheel5/s3_upload.py:58-61`'s `save_state()`
+  writes one shared `path + ".tmp"` file and `os.replace()`s it into place;
+  `multipart_upload`'s 2-worker `ThreadPoolExecutor` (`--concurrency 2`)
+  calls `save_state` from `persist_part` in each worker thread, so on the
+  last two parts of this turn's upload finishing close together, one
+  thread's `os.replace` consumed the shared tmp file out from under the
+  other, throwing `FileNotFoundError` on the rename (amendment-1 §2,
+  training record §2) — the two threads raced each other on `os.replace`,
+  not a conflict with something else in the directory. The multipart
+  upload itself completed correctly server-side despite the crash (verified
+  independently by `head_object` size and a post-hoc sha256 match on the
+  pod). Fix: a lock around `save_state`, or per-thread tmp filenames; not
+  applied here since it did not affect correctness, but the race itself is
+  a real bug in a tool this program will likely reuse.
 - **Spec §4.2's "4 attention layers" wording slip, dated note.** Line 208 of
   `docs/superpowers/specs/2026-08-22-flywheel5-turn5-design.md` states the
   no-cross-example-leakage rationale as "the 4 attention layers... or the
@@ -1207,6 +1212,18 @@ requested context window; still unaddressed, unchanged by this turn.
   torch/transformers pins, not after) or check `torch.cuda.is_available()`
   immediately after that specific step rather than only at the end of the
   chain.
+- **The label-mask/`</action>`-tail test runs on a synthetic corpus, not
+  the real one.** Spec §4.1 asked for "label masking + `</action>` tail
+  hold on real corpus rows," but the shipped test
+  (`tools/flywheel/tests/test_train_common.py`'s
+  `test_tokenize_masks_prompt_and_ends_at_action_close`) exercises a mini
+  tokenizer and synthetic rows from `train_fixture.py`
+  (`build_action_tokenizer`, `tiny_corpus`), not the real turn-4/5 corpus
+  with the real tokenizer. The property was covered at run time instead —
+  the pod's own smoke test printed `label-check ok: 341 prompt tokens
+  masked, tail='\n</action>'` (training record §5) — but a committed,
+  skip-if-absent unit test over the real corpus + real tokenizer, matching
+  that runtime check, remains to be added.
 
 **Deferred, unchanged by this turn:**
 

@@ -341,9 +341,13 @@ turns 1-4.
 parameter) are never LoRA targets and stay frozen; `assert_frozen(model)`
 walks every parameter and raises if any `.experts.` or router parameter is
 trainable, returning `{"trainable": N, "total": M}` so the run log records
-the real percentage (0.0611% at full scale; the mini-model test only
-checks trainable/total < 20%, since a 4-layer/8-expert toy has a much
-higher LoRA-to-total ratio than the real 40-layer/256-expert checkpoint).
+the real percentage — **0.1103%** measured on this turn's own 133-expert
+REAP-48 checkpoint (21,166,080 / 19,194,718,848, training record §5); the
+pre-registration's 0.0611% figure was the 2026-08-21 spike's measurement
+against the unpruned 256-expert total, kept there for context only, not
+this run's measured value. The mini-model test only checks trainable/total
+< 20%, since a 4-layer/8-expert toy has a much higher LoRA-to-total ratio
+than the real 40-layer/133-expert checkpoint.
 
 **Unpacked, batch size 1** — ruled 2026-08-22: naive example-packing would
 let one packed sequence's state leak across the Gated-DeltaNet layers'
