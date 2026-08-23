@@ -70,14 +70,34 @@ API** (`https://s3api-us-wa-1.runpod.io/`) directly to the network volume,
 **with no pod running** — 4,572 × 8 MiB multipart parts, 2 concurrent
 threads, ≈2.3 MB/s average (consistent with the same uplink ceiling,
 confirming it is a property of this box, not the transfer method), ≈4h22m
-wall time, **$0 pod cost** since no billed pod was active during the
-transfer. Verified correct on the pod afterward: exact byte size
-(38,349,435,696) and sha256 match (§3 of the training-record file).
+wall time, **$0 POD cost** — but **not $0 account cost** (see below) —
+since no billed pod was active during the transfer. Verified correct on the
+pod afterward: exact byte size (38,349,435,696) and sha256 match (§3 of the
+training-record file).
+
+**Account-balance drawdown during the upload window, not fully explained.**
+Re-hashing the ledger's own balance readings: a **baseline** quiet-window
+storage trickle (prereg-time → pod-1 cut, ≈3.99 h, no upload active) of
+$0.019444 (≈$0.00487/h, consistent with ≈$3.50/mo at 50 GB) versus the
+**S3-upload window**'s drawdown (pod-1 teardown $12.4848233407 ~00:02 CDT →
+pod-2 pre-cut $12.4074403658 ~05:06 CDT, a ≈5.06 h window almost entirely
+coincident with the upload's active span 00:36→04:58 CDT) of $0.077383
+(≈$0.0153/h) — **≈3.1× the baseline rate**. This is real, measured account
+cost during the "no pod running" window, distinct from and additional to
+pod-billing cost. **Hypothesis, flagged unverified**: an in-progress
+multipart upload's already-received parts may occupy volume storage
+(up to ≈38 GB beyond the 50 GB nominal volume) until the multipart upload
+completes, roughly doubling the billed storage footprint for the window;
+per-part `PutObject` API operation charges (≈4,572 calls) may also
+contribute. Neither is confirmed against RunPod's actual billing model —
+recorded as an open, unattributed cost, not a closed explanation.
 
 This is an infrastructure/transport change, not a recipe change: the same
 bytes landed on the same volume, verified byte-identical by sha256 before
 any training step. Nothing about the corpus, seeds, hyperparameters, or
-battery was touched.
+battery was touched. The small unattributed account-cost drawdown above
+does not change this — it is a storage/billing fact about the transport
+method, not a training-recipe fact.
 
 ## 3. Pod 1's cost ($0.46), recorded here for completeness
 

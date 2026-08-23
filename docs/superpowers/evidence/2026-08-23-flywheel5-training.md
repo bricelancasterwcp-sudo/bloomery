@@ -52,8 +52,8 @@ budget).
 Pod 1's own SSH-path upload was infeasible at the local box's measured
 uplink (≈21 Mbps). Rather than accept a much larger cost cap, the base model
 was uploaded directly to RunPod's S3-compatible object API — **no pod
-running during the upload**, so it cost $0 of pod time regardless of how
-long it took.
+running during the upload**, so it cost **$0 POD cost** regardless of how
+long it took — but, per the balance re-hash below, **not $0 account cost**.
 
 - **Tool**: `~/flywheel5/s3_upload.py` (local, not committed to the repo;
   credentials via `~/.aws` profile `runpods3`, never CLI args, never logged
@@ -92,6 +92,24 @@ long it took.
 - **Verified independently on the pod** (§3): `ls -la` size and `sha256sum`
   both matched exactly, so the crash-adjacent completion is confirmed
   correct, not merely claimed.
+- **Observed account-balance drawdown during the "free" upload window, not
+  fully explained**: re-hashing the ledger's own balance readings during the
+  two quiet windows (no pod running) gives a **baseline** storage trickle —
+  prereg-time balance → pod-1 cut, ≈3.99 h of quiet — of $0.019444 (≈
+  $0.00487/h, consistent with ≈$3.50/mo at 50 GB) — against the **S3-upload
+  window**'s drawdown — pod-1 teardown $12.4848233407 (~00:02 CDT) → pod-2
+  pre-cut $12.4074403658 (~05:06 CDT), a window almost entirely coincident
+  with the upload's active span (00:36→04:58 CDT) — of $0.077383 over ≈5.06 h
+  (≈$0.0153/h), **≈3.1× the baseline rate**. This is a real, measured
+  drawdown that is **not** the "$0 pod cost" the framing above describes —
+  it is unattributed account cost, not pod-billing cost. **Hypothesis, not
+  verified**: a multipart upload's already-uploaded parts may occupy volume
+  storage (up to ≈38 GB extra, on top of the 50 GB nominal volume) until the
+  multipart upload completes, roughly doubling the billed storage footprint
+  for the window; S3 API operation charges (per-part `PutObject` calls, ~4,572
+  of them) may also contribute. Neither explanation is confirmed against
+  RunPod's actual billing model — flagged here as an open question, not
+  closed.
 
 ---
 
@@ -197,8 +215,15 @@ full eval pass over 221 val rows + 5 train micro-steps).
 - `label-check ok: 341 prompt tokens masked, tail='\n</action>'` — matches.
 - 5 steps completed, `rc=0`. `eval_loss 0.4175` (56.85s, 3.887 it/s over 221
   rows), `train_loss 0.7223` (5-step summary only, not interpreted).
-- **Peak VRAM: 51,715 MiB** (~50.5 GB of 80 GB), sampled via `nvidia-smi
-  --query-gpu=memory.used` every ~15s during the run.
+- **Peak VRAM: 51,715 MiB** (~50.5 GB of 80 GB), from `nvidia-smi
+  --query-gpu=memory.used` sampled live over ssh roughly every ~15s during
+  the run. **Provenance note**: this number comes from readings taken live
+  during the run and recorded in this document; it was **not** written to
+  any log file on the pod or brought home as an artifact, so there is no
+  independently-checkable file backing it — a runbook gap (the smoke step
+  should redirect `nvidia-smi` polling to a log file, as the training and
+  post-train phases do for their own progress markers). Reported as observed,
+  not as artifact-verified.
 
 ---
 
