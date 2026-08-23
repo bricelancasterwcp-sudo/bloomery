@@ -1063,6 +1063,225 @@ each; per-task detail lives in the SDD ledger at
   asked. This is the standing box trap that also makes `pkill` patterns
   dangerous here, and it cost a false reading before it was caught.
 
+## Delivered in flywheel turn 5 (2026-08-23, `flywheel5-turn5` branch)
+
+The flywheel's fifth turn: the first trained member of a **new base line**
+— `qwen36-reap48-flywheel5`, a bf16 LoRA (r16/alpha32, twelve target
+modules, experts + router frozen) trained via peft (not unsloth — `qwen3_5_moe`
+is unsupported there) on `~/models/hf/Qwen3.6-35B-A3B-REAP48-ours` (40
+layers: 10 full-attention + 30 Gated-DeltaNet, 133 experts), on the
+byte-identical turn-4 refusal-honesty corpus, merged and quantized to
+Q4_K_M. The turn existed to answer one question, pre-registered before
+training: does refuse reach ≥13/16 while patch holds ≥13/16, against the
+untrained REAP-48 base's own measured anchor of **patch 13/16, refuse
+9/16** (`2026-08-22-g5v4-reap48-baselines.md`)?
+
+**`qwen36-reap48-flywheel5` passed the full pre-registered battery**: G4
+**20/20** (the kill leg), G5-v4 patch **16/16** and refuse **16/16** — both
+floor passes and both **decided** — `done_trust: true`, matching
+`qwen3-14b-flywheel4`'s own perfect scorecard on the dense 14B line and
+clearing the refuse floor by +7 fixtures against the required +4
+(`docs/superpowers/evidence/2026-08-23-flywheel5-battery.md` §1, §7). Both
+boots reproduced every landing, verb sequence and outcome string
+byte-identically except `duration_ms` timing noise on the five run-granted
+fixtures — a tighter reproduction than the untrained base's own two boots,
+which differed in exact wording on 5 of 52 fixtures. Grant violations went
+from the anchor's 4 (all `src/`-prefixed invented paths) to **0** in both
+boots, and the `done`-count anatomy is an exact 52-on-52 (vs. the anchor's
+47-on-52 and the four-shape trajectory census vs. the anchor's sixteen).
+Reason-grounding measured 13/17 spans grounded, and three of the four
+ungrounded spans sit on refuse rows that falsely claim a repair was
+performed, in a boot where **none** of the 16 refuse trajectories ever
+executes a `patch` step — the same "declares done without doing the work"
+pattern this program has now recorded on three separate lines/turns
+(battery §6.6).
+
+**Struck on arrival (debt this turn's own merged ride-alongs closed before
+training, named here for the record because this section is where the
+program's evidence docs point back to):**
+
+- **"`TaskStep` rows carry no fixture key and no action arguments"** and
+  **"a granted `run`'s row carries only `ran python3 exit 0`"** — both
+  named as recurring observability debt in the turn-3 and turn-4 sections
+  above. Closed by `20d83b1` (`TaskStep` now carries `args`; `CodecFixture`
+  names its `agent`, enabling a **keyed** join) and `7ad4df5`
+  (`tools/evidence/recompute` — the keyed+ordinal join, Wilson, endpoints,
+  pinned against the committed turn-4 journals), both merged via PR #19
+  (`71415e8`) before this turn's own boots ran. The argv itself is now
+  journaled on a granted `run`'s own row too — `args` carries the executed
+  argv directly (`20d83b1`), so both halves of the debt are struck, with
+  the battery's five quoted `run` rows as the evidence (battery §6.5).
+- **Hybrid-geometry defects 1 (KV over-counted the recurrent layers) and 4
+  (recurrent state never charged to VRAM)**, both named in the 2026-08-21
+  REAP-48 spike. Closed by `882ee91` (hybrid-aware pager geometry: KV
+  counts attention layers only, recurrent state derived from the GGUF's own
+  `ssm.*` metadata and charged per context), merged in the same PR #19
+  before this turn's boots. Verified holding on the new trained GGUF: both
+  boots of this turn report `kv_per_token` 20,480 B/tok and
+  `recurrent_state_bytes` 65,863,680 B, identical to the untrained
+  anchor's — LoRA training does not touch the checkpoint's hybrid-geometry
+  metadata, as expected.
+
+**Recorded, not fixed:** compute-buffer growth with `n_ctx` — the pager's
+`ctx_overhead_mib` remains an operator-set constant (512 on every boot this
+program has run under envelope-v4), not a measured function of the
+requested context window; still unaddressed, unchanged by this turn.
+
+**New debt, found this turn:**
+
+- **The prune tool zeroes `mtp_num_hidden_layers` instead of deleting the
+  key.** `tools/flywheel/prune/` writes `mtp_num_hidden_layers: 0` into a
+  pruned checkpoint's config rather than removing the key entirely. llama.cpp
+  `8672290`'s `convert_hf_to_gguf.py` asserts `opt_num_mtp_layers != 0` in
+  `_QwenMtpMixin.__init__` whenever the key is present and reads 0, before
+  its own tensor-scanning pass ever gets a chance to prove there are no MTP
+  tensors — this turn's post-train chain hit exactly this assertion on the
+  first `convert_hf_to_gguf.py` attempt (training record §7) and worked
+  around it with the converter's own `--no-mtp` flag. The tool should
+  delete the key outright for a genuinely MTP-free checkpoint, or the
+  runbook must document `--no-mtp` as a required flag rather than a
+  discovered one; the prune GGUF test must cover this converter path so the
+  next MTP-free checkpoint does not rediscover the same assertion.
+- **The S3 uploader's state-file has a tmp-name race under concurrent
+  access, root-caused.** `~/flywheel5/s3_upload.py:58-61`'s `save_state()`
+  writes one shared `path + ".tmp"` file and `os.replace()`s it into place;
+  `multipart_upload`'s 2-worker `ThreadPoolExecutor` (`--concurrency 2`)
+  calls `save_state` from `persist_part` in each worker thread, so on the
+  last two parts of this turn's upload finishing close together, one
+  thread's `os.replace` consumed the shared tmp file out from under the
+  other, throwing `FileNotFoundError` on the rename (amendment-1 §2,
+  training record §2) — the two threads raced each other on `os.replace`,
+  not a conflict with something else in the directory. The multipart
+  upload itself completed correctly server-side despite the crash (verified
+  independently by `head_object` size and a post-hoc sha256 match on the
+  pod). Fix: a lock around `save_state`, or per-thread tmp filenames; not
+  applied here since it did not affect correctness, but the race itself is
+  a real bug in a tool this program will likely reuse.
+- **Spec §4.2's "4 attention layers" wording slip, dated note.** Line 208 of
+  `docs/superpowers/specs/2026-08-22-flywheel5-turn5-design.md` states the
+  no-cross-example-leakage rationale as "the 4 attention layers... or the
+  30 recurrent layers' state" — but the REAP-48 checkpoint's own
+  `config.json` measures **10** full-attention layers, not 4;
+  `full_attention_interval = 4` is the *stride* between attention layers
+  (`block_count / full_attention_interval = 40 / 4 = 10`), not their count.
+  Caught during pre-registration review and corrected there rather than in
+  the spec file itself (`2026-08-22-flywheel5-preregistration.md`, "A slip
+  in the spec's own wording, corrected here"); the rationale (leakage
+  across whichever number of attention layers, and across the 30 recurrent
+  layers) is unaffected. The spec text is left as written, uncorrected in
+  place, per the amendment rule — this is the cross-linked dated note that
+  rule calls for.
+- **The S3/uplink lesson: this box's outbound uplink is ≈2.3-2.7 MB/s, and
+  a plan figure must name its direction.** The pre-registered runbook
+  assumed ≈19 MB/s for the base-model upload, quoted from the *pod's* own
+  `maxDownloadSpeedMbps` machine spec — a **download** figure, misapplied
+  to the **upload** direction. The actual measured uplink (root-caused via
+  `/proc/net/dev` to be this local box's own outbound ceiling, not a
+  pod-path or transfer-method artifact) was ≈7-8x slower, and would have
+  consumed more than half the turn's $10 cap before training even started
+  had the SSH-path plan been followed to completion (amendment-1 §2). The
+  lesson: any bandwidth figure quoted from a cloud machine's spec sheet
+  must be checked for which direction it describes before it is used to
+  bound a transfer plan running the other way.
+- **The `echo $!`-after-`setsid` PID gotcha, reproduced a third time.**
+  `setsid` (util-linux) forks to avoid calling `setsid()` on a
+  process-group leader, so the shell's `$!` captures `setsid`'s own PID —
+  already exited by the time it is checked — not the daemon's. This turn's
+  boot 1 hit it again (`$!` = 1555252, already dead; real daemon PID 1555254
+  found via `ps -eo pid,comm | grep -w bloomery-daemon`), exactly as Task 6
+  and the turn-4/REAP-48-baselines battery both recorded it. Recorded here
+  a third time not because it is new, but because it keeps recurring
+  despite being documented twice already — a candidate for a small wrapper
+  script that does the `ps`-based PID discovery itself, rather than relying
+  on every task's author to remember the workaround.
+- **`pip install -r requirements-convert_hf_to_gguf.txt` clobbers the
+  pinned torch/transformers versions.** llama.cpp `8672290`'s own
+  `requirements/requirements-convert_hf_to_gguf.txt` carries exact pins
+  (`torch==2.11.0` from a CPU-only wheel index, `transformers==4.57.6` via
+  its own `-r requirements-convert_legacy_llama.txt`) that silently
+  **uninstall** a correctly-pinned CUDA torch/transformers when installed
+  per the brief's literal one-line chain (training record §4:
+  `torch 2.9.1+cu129` → `torch 2.11.0+cpu`, `torch.cuda.is_available() ==
+  False`). Caught before any billed smoke test or training step this turn,
+  by an explicit version-print check the runbook already included — but
+  the runbook itself does not warn that this specific `pip install -r`
+  step is destructive to the earlier pins. The fix applied was a
+  `--index-url` re-install of the correct versions immediately after; the
+  runbook should sequence the installs to avoid the clobber in the first
+  place (install the GGUF-conversion requirements *before* the CUDA
+  torch/transformers pins, not after) or check `torch.cuda.is_available()`
+  immediately after that specific step rather than only at the end of the
+  chain.
+- **The label-mask/`</action>`-tail test runs on a synthetic corpus, not
+  the real one.** Spec §4.1 asked for "label masking + `</action>` tail
+  hold on real corpus rows," but the shipped test
+  (`tools/flywheel/tests/test_train_common.py`'s
+  `test_tokenize_masks_prompt_and_ends_at_action_close`) exercises a mini
+  tokenizer and synthetic rows from `train_fixture.py`
+  (`build_action_tokenizer`, `tiny_corpus`), not the real turn-4/5 corpus
+  with the real tokenizer. The property was covered at run time instead —
+  the pod's own smoke test printed `label-check ok: 341 prompt tokens
+  masked, tail='\n</action>'` (training record §5) — but a committed,
+  skip-if-absent unit test over the real corpus + real tokenizer, matching
+  that runtime check, remains to be added.
+
+**Deferred, unchanged by this turn:**
+
+- **Packing side study** — deferred to a later, separately pre-registered
+  study (prereg, "Packing is deferred to a later, separately pre-registered
+  side study; it is a non-goal of this turn"). Unpacked, batch-size-1
+  training was used throughout, for the two named reasons (state leakage
+  across the 30 recurrent layers, cross-attention leakage across the
+  full-attention layers).
+- **Honesty instrument** — named as turn 6's own spec in the roadmap
+  pointer; not started by this turn.
+- **Router/expert training** — remains parked research
+  (`research-moe-quantized-expert-training`); this turn's LoRA targets
+  attention + shared-expert modules only, experts and router frozen and
+  asserted frozen at load (`assert_frozen`), unchanged from the
+  pre-registered plan.
+
+**Process lessons of the wave:**
+
+- **"Anatomy from scripts, not from memory" struck again — this time in
+  the REAP-48 baselines' own evidence review, before this turn's battery
+  was even written.** Task 6's baselines doc shipped one Critical
+  (`refuse`'s Wilson flag mislabeled "provisional" when the interval lies
+  wholly below 0.80, i.e. it is `decided`) and three Important errors — a
+  refuse-miss count off by one, a grant-violation-recovery count
+  contradicted by the same document's own prose, and a trajectory-shape
+  count off by one — all caught by re-deriving each claim with a dedicated
+  script rather than trusting the sentence that read correctly on first
+  pass (baselines doc, "Fix round 1"). This turn's own battery task applied
+  the lesson pre-emptively (every anatomy claim in
+  `2026-08-23-flywheel5-battery.md` is a quoted script output, not
+  paraphrase) and still caught three of its **own** draft's errors in
+  self-review before commit: a wrong boot-2 timestamp, a fixture-count
+  transcription (12 written where 16 was meant, twice), and one internally
+  garbled sentence — by the same method, re-deriving from the committed
+  bytes rather than trusting the first draft. The lesson is not "write the
+  script once and trust it forever" — it is "re-derive every claim, every
+  time, including the ones that feel obviously right."
+- **Implementer poll loops do not, on their own, re-invoke the agent that
+  launched them.** This turn's battery task launched each boot's
+  wait-for-verdict poll as a detached background command and then paused
+  rather than busy-polling the foreground, per the house rule — but the
+  background command's own completion notification needed an explicit
+  controller nudge to resume the task both times (boot 1 and boot 2 alike),
+  rather than the poll's exit alone driving the next step automatically.
+  Recorded as an operational fact about this harness for anyone planning a
+  multi-boot measurement: budget for a controller check-in at each poll
+  boundary, not just at the end of the whole task.
+- **The first pod's upload-speed assumption cost $0.46 and a stop-rule
+  invocation, and that is what it is for.** Pod 1 ran ≈17-19 minutes,
+  measured the SSH-path upload at the local box's real uplink ceiling, and
+  was torn down the moment that measurement made the pre-registered plan's
+  cost bound infeasible — not treated as wasted spend, but as the exact
+  measurement that motivated the S3-path switch that made pod 2 succeed
+  cleanly (amendment-1 §3). The $10 stop rule is not only a ceiling on a
+  single run's cost; it is what makes a $0.46 "failed" pod a correctly
+  bounded discovery rather than a runaway one.
+
 ## Phase 2 work items (in recommended order)
 
 5. **NVMe-media KV image read is unmeasured** — every recorded

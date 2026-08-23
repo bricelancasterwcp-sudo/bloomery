@@ -312,3 +312,82 @@ module file are the signature of a package tree mutating under a live
 process.** Build converter and tooling dependencies into a separate venv,
 or before the run starts — never alongside it. Re-verify `cuda_avail` and
 the `qwen3_5_moe` import before restarting.
+
+## train_moe.py — turn 5's bf16-LoRA recipe for qwen3_5_moe
+
+Turns 1-4 trained a dense 14B model with unsloth QLoRA (`train.py`). Turn 5
+trains the REAP-48-pruned `Qwen3.6-35B-A3B` hybrid MoE
+(`Qwen3_5MoeForCausalLM`) instead, and neither turn-1-4 mechanism applies:
+unsloth has no support for `qwen3_5_moe`, and bitsandbytes cannot quantize
+the architecture's fused 3-D expert tensors (`experts.gate_up_proj`,
+`experts.down_proj`). `train_moe.py` is the bf16 LoRA-via-peft recipe
+forced by that constraint. The binding rules every flywheel recipe shares
+— raw text with no chat template, completion-only loss, no EOS appended
+(the sample tail is `</action>`), the fingerprint's `val_split_ids` held
+out for eval only, `TrainingArguments` verbatim, and the procedure seed
+`20260816` — now live in `train_common.py`, imported unchanged by both
+`train.py` and `train_moe.py`.
+
+**LoRA targets (12 module names).** Attention (`q_proj`, `k_proj`,
+`v_proj`, `o_proj`), the Gated-DeltaNet linear-attention projections
+(`in_proj_qkv`, `in_proj_z`, `in_proj_b`, `in_proj_a`, `out_proj`), and the
+SHARED expert only (`gate_proj`, `up_proj`, `down_proj` — the only Linear
+modules with those names; the routed experts are fused, non-Linear
+`nn.Parameter`s peft cannot wrap). r=16, alpha=32, dropout=0, same as
+turns 1-4.
+
+**Frozen and asserted.** Routed experts (`mlp.experts.gate_up_proj`,
+`mlp.experts.down_proj`) and the router (`mlp.gate.weight`, a bare
+parameter) are never LoRA targets and stay frozen; `assert_frozen(model)`
+walks every parameter and raises if any `.experts.` or router parameter is
+trainable, returning `{"trainable": N, "total": M}` so the run log records
+the real percentage — **0.1103%** measured on this turn's own 133-expert
+REAP-48 checkpoint (21,166,080 / 19,194,718,848, training record §5); the
+pre-registration's 0.0611% figure was the 2026-08-21 spike's measurement
+against the unpruned 256-expert total, kept there for context only, not
+this run's measured value. The mini-model test only checks trainable/total
+< 20%, since a 4-layer/8-expert toy has a much higher LoRA-to-total ratio
+than the real 40-layer/133-expert checkpoint.
+
+**Unpacked, batch size 1** — ruled 2026-08-22: naive example-packing would
+let one packed sequence's state leak across the Gated-DeltaNet layers'
+recurrent state into the next example, so `train_moe.py` keeps the same
+bs-1, no-packing shape `train.py` already used.
+
+**Wrong-checkpoint refusal.** `main()` loads the checkpoint, then checks
+`type(model).__name__ == "Qwen3_5MoeForCausalLM"` before doing anything
+else; a mismatch prints to stderr, writes `EXIT 2` / `DONE failed`, and
+returns exit code 2 without touching LoRA, the corpus, or the trainer.
+
+**Markers.** `main()` wraps everything after `--out` is created (model
+load, LoRA, freeze assertion, data, trainer, save) in a single
+try/except, and writes `EXIT`/`DONE` on **every** exit path — the
+wrong-checkpoint refusal (`EXIT 2`/`DONE failed`), any other unexpected
+exception (`EXIT 1`/`DONE failed`, with `TRAINING FAILED: {e!r}` and the
+full traceback on stderr), and success (`EXIT 0`/`DONE ok`) — so the
+pod's wrapper can always read the outcome from `--out` instead of parsing
+training logs.
+
+Usage (turn 5, on the pod):
+
+```bash
+python -m tools.flywheel.train_moe --corpus /workspace/flywheel5/corpus.jsonl \
+    --fingerprint /workspace/flywheel5/fingerprint.json \
+    --base /workspace/Qwen3.6-35B-A3B-REAP48-ours --out /workspace/flywheel5/adapter \
+    [--max-steps N] [--device cuda|cpu] [--dtype bfloat16|float32]
+```
+
+`--device cpu --dtype float32` is the CPU-smoke path exercised by
+`tests/test_train_moe.py::CpuSmoke` — it is not how the pod runs the real
+job. peft and accelerate must be **installed on the pod before the job
+starts**, the same rule as the prune run above: never `pip install`
+alongside a live process.
+
+### Running the trainer tests
+
+Same interpreter split as the prune tests: the venv for real assertions,
+stdlib for a clean skip.
+
+```bash
+~/flywheel-venv/bin/python -m unittest discover -s tools/flywheel/tests -t .
+```
