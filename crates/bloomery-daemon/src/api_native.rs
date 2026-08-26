@@ -648,12 +648,21 @@ fn swap_unavailable(name: &str) -> ApiResult {
 /// not the pager — unlike `lock_pager` above, that does not taint every
 /// *other* pager operation, so `/status` still answers rather than joining
 /// the pager's sticky-poison 500.
+///
+/// **The pager guard is dropped before the store is locked.** This is the
+/// one systemic lock at a time discipline `task/registry.rs`'s organ
+/// ordering also holds (the store lock is always fully released before
+/// `pager.lock()`, and `organ_after_run` locks the store strictly after the
+/// pager block has already closed) — never both systemic locks live on one
+/// thread at once, so an AB-BA ordering between them can never arise.
 fn status<S: Substrate>(pager: &Mutex<Pager<S>>, memory: Option<&MemoryContext>) -> ApiResult {
-    let p = match lock_pager(pager) {
-        Ok(p) => p,
-        Err(poisoned) => return poisoned,
+    let mut v = {
+        let p = match lock_pager(pager) {
+            Ok(p) => p,
+            Err(poisoned) => return poisoned,
+        };
+        serde_json::to_value(p.status()).expect("StatusReport serializes")
     };
-    let mut v = serde_json::to_value(p.status()).expect("StatusReport serializes");
     if let Some(m) = memory {
         let counts = m.store.as_ref().map(|s| {
             s.lock()
