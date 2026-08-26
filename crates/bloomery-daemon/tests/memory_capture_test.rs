@@ -127,6 +127,7 @@ fn spec_with_codec(
         bounds,
         mutating_verbs: true,
         envelope: EnvelopeLens::V1,
+        memory_block: None,
     }
 }
 

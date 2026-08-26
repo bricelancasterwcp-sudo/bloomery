@@ -385,6 +385,9 @@ fn a_demoted_v4_task_renders_the_none_line_even_with_a_command_bearing_grant() {
         // Gate G4 demotion — the fail-closed value an unmeasured model gets.
         mutating_verbs: false,
         envelope: EnvelopeLens::V4,
+        // The goldens above are memory-off bytes (memory-organ design spec
+        // §4) — this live-loop check must be too.
+        memory_block: None,
     };
     let mut task_journal = Journal::open(&dir.join("task.jsonl")).unwrap();
     let result = run_task(&mut pager, &agent.id, &spec, &mut task_journal);

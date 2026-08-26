@@ -377,6 +377,11 @@ fn run_one_fixture<S: Substrate + Send + 'static>(
         // value `ctx.envelope.lens_name()` names in the verdict's `detail`
         // below.
         envelope: ctx.envelope,
+        // Memory-organ design spec §4's envelope rule: "every frozen
+        // instrument — G4/G5 batteries, drift probes, swap cover — runs
+        // memory-off". A probe rung measured with an episode in its prompt
+        // would not be comparable to any rung already in the ledger.
+        memory_block: None,
     };
     // Caught inside the locked scope for exactly the reason
     // `task::registry`'s module docs give: a panic unwinding past a live

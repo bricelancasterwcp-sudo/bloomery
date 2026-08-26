@@ -134,6 +134,10 @@ fn spec(grant: Grant, cwd: PathBuf, envelope: EnvelopeLens) -> TaskSpec {
         bounds: bounds(),
         mutating_verbs: true,
         envelope,
+        // The anti-drift comparison below is against `render_task_prompt`,
+        // which hardcodes memory-off (memory-organ design spec §4). A spec
+        // carrying a block here would be comparing two different prompts.
+        memory_block: None,
     }
 }
 

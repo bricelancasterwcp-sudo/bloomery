@@ -214,6 +214,13 @@ fn create_task<S: Substrate + Send + 'static>(
         // resolved through the identical lookup rather than a second,
         // potentially-drifting path.
         envelope,
+        // The memory organ is not wired to this route yet (memory-organ
+        // design spec §3: retrieval runs "at task start … before step 1",
+        // which is the registry worker's moment, not this handler's — it
+        // has neither the store nor the task's own journal in hand). `None`
+        // is the honest value here and also the permanently correct default:
+        // a route that could not retrieve must never claim it did.
+        memory_block: None,
     };
 
     let task_id = registry.spawn_task(Arc::clone(pager), agent_id.to_string(), spec, journal_path);

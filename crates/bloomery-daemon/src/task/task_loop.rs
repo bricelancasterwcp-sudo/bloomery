@@ -82,6 +82,27 @@ pub struct TaskSpec {
     /// between the goal and the verb card. `V1` renders exactly
     /// envelope-v1's prompt, byte-for-byte, with no stop sequence.
     pub envelope: EnvelopeLens,
+    /// The memory organ's injected block, already rendered
+    /// (`crate::memory::render::render_memory_block`) — memory-organ design
+    /// spec `docs/superpowers/specs/2026-08-26-memory-organ-design.md` §4.
+    /// `None` is the organ off, the organ silent, and the organ broken, all
+    /// three: [`render_prompt_from`] renders the empty string for it, so a
+    /// `None` task's prompt is byte-identical to what the same task rendered
+    /// before this field existed (§7: the organ's "total failure must be
+    /// indistinguishable from memory-off").
+    ///
+    /// A rendered `String` rather than an `EpisodeRecord`, deliberately: the
+    /// loop is not the place that decides what an episode looks like, and a
+    /// spec carrying a record would make every construction site — including
+    /// the codec probe and the flywheel factory — depend on the memory
+    /// module. Retrieval and rendering happen once, before the task starts;
+    /// the worker (Task 7) is what sets this, and every other construction
+    /// site passes `None`, `api_task.rs`'s `create_task` included.
+    ///
+    /// Orthogonal to [`Self::envelope`] (§4's envelope rule): the block
+    /// renders identically under every lens, and no lens version was minted
+    /// for it.
+    pub memory_block: Option<String>,
 }
 
 /// How a task ended. `run_task` only ever returns `Done`, `BudgetExhausted`,
@@ -336,6 +357,14 @@ const ACTION_STOP: &str = "</action>";
 /// not an accident: `tests/task_render_test.rs`'s goldens pin the exact
 /// v1/v2/v3 bytes every G4/G5 verdict in the ledger was measured against.
 ///
+/// The memory organ (memory-organ design spec §4) adds one more optional
+/// section, `spec.memory_block`, rendered *before* the grant section and
+/// governed by the same law: absent memory renders the empty string, so
+/// every memory-off prompt — which is every prompt any frozen instrument
+/// ever produces — is byte-identical to what it rendered before the organ
+/// existed. `tests/memory_render_test.rs` pins that against a real
+/// `run_task` under all four lenses.
+///
 /// Deliberately does no windowing or truncation of its own. The pager's own
 /// `infer` is what refuses — with arithmetic — a prompt too large for the
 /// agent's measured window, and [`propose_action`] turns that refusal into
@@ -351,6 +380,7 @@ fn render_prompt(spec: &TaskSpec, transcript: &str) -> String {
             mutating_verbs: spec.mutating_verbs,
             envelope: spec.envelope,
             commands: spec.grant.commands(),
+            memory_block: spec.memory_block.as_deref(),
         },
         transcript,
     )
@@ -369,6 +399,10 @@ struct RenderInputs<'a> {
     /// anything, so its grant line is `none` regardless (see
     /// [`render_prompt_from`]).
     commands: &'a [Vec<String>],
+    /// The memory organ's already-rendered block — `spec.memory_block` for
+    /// the loop, hardcoded `None` for [`render_task_prompt`]. See
+    /// [`TaskSpec::memory_block`]; `None` renders nothing at all.
+    memory_block: Option<&'a str>,
 }
 
 /// **The one and only prompt renderer.** Both the loop's [`render_prompt`]
@@ -392,6 +426,16 @@ struct RenderInputs<'a> {
 /// anything. Byte-neutral for every turn-4 surface, all of which are
 /// `mutating_verbs: true`.
 fn render_prompt_from(goal: &str, inputs: RenderInputs<'_>, transcript: &str) -> String {
+    // The memory organ's section (memory-organ design spec §4): immediately
+    // after the goal, before the grant section, and the EMPTY STRING when
+    // absent — which is the whole of the organ's byte-identity guarantee.
+    // `None` is not a special case handled elsewhere; it is the only case
+    // every pre-organ surface can produce, and it must add nothing at all,
+    // not even a blank line.
+    let memory_section = match inputs.memory_block {
+        Some(b) => format!("{b}\n\n"),
+        None => String::new(),
+    };
     let grant_section = if inputs.envelope.grant_line() {
         let runnable: &[Vec<String>] = if inputs.mutating_verbs {
             inputs.commands
@@ -403,7 +447,7 @@ fn render_prompt_from(goal: &str, inputs: RenderInputs<'_>, transcript: &str) ->
         String::new()
     };
     let prompt = format!(
-        "{goal}\n\n{grant_section}{}\n\n{transcript}",
+        "{goal}\n\n{memory_section}{grant_section}{}\n\n{transcript}",
         verb_card_for(inputs.patch_codec, inputs.mutating_verbs)
     );
     if inputs.envelope.think_preseed() {
@@ -442,6 +486,15 @@ fn render_prompt_from(goal: &str, inputs: RenderInputs<'_>, transcript: &str) ->
 /// `mutating_verbs` is hardcoded `true`: the flywheel corpus trains the
 /// read-then-patch habit, so every rendered prompt must show the model the
 /// `patch` verb card, exactly like a real mutating-verbs task.
+///
+/// `memory_block` is hardcoded `None` and this signature did **not** change
+/// when the memory organ landed (memory-organ design spec §4's envelope
+/// rule: "every frozen instrument — G4/G5 batteries, drift probes, swap
+/// cover — runs memory-off"). The factory renders training pairs and the
+/// goldens pin measured bytes; neither may ever see an injected episode, and
+/// making that unrepresentable here is cheaper than trusting every caller to
+/// pass `None`. It is also what keeps this function usable as the
+/// independent side of the four anti-drift byte-comparisons.
 pub fn render_task_prompt(
     goal: &str,
     patch_codec: PatchCodec,
@@ -456,6 +509,7 @@ pub fn render_task_prompt(
             mutating_verbs: true,
             envelope,
             commands,
+            memory_block: None,
         },
         transcript,
     )

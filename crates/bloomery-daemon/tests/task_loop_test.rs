@@ -129,6 +129,7 @@ fn demoted_spec(grant: Grant, cwd: PathBuf, max_steps: u32, mutating_verbs: bool
         bounds: bounds(),
         mutating_verbs,
         envelope: EnvelopeLens::V1,
+        memory_block: None,
     }
 }
 

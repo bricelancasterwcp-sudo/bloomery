@@ -363,6 +363,7 @@ mod tests {
             bounds: ExecBounds::default(),
             mutating_verbs: false,
             envelope: EnvelopeLens::V1,
+            memory_block: None,
         };
 
         let task_id =
@@ -421,6 +422,7 @@ mod tests {
             bounds: ExecBounds::default(),
             mutating_verbs: true,
             envelope: EnvelopeLens::V1,
+            memory_block: None,
         };
 
         let id1 = registry.spawn_task(
@@ -542,6 +544,7 @@ mod tests {
             bounds: ExecBounds::default(),
             mutating_verbs: true,
             envelope: EnvelopeLens::V1,
+            memory_block: None,
         };
 
         let task_id =
