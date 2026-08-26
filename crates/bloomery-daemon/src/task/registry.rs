@@ -218,6 +218,46 @@ fn degrade(journal: &mut Journal, reason: String) {
     record(journal, &Event::Degraded { reason });
 }
 
+/// Whether `status` is a **scored** terminal outcome — one this daemon
+/// actually measured — rather than its infrastructure bucket.
+///
+/// **Controller ruling (2026-08-26): passive contradiction fires only on a
+/// scored outcome.** Memory-organ design §5 makes contradiction conditional
+/// on a task that "fails its own verification", and a *failure to verify* is
+/// a measurement: it says the injected episode did not reproduce. A
+/// `TaskStatus::Error` says nothing of the kind. It is bloomery's own
+/// infrastructure abort — substrate faults, journal failures, a caught
+/// worker panic, a poisoned pager — and the daemon already draws exactly
+/// this line elsewhere: the G4 protocol
+/// (`docs/superpowers/evidence/2026-08-15-g4-protocol.md` §3) scores
+/// `Done`/`StepsExhausted`/`BudgetExhausted` and classifies
+/// `TaskStatus::Error` as "an **infrastructure abort** … the model is
+/// *unmeasured*", and its Amendment 1 (§9) moved `WindowExhausted` into the
+/// scored set for the same reason — an envelope-bounded resource ran out,
+/// which is a result, where a fault is not.
+///
+/// The falsification principle underneath it: an infra hiccup must never
+/// look like a fresh contradiction. Retiring a verified episode because the
+/// daemon's own mutex was poisoned would put a measurement-shaped claim in
+/// the store that no measurement supports — and §5's whole design is that
+/// "the organ only ever reads outcomes, never creates them". An unmeasured
+/// task produces no outcome to read, so the episode STANDS.
+///
+/// Matched exhaustively, with no wildcard arm, so a future `TaskStatus`
+/// variant forces this classification to be decided rather than defaulted.
+/// `Running` is unreachable here (the worker only ever classifies a terminal
+/// result) and is grouped with the unscored side: a task still in flight has
+/// verified nothing.
+fn is_scored_outcome(status: &TaskStatus) -> bool {
+    match status {
+        TaskStatus::Done
+        | TaskStatus::StepsExhausted
+        | TaskStatus::BudgetExhausted
+        | TaskStatus::WindowExhausted => true,
+        TaskStatus::Error | TaskStatus::Running => false,
+    }
+}
+
 /// The wall-clock mint stamp for an episode, in milliseconds since the Unix
 /// epoch — the same expression `Journal::append` derives its row stamp from
 /// (`bloomery-core/src/journal.rs`), including its two saturating edges: a
@@ -452,17 +492,25 @@ impl TaskRegistry {
                 let mut store = lock_store(store, &mut journal);
 
                 if let Some(id) = &injected_id {
-                    if verifying_run(&result).is_none() {
-                        // Design §5: a task that received an episode and
-                        // then failed its own verification contradicts it.
-                        // This deliberately fires for `Error` and
-                        // caught-panic ends too, not only for a clean
-                        // non-verifying `Done`: §5 names "a non-`Done` end"
-                        // outright, and the direction is the safe one —
-                        // contradiction only ever *removes* an injection,
-                        // and §7's rule is "never a wrong injection". A task
-                        // that verifies falls through to the mint below,
-                        // which refreshes the same identity.
+                    // Design §5: a task that received an episode and then
+                    // failed its own verification contradicts it. Both
+                    // conjuncts are load-bearing and neither implies the
+                    // other:
+                    //
+                    // - `is_scored_outcome` — the task must have *measured*
+                    //   something. `TaskStatus::Error` is bloomery's infra
+                    //   bucket, not a verdict about the episode; see that
+                    //   function's doc comment for the ruling, the G4
+                    //   protocol citation, and why an infra hiccup must
+                    //   never read as a fresh contradiction.
+                    // - `verifying_run(..).is_none()` — within a scored
+                    //   outcome, the task produced no productive run after
+                    //   its last landed patch (spec §2's bar, read
+                    //   backwards).
+                    //
+                    // A task that verifies falls through to the mint below,
+                    // which refreshes the same identity.
+                    if is_scored_outcome(&result.status) && verifying_run(&result).is_none() {
                         match store.mark_contradicted(id, &worker_task_id) {
                             Ok(true) => record(
                                 &mut journal,

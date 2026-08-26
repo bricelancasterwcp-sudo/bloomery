@@ -36,8 +36,12 @@ use bloomery_core::grant::Grant;
 use bloomery_core::journal::{replay, sha256_hex_bytes, Event, Journal};
 use bloomery_daemon::agents::ImageStore;
 use bloomery_daemon::config::EnvelopeLens;
+use bloomery_daemon::memory::record::{
+    episode_id, goal_hash, CitedFile, EpisodeRecord, Fingerprint, RunEvidence, StoredPatch,
+};
+use bloomery_daemon::memory::render::render_memory_block;
 use bloomery_daemon::memory::store::MemoryStore;
-use bloomery_daemon::memory::MemoryContext;
+use bloomery_daemon::memory::{MemoryContext, MEMORY_BLOCK_MAX_BYTES};
 use bloomery_daemon::pager::Pager;
 use bloomery_daemon::task::{ExecBounds, TaskRegistry, TaskResult, TaskSpec, TaskStatus};
 use bloomery_substrate::fake::FakeSubstrate;
@@ -268,6 +272,16 @@ fn mint_ids(events: &[Event]) -> Vec<(String, String)> {
                 episode_id,
                 ..
             } => Some((task_id.clone(), episode_id.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+fn degraded_reasons(events: &[Event]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Degraded { reason } => Some(reason.clone()),
             _ => None,
         })
         .collect()
@@ -697,5 +711,198 @@ fn an_injected_episode_deleted_mid_task_is_not_journaled_as_contradicted() {
             .next()
             .is_none(),
         "the operator's deletion stands"
+    );
+}
+
+/// Controller ruling (2026-08-26): **contradiction fires only on a SCORED
+/// terminal status.** `TaskStatus::Error` is bloomery's infrastructure
+/// bucket — substrate faults, journal failures, caught panics, a poisoned
+/// pager — and the G4 protocol
+/// (`docs/superpowers/evidence/2026-08-15-g4-protocol.md` §3) already
+/// classifies it as "an infrastructure abort … the model is *unmeasured*".
+/// Spec §5's "fails its own verification" requires a measurement, and an
+/// unmeasured task made none, so the injected episode STANDS: no
+/// `MemoryContradicted` row, and its stored status is still `verified`.
+///
+/// **The infra failure is produced deterministically, not simulated.** A
+/// helper thread panics while holding the pager's mutex, which poisons it;
+/// `spawn_task`'s worker then takes its `Err(_)` lock arm and returns
+/// `TaskStatus::Error` — the real code path, not a hand-built result. The
+/// worker retrieves and stamps *before* it touches the pager lock, so the
+/// episode is genuinely injected first: without that, this test would pass
+/// for the wrong reason. One panic message on stderr from the poisoning
+/// thread is expected output.
+#[test]
+fn an_injected_task_that_ends_in_infra_error_does_not_contradict() {
+    let dir = fresh_dir("infra-error");
+    let (sb, grant) = sandbox(&dir);
+    let (pager, agent_id) = build_pager(&dir, fixing_turns());
+    let pager = Arc::new(Mutex::new(pager));
+    let registry = TaskRegistry::new();
+    let journal_path = dir.join("tasks.jsonl");
+    let ctx = memory_ctx(&dir, true);
+    let goal = "make a.py say two";
+
+    let (_, first) = drive(
+        &registry,
+        &pager,
+        &agent_id,
+        spec_for(goal, &grant, &sb),
+        &journal_path,
+        Some(Arc::clone(&ctx)),
+    );
+    assert_eq!(first.status, TaskStatus::Done, "{first:?}");
+    let episode_id = mint_ids(&replay(&journal_path).unwrap())[0].1.clone();
+
+    // Poison the pager mutex: a thread that panics while holding the guard.
+    std::fs::write(sb.join("a.py"), BEFORE).unwrap();
+    let poisoner = Arc::clone(&pager);
+    let joined = std::thread::spawn(move || {
+        let _guard = poisoner.lock().expect("the pager is healthy until now");
+        panic!("deliberate: poisons the pager so the worker takes its infra-abort arm");
+    })
+    .join();
+    assert!(joined.is_err(), "the poisoning thread must have panicked");
+    assert!(
+        pager.lock().is_err(),
+        "the pager mutex must now be poisoned"
+    );
+
+    let (task_id, result) = drive(
+        &registry,
+        &pager,
+        &agent_id,
+        spec_for(goal, &grant, &sb),
+        &journal_path,
+        Some(Arc::clone(&ctx)),
+    );
+    assert_eq!(
+        result.status,
+        TaskStatus::Error,
+        "the poisoned pager must produce bloomery's infra bucket: {result:?}"
+    );
+
+    let events = replay(&journal_path).unwrap();
+    // The episode really was injected — otherwise there would be nothing to
+    // contradict and the assertion below would be vacuous.
+    assert_eq!(
+        stamp_for(&events, &task_id),
+        ("injected".to_string(), Some(episode_id.clone()), 1),
+    );
+    assert!(
+        contradicted_ids(&events).is_empty(),
+        "an unmeasured task falsifies nothing: {events:?}"
+    );
+
+    let store = MemoryStore::load(&store_path(&dir)).unwrap();
+    let ep = store
+        .episodes()
+        .find(|e| e.episode_id == episode_id)
+        .expect("the episode is still in the store");
+    assert_eq!(ep.status, "verified", "the injected episode STANDS");
+    assert_eq!(ep.contradicted_by, None);
+}
+
+/// The `MEMORY_BLOCK_MAX_BYTES` skip path (controller ruling, Task 6): a
+/// matching, verified episode whose rendered block exceeds the injection
+/// bound is **not** injected — the task is stamped `"silent"` and runs
+/// memory-off, because an oversized block could push it into
+/// `WindowExhausted` where memory-off would have finished (spec §7: the
+/// organ must never damage the task).
+///
+/// The oversized episode is hand-minted straight into the store rather than
+/// produced by landing a >16 KiB patch through the real executor: the branch
+/// under test reads `render_memory_block`'s output length and nothing else,
+/// so driving a giant patch through `exec_patch` would make the test slow
+/// and mostly about the executor. Everything retrieval gates on is real —
+/// the goal hash, the canonical cited path, and the sha256 of the actual
+/// workspace bytes — so the episode is a genuine survivor that only the size
+/// bound rejects.
+#[test]
+fn an_oversized_memory_block_is_skipped_and_stamped_silent() {
+    let dir = fresh_dir("oversize");
+    let (sb, grant) = sandbox(&dir);
+    let (pager, agent_id) = build_pager(
+        &dir,
+        vec![scripted("<action verb=\"done\">\nnothing to do\n</action>")],
+    );
+    let pager = Arc::new(Mutex::new(pager));
+    let registry = TaskRegistry::new();
+    let journal_path = dir.join("tasks.jsonl");
+    let ctx = memory_ctx(&dir, true);
+    let goal = "make a.py say two";
+
+    let cited_path = sb.join("a.py").display().to_string();
+    let cited = vec![CitedFile {
+        path: cited_path.clone(),
+        fingerprint: Fingerprint::Sha256(sha256_hex_bytes(BEFORE)),
+    }];
+    let hash = goal_hash(goal);
+    let record = EpisodeRecord {
+        episode_id: episode_id(&hash, &cited),
+        goal_hash: hash,
+        goal_text: goal.to_string(),
+        cited_files: cited,
+        landed_patches: vec![StoredPatch {
+            path: cited_path,
+            codec: "whole_file".to_string(),
+            body: format!("x = {}", "9".repeat(20_000)),
+        }],
+        run_evidence: RunEvidence {
+            argv: vec!["python3".into(), "-c".into(), "pass".into()],
+            outcome: "ran python3 exit 0".into(),
+        },
+        trajectory: vec!["read".into(), "patch".into(), "run".into(), "done".into()],
+        minted_by_model: "m".into(),
+        minted_by_envelope: "V1".into(),
+        status: "verified".into(),
+        contradicted_by: None,
+        minted_at: 1,
+    };
+    let oversized_id = record.episode_id.clone();
+    let rendered = render_memory_block(&record).len();
+    assert!(
+        rendered > MEMORY_BLOCK_MAX_BYTES,
+        "the fixture must actually be oversized: {rendered} bytes"
+    );
+    {
+        let store = ctx
+            .store
+            .as_ref()
+            .expect("an operational organ has a store");
+        let mut store = store.lock().expect("the store mutex is healthy");
+        store.mint(record, 64).unwrap();
+    }
+
+    let (task_id, result) = drive(
+        &registry,
+        &pager,
+        &agent_id,
+        spec_for(goal, &grant, &sb),
+        &journal_path,
+        Some(Arc::clone(&ctx)),
+    );
+
+    // The task runs normally — the organ declining to speak costs it nothing.
+    assert_eq!(result.status, TaskStatus::Done, "{result:?}");
+    let events = replay(&journal_path).unwrap();
+    assert_eq!(
+        stamp_for(&events, &task_id),
+        ("silent".to_string(), None, 1),
+        "the candidate is checked and then declined on size, not on match"
+    );
+    assert_eq!(
+        memory_prompts(&dir),
+        0,
+        "no prompt may carry a block the organ declined to inject"
+    );
+    // Silence alone would leave an operator unable to tell a size skip from a
+    // fingerprint miss, so the skip names itself.
+    let reasons = degraded_reasons(&events);
+    assert!(
+        reasons
+            .iter()
+            .any(|r| r.contains(&oversized_id) && r.contains("injection bound")),
+        "the skip must name the episode and the bound: {reasons:?}"
     );
 }
