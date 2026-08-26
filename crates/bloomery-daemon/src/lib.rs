@@ -8,6 +8,7 @@ pub mod drift;
 pub mod http;
 #[cfg(feature = "llama")]
 pub mod llama_send;
+pub mod memory;
 pub mod pager;
 pub mod post;
 pub mod swap;
