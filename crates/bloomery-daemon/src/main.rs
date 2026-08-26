@@ -105,8 +105,9 @@ fn run(config: Config, journal: Journal) -> ! {
         G5_POST_DISABLED_SKIP_REASON, POST_DISABLED_CODEC_SKIP_REASON,
     };
     use bloomery_daemon::drift::ProfileStore;
-    use bloomery_daemon::http::serve_shared_with_swap;
+    use bloomery_daemon::http::serve_shared_with_swap_and_memory;
     use bloomery_daemon::llama_send::SendLlama;
+    use bloomery_daemon::memory::build_memory;
     use bloomery_daemon::pager::Pager;
     use bloomery_daemon::post::{run_post, PostRunner};
     use bloomery_daemon::swap::SwapContext;
@@ -236,7 +237,12 @@ fn run(config: Config, journal: Journal) -> ! {
         ProfileStore::new(profiles_dir.clone()),
         config.tier.clone(),
     ));
-    let (bound_port, _handle) = serve_shared_with_swap(Arc::clone(&pager), config.port, swap);
+    // Task 8, memory-organ design §6/§7: built once, at boot, from the
+    // operator's `[memory]` config — a load failure degrades to
+    // `disabled_reason` rather than blocking boot, so this call never fails.
+    let memory = build_memory(&config.memory, &config.data_dir);
+    let (bound_port, _handle) =
+        serve_shared_with_swap_and_memory(Arc::clone(&pager), config.port, swap, memory);
     println!(
         "bloomery-daemon serving on 127.0.0.1:{bound_port} (data_dir={}; models: {}; tier: {} \
          {}; POST: {})",

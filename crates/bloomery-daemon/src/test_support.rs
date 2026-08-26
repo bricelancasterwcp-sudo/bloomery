@@ -13,7 +13,8 @@ use bloomery_substrate::fake::FakeSubstrate;
 use bloomery_substrate::Reply;
 
 use crate::agents::ImageStore;
-use crate::http::{serve, ServerHandle};
+use crate::http::{serve, serve_shared_with_memory, ServerHandle};
+use crate::memory::MemoryContext;
 use crate::pager::Pager;
 
 /// Plenty for any test that infers a handful of times without running dry —
@@ -136,6 +137,22 @@ pub fn serve_fake_with_tier(name: &str, emulated: bool) -> (u16, ServerHandle) {
     let (dir, mut pager) = build_fake_pager();
     pager.set_tier(name, emulated);
     serve_with_cleanup(dir, pager)
+}
+
+/// [`serve_fake`] served through [`serve_shared_with_memory`] instead of
+/// plain [`serve`] — same fixture pager, but with a real memory organ
+/// context wired in, for `/status`'s `memory` object and the task surface's
+/// retrieve/mint pipeline. The caller builds `memory` itself (typically via
+/// `memory::build_memory`) rather than this helper building one from a
+/// config the caller has no way to hand in here — the tests that need this
+/// (forcing a load failure via a directory at the store path, e.g.) need
+/// control of `memory`'s own construction anyway.
+pub fn serve_fake_with_memory(memory: std::sync::Arc<MemoryContext>) -> (u16, ServerHandle) {
+    let (dir, pager) = build_fake_pager();
+    let (port, mut handle) =
+        serve_shared_with_memory(std::sync::Arc::new(std::sync::Mutex::new(pager)), 0, memory);
+    handle.set_scratch_dir(dir);
+    (port, handle)
 }
 
 fn serve_with_cleanup(dir: std::path::PathBuf, pager: Pager<FakeSubstrate>) -> (u16, ServerHandle) {

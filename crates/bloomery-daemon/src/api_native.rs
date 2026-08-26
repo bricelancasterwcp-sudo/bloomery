@@ -19,6 +19,7 @@ use serde_json::{json, Value};
 use bloomery_substrate::Substrate;
 
 use crate::drift::DriftError;
+use crate::memory::MemoryContext;
 use crate::pager::{BlessError, Pager, PagerError};
 use crate::post::with_pager;
 use crate::swap::{
@@ -70,9 +71,15 @@ struct SwapCandidateReq {
 /// `swap` is `None` for a daemon served through [`crate::http::serve`] /
 /// [`crate::http::serve_shared`], which wire no candidate context; the two
 /// swap routes then say so by name rather than inventing a verdict.
+///
+/// `memory` is the daemon's memory organ (Task 8; memory-organ design §6),
+/// read only by `status` below — `None` for a daemon served without one
+/// (same set of entry points as `swap`'s `None` case above), in which case
+/// `/status` simply carries no `memory` object rather than inventing one.
 pub(crate) fn dispatch<S: Substrate + Send + 'static>(
     pager: &Arc<Mutex<Pager<S>>>,
     swap: Option<&Arc<SwapContext>>,
+    memory: Option<&Arc<MemoryContext>>,
     method: &str,
     segments: &[String],
     body: &str,
@@ -88,7 +95,7 @@ pub(crate) fn dispatch<S: Substrate + Send + 'static>(
         ("POST", ["models", name, "unblock"]) => unblock(pager, name),
         ("POST", ["models", name, "swap-candidate"]) => swap_candidate(pager, swap, name, body),
         ("GET", ["models", name, "swap-candidate"]) => swap_candidate_status(swap, name),
-        ("GET", ["status"]) => status(pager),
+        ("GET", ["status"]) => status(pager, memory.map(Arc::as_ref)),
         _ => (404, Some(json!({"error": "not_found"}))),
     }
 }
@@ -625,15 +632,44 @@ fn swap_unavailable(name: &str) -> ApiResult {
     )
 }
 
-fn status<S: Substrate>(pager: &Mutex<Pager<S>>) -> ApiResult {
+/// `GET /status`. `memory` is `None` for a daemon served without a memory
+/// organ (`crate::http::dispatch`'s callers that wire no context) — the
+/// response then simply carries no `memory` key, rather than a `null` or an
+/// invented all-zero object standing in for "there is no organ here".
+///
+/// When `memory` is `Some`, the `memory` object is spec §6's operator
+/// surface: `enabled` (the config switch, independent of store state, so it
+/// lives on `MemoryContext` rather than `MemoryCounts`), the four counts
+/// (`None` — rendered as JSON `null` — when there is no store to count, the
+/// `disabled_reason` case), and `disabled_reason` itself. Poison-recovered
+/// (`unwrap_or_else(PoisonError::into_inner)`), same discipline as every
+/// other store-mutex read in this organ: a poisoned memory-store mutex
+/// means some earlier request's worker panicked mid-mutation of the store,
+/// not the pager — unlike `lock_pager` above, that does not taint every
+/// *other* pager operation, so `/status` still answers rather than joining
+/// the pager's sticky-poison 500.
+fn status<S: Substrate>(pager: &Mutex<Pager<S>>, memory: Option<&MemoryContext>) -> ApiResult {
     let p = match lock_pager(pager) {
         Ok(p) => p,
         Err(poisoned) => return poisoned,
     };
-    (
-        200,
-        Some(serde_json::to_value(p.status()).expect("StatusReport serializes")),
-    )
+    let mut v = serde_json::to_value(p.status()).expect("StatusReport serializes");
+    if let Some(m) = memory {
+        let counts = m.store.as_ref().map(|s| {
+            s.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .counts()
+        });
+        v["memory"] = serde_json::json!({
+            "enabled": m.enabled,
+            "episodes": counts.map(|c| c.episodes),
+            "verified": counts.map(|c| c.verified),
+            "contradicted": counts.map(|c| c.contradicted),
+            "parse_errors": counts.map(|c| c.parse_errors),
+            "disabled_reason": m.disabled_reason,
+        });
+    }
+    (200, Some(v))
 }
 
 /// The Task 14 brief's error-code mapping table, the single place it lives:

@@ -423,6 +423,37 @@ fn default_probe_timeout_secs() -> u64 {
     600
 }
 
+/// `MemoryConfig::max_episodes`'s default — spec §6's retention cap on
+/// distinct episode ids. 256 is generous headroom over what a single
+/// operator's task volume plausibly mints between prunes, while still
+/// bounding the store's replay cost at boot.
+fn default_max_episodes() -> usize {
+    256
+}
+
+/// The `[memory]` section (spec §6): the organ's on/off switch and its
+/// retention cap. `#[serde(default)]` on both fields, plus `Default` on the
+/// whole struct via `#[serde(default)] pub memory: MemoryConfig` on
+/// [`Config`], means a TOML with no `[memory]` table at all parses to
+/// `enabled: false, max_episodes: 256` — byte-compatible with every config
+/// written before this section existed.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct MemoryConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_max_episodes")]
+    pub max_episodes: usize,
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        MemoryConfig {
+            enabled: false,
+            max_episodes: default_max_episodes(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
     #[serde(default = "default_port")]
@@ -463,6 +494,11 @@ pub struct Config {
     /// Max wall-clock seconds a `run` action's subprocess gets.
     #[serde(default = "default_run_timeout_secs")]
     pub run_timeout_secs: u64,
+    /// The memory organ's config switch and retention cap (spec §6). Dark
+    /// by default, same convention as `tasks_enabled` — an operator opts in
+    /// rather than the organ turning itself on under an existing config.
+    #[serde(default)]
+    pub memory: MemoryConfig,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -532,5 +568,67 @@ mod tests {
     #[test]
     fn default_python_is_python3() {
         assert_eq!(default_python(), "python3");
+    }
+
+    /// Task 8, spec §6: a config written before `[memory]` existed must keep
+    /// parsing byte-compatibly — `toml::from_str` directly (the file-less
+    /// counterpart to `tests/config_test.rs`'s `write_temp_toml` pattern,
+    /// which exercises `load_config`'s file-reading path instead).
+    #[test]
+    fn memory_config_defaults_when_section_omitted() {
+        let toml_str = r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = { name = "enthusiast-16gb", emulated = false }
+assay = { enabled = false, python = "python3" }
+
+[models]
+llama = "/models/llama.gguf"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(!config.memory.enabled);
+        assert_eq!(config.memory.max_episodes, 256);
+    }
+
+    /// The operator's explicit opt-in parses, and `max_episodes` still
+    /// defaults when only `enabled` is set.
+    #[test]
+    fn memory_config_enabled_parses() {
+        let toml_str = r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = { name = "enthusiast-16gb", emulated = false }
+assay = { enabled = false, python = "python3" }
+
+[models]
+llama = "/models/llama.gguf"
+
+[memory]
+enabled = true
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(config.memory.enabled);
+        assert_eq!(config.memory.max_episodes, 256);
+    }
+
+    /// An operator-tuned `max_episodes` sticks too.
+    #[test]
+    fn memory_config_max_episodes_parses() {
+        let toml_str = r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = { name = "enthusiast-16gb", emulated = false }
+assay = { enabled = false, python = "python3" }
+
+[models]
+llama = "/models/llama.gguf"
+
+[memory]
+enabled = true
+max_episodes = 64
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(config.memory.enabled);
+        assert_eq!(config.memory.max_episodes, 64);
     }
 }

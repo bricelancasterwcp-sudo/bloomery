@@ -14,8 +14,9 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use bloomery_daemon::config::Tier;
+use bloomery_daemon::config::{MemoryConfig, Tier};
 use bloomery_daemon::drift::ProfileStore;
+use bloomery_daemon::memory::build_memory;
 use bloomery_daemon::pager::Pager;
 use bloomery_daemon::post::PostRunner;
 use bloomery_daemon::swap::{
@@ -1197,6 +1198,100 @@ fn status_reports_the_declared_tier() {
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(v["tier"]["name"], "mid-gamer-12gb");
     assert_eq!(v["tier"]["emulated"], true);
+    handle.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// Task 8: the memory organ's `/status` surface (memory-organ design §6).
+// ---------------------------------------------------------------------------
+
+/// A fresh, per-test tempdir for a `memory::build_memory` call's own
+/// `data_dir` — separate from `serve_fake`'s own scratch dir, since the
+/// context is built by the test before the fixture pager exists.
+fn fresh_memory_dir(tag: &str) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "bloomery-memory-status-{tag}-{}-{seq}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    dir
+}
+
+/// A freshly booted, enabled organ with an empty store: `/status` carries
+/// `memory.enabled == true` and every count at zero, with no
+/// `disabled_reason` — spec §6's operator surface for the routine case.
+#[test]
+fn status_reports_memory_zero_counts_for_a_fresh_enabled_context() {
+    let dir = fresh_memory_dir("fresh");
+    let cfg = MemoryConfig {
+        enabled: true,
+        max_episodes: 256,
+    };
+    let memory = build_memory(&cfg, &dir);
+    assert!(memory.operational(), "{:?}", memory.disabled_reason);
+
+    let (port, handle) = bloomery_daemon::test_support::serve_fake_with_memory(memory);
+    let (st, body) = http(&format!("127.0.0.1:{port}"), "GET", "/status", "");
+    assert_eq!(st, 200, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["memory"]["enabled"], true);
+    assert_eq!(v["memory"]["episodes"], 0);
+    assert_eq!(v["memory"]["verified"], 0);
+    assert_eq!(v["memory"]["contradicted"], 0);
+    assert_eq!(v["memory"]["parse_errors"], 0);
+    assert!(v["memory"]["disabled_reason"].is_null());
+    handle.shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `build_memory` pointed at a store path that is a DIRECTORY (forcing
+/// `MemoryStore::load`'s hard `io::Error` arm — spec §7's "store unreadable
+/// at boot"): `/status` carries `memory.disabled_reason` and every count is
+/// `null`, since there is no store to count. Boot proceeds regardless — this
+/// test drives the daemon serving fine over HTTP with the organ in exactly
+/// that state.
+#[test]
+fn status_reports_memory_disabled_reason_when_store_path_is_unreadable() {
+    let dir = fresh_memory_dir("unreadable");
+    std::fs::create_dir_all(dir.join("memory").join("episodes.jsonl")).expect("directory-as-file");
+    let cfg = MemoryConfig {
+        enabled: true,
+        max_episodes: 256,
+    };
+    let memory = build_memory(&cfg, &dir);
+    assert!(!memory.operational());
+
+    let (port, handle) = bloomery_daemon::test_support::serve_fake_with_memory(memory);
+    let (st, body) = http(&format!("127.0.0.1:{port}"), "GET", "/status", "");
+    assert_eq!(st, 200, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["memory"]["enabled"], true);
+    assert!(v["memory"]["episodes"].is_null());
+    assert!(v["memory"]["verified"].is_null());
+    assert!(v["memory"]["contradicted"].is_null());
+    assert!(v["memory"]["parse_errors"].is_null());
+    let reason = v["memory"]["disabled_reason"].as_str().unwrap_or("");
+    assert!(
+        reason.starts_with("memory store unreadable: "),
+        "reason: {reason:?}"
+    );
+    handle.shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A daemon served through plain `serve_fake()` (no memory context wired at
+/// all — the every-other-`/status`-test shape) carries no `memory` key,
+/// rather than `null` or an invented zeroed object.
+#[test]
+fn status_has_no_memory_key_when_no_context_is_wired() {
+    let (port, handle) = bloomery_daemon::test_support::serve_fake();
+    let (st, body) = http(&format!("127.0.0.1:{port}"), "GET", "/status", "");
+    assert_eq!(st, 200, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert!(v.get("memory").is_none(), "{body}");
     handle.shutdown();
 }
 

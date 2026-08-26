@@ -22,6 +22,7 @@ use bloomery_substrate::Substrate;
 use crate::api_native;
 use crate::api_task;
 use crate::api_v1::{self, V1Body, V1Result};
+use crate::memory::MemoryContext;
 use crate::pager::Pager;
 use crate::swap::SwapContext;
 use crate::task::TaskRegistry;
@@ -106,6 +107,19 @@ pub fn serve<S: Substrate + Send + 'static>(pager: Pager<S>, port: u16) -> (u16,
     serve_shared(Arc::new(Mutex::new(pager)), port)
 }
 
+/// [`serve`] for a caller that needs to keep its own handle on the pager,
+/// with the daemon's memory organ wired in too (Task 8; memory-organ design
+/// §6/§7) — a daemon with no swap-candidate seam but a real memory context,
+/// the shape none of `serve`/`serve_shared`/`serve_shared_with_swap` covers
+/// on their own.
+pub fn serve_shared_with_memory<S: Substrate + Send + 'static>(
+    pager: Arc<Mutex<Pager<S>>>,
+    port: u16,
+    memory: Arc<MemoryContext>,
+) -> (u16, ServerHandle) {
+    serve_inner(pager, port, None, Some(memory))
+}
+
 /// [`serve`] for a caller that needs to keep its own handle on the pager.
 ///
 /// The boot-time POST (Task 16) is the reason this exists: assay probes the
@@ -118,7 +132,7 @@ pub fn serve_shared<S: Substrate + Send + 'static>(
     pager: Arc<Mutex<Pager<S>>>,
     port: u16,
 ) -> (u16, ServerHandle) {
-    serve_inner(pager, port, None)
+    serve_inner(pager, port, None, None)
 }
 
 /// [`serve_shared`] for a daemon that also serves the swap-candidate routes
@@ -134,13 +148,27 @@ pub fn serve_shared_with_swap<S: Substrate + Send + 'static>(
     port: u16,
     swap: Arc<SwapContext>,
 ) -> (u16, ServerHandle) {
-    serve_inner(pager, port, Some(swap))
+    serve_inner(pager, port, Some(swap), None)
+}
+
+/// [`serve_shared_with_swap`] for a daemon that also serves the memory
+/// organ (Task 8) — `main.rs`'s real boot path wires both a swap-candidate
+/// context and a memory context, so this is the one entry point that
+/// carries both down into [`worker_loop`].
+pub fn serve_shared_with_swap_and_memory<S: Substrate + Send + 'static>(
+    pager: Arc<Mutex<Pager<S>>>,
+    port: u16,
+    swap: Arc<SwapContext>,
+    memory: Arc<MemoryContext>,
+) -> (u16, ServerHandle) {
+    serve_inner(pager, port, Some(swap), Some(memory))
 }
 
 fn serve_inner<S: Substrate + Send + 'static>(
     pager: Arc<Mutex<Pager<S>>>,
     port: u16,
     swap: Option<Arc<SwapContext>>,
+    memory: Option<Arc<MemoryContext>>,
 ) -> (u16, ServerHandle) {
     let server = tiny_http::Server::http(("127.0.0.1", port))
         .unwrap_or_else(|e| panic!("bloomery-daemon: failed to bind 127.0.0.1:{port}: {e}"));
@@ -167,7 +195,10 @@ fn serve_inner<S: Substrate + Send + 'static>(
             let pager = Arc::clone(&pager);
             let registry = Arc::clone(&registry);
             let swap = swap.clone();
-            std::thread::spawn(move || worker_loop(&server, &pager, &registry, swap.as_ref()))
+            let memory = memory.clone();
+            std::thread::spawn(move || {
+                worker_loop(&server, &pager, &registry, swap.as_ref(), memory.as_ref())
+            })
         })
         .collect();
 
@@ -196,6 +227,7 @@ fn worker_loop<S: Substrate + Send + 'static>(
     pager: &Arc<Mutex<Pager<S>>>,
     registry: &Arc<TaskRegistry>,
     swap: Option<&Arc<SwapContext>>,
+    memory: Option<&Arc<MemoryContext>>,
 ) {
     loop {
         let mut request = match server.recv() {
@@ -224,13 +256,15 @@ fn worker_loop<S: Substrate + Send + 'static>(
                         api_v1::dispatch(pager, &method, &segments, &body, agent_header.as_deref());
                     respond_v1(request, result);
                 } else if let Some((status, value)) =
-                    // `None`: this daemon has no memory organ wired to its
-                    // HTTP surface yet, so every task runs memory-off
-                    // (memory-organ design §7) — Task 8 builds the
-                    // `MemoryContext` from config at boot and threads it
-                    // here beside `swap`.
+                    // `memory` is `None` for a daemon served through
+                    // `serve`/`serve_shared`/`serve_shared_with_swap`, which
+                    // wire no memory context — every task on such a daemon
+                    // runs memory-off (memory-organ design §7). `main.rs`'s
+                    // real boot path builds a context via
+                    // `memory::build_memory` and threads it in through
+                    // `serve_shared_with_swap_and_memory`, beside `swap`.
                     api_task::dispatch(
-                        pager, registry, None, &method, &segments, &body,
+                        pager, registry, memory, &method, &segments, &body,
                     )
                 {
                     match value {
@@ -238,7 +272,7 @@ fn worker_loop<S: Substrate + Send + 'static>(
                         None => respond_empty(request, status),
                     }
                 } else {
-                    match api_native::dispatch(pager, swap, &method, &segments, &body) {
+                    match api_native::dispatch(pager, swap, memory, &method, &segments, &body) {
                         (status, Some(value)) => respond_json(request, status, &value),
                         (status, None) => respond_empty(request, status),
                     }
