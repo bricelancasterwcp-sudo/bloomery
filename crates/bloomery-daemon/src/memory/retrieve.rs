@@ -17,6 +17,7 @@ use bloomery_core::journal::sha256_hex_bytes;
 
 use super::record::{goal_hash, CitedFile, EpisodeRecord, Fingerprint};
 use super::store::MemoryStore;
+use crate::task::exec::PATCH_READ_CAP_BYTES;
 
 /// The outcome of one retrieval attempt: at most one injected episode, plus
 /// the number of candidates examined (survivor or not) — the pair the
@@ -96,6 +97,23 @@ fn cited_file_matches(cf: &CitedFile, grant: &Grant) -> bool {
             let Ok(canon) = grant.check_read(path) else {
                 return false;
             };
+            // Size gate before the read: every stored fingerprint was
+            // minted from a file `exec_patch` had already read under its
+            // own `PATCH_READ_CAP_BYTES` cap (`task/exec.rs:231`), so no
+            // mintable fingerprint can ever describe a file bigger than
+            // that. A *current* workspace file at this cited path can be
+            // arbitrarily large by repeat time (log, build artifact,
+            // database) — reading it whole just to compute a hash that
+            // provably cannot match would be an unbounded read held under
+            // the store's mutex, a real OOM vector on this appliance.
+            // Treat over-cap (or unmeasurable) as the ordinary silent
+            // mismatch (spec §7), not a special case.
+            let Ok(meta) = std::fs::metadata(&canon) else {
+                return false;
+            };
+            if meta.len() > PATCH_READ_CAP_BYTES as u64 {
+                return false;
+            }
             let Ok(bytes) = std::fs::read(&canon) else {
                 return false;
             };

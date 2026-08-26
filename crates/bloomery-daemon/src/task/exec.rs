@@ -228,7 +228,11 @@ pub fn exec_read(
 /// "cannot verify, so do not claim it landed" posture as `PythonLens`'s
 /// missing-`python3` case — rather than ever being patched from a
 /// known-incomplete read.
-const PATCH_READ_CAP_BYTES: usize = 16 * 1024 * 1024;
+// `pub(crate)`, not private: the memory organ's retrieval fingerprint gate
+// (`memory/retrieve.rs`) reads this same bound to skip hashing a current
+// workspace file that is already too large to have ever been the source of
+// a minted fingerprint — one constant, so the two can never drift apart.
+pub(crate) const PATCH_READ_CAP_BYTES: usize = 16 * 1024 * 1024;
 
 /// Chooses the landing lens for `path` by extension: `.py` gets the
 /// verifying [`PythonLens`], everything else gets [`PlainText`] (accepts

@@ -151,6 +151,71 @@ fn one_changed_byte_is_silence() {
     );
 }
 
+/// A current workspace file bigger than `PATCH_READ_CAP_BYTES` (task/exec.rs
+/// — every mintable fingerprint provably came from a file the patch
+/// executor had already read under that same cap, so an over-cap current
+/// file is a guaranteed mismatch) must be disqualified by a cheap
+/// `metadata` size check, never by reading it whole. Proven cheaply via a
+/// **sparse** file: `File::set_len` grows the file's reported size without
+/// writing (or allocating) any actual bytes, so this test creates a
+/// `cap + 1`-byte file at zero real IO/memory cost — if `retrieve` ever
+/// regressed to reading the file before checking its size, `std::fs::read`
+/// would have to materialize the full length as a real in-memory buffer,
+/// which the elapsed-time assertion below would catch.
+#[test]
+fn a_file_over_the_patch_read_cap_is_silence_without_reading_it() {
+    let dir = fresh_dir("oversized");
+    let file = dir.join("huge.bin");
+
+    // Duplicated from `task::exec::PATCH_READ_CAP_BYTES` (task/exec.rs:235)
+    // rather than imported: that constant is `pub(crate)` to the
+    // `bloomery_daemon` crate, and this integration test file compiles as
+    // its own external crate, so it cannot see `pub(crate)` items. Keep
+    // this literal in sync with `task/exec.rs`'s constant.
+    const PATCH_READ_CAP_BYTES: u64 = 16 * 1024 * 1024;
+
+    let oversized_len = PATCH_READ_CAP_BYTES + 1;
+    let handle = std::fs::File::create(&file).unwrap();
+    handle.set_len(oversized_len).unwrap(); // sparse: reports huge, costs nothing on disk
+    drop(handle);
+    let canon = std::fs::canonicalize(&file).unwrap();
+
+    // The fingerprint is the REAL hash the sparse file's bytes (all zeros —
+    // a hole reads back as zero-filled) would produce if `retrieve` ever
+    // regressed to reading it despite the size gate. A one-off 16 MiB
+    // in-memory hash here, in the test's own arrange step, is unrelated to
+    // — and much cheaper than — the unbounded production-path read this
+    // test exists to rule out; it makes `injected.is_none()` a genuine
+    // proof that the size gate fired, not merely that an arbitrary
+    // fingerprint failed to match.
+    let zero_hash = sha256_hex_bytes(&vec![0u8; oversized_len as usize]);
+    let cited = vec![CitedFile {
+        path: canon.display().to_string(),
+        fingerprint: Fingerprint::Sha256(zero_hash),
+    }];
+
+    let mut store = empty_store(&dir);
+    store
+        .mint(ep("e1", GOAL, cited, "verified", 1), 10)
+        .unwrap();
+
+    let grant = grant_for(&dir);
+    let start = std::time::Instant::now();
+    let result = retrieve(&store, GOAL, &grant, &dir);
+    let elapsed = start.elapsed();
+
+    assert_eq!(result.candidates_checked, 1);
+    assert!(
+        result.injected.is_none(),
+        "a current file over the patch read cap must be silence"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "the size gate must skip the read entirely, not materialize a \
+         cap+1-byte buffer (elapsed: {elapsed:?})"
+    );
+}
+
 #[test]
 fn absent_expectation_matches_only_a_missing_file() {
     let dir = fresh_dir("absent");
