@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod api_memory;
 mod api_native;
 mod api_task;
 mod api_v1;

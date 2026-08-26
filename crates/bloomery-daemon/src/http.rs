@@ -19,6 +19,7 @@ use tiny_http::{Header, Request, Response, StatusCode};
 
 use bloomery_substrate::Substrate;
 
+use crate::api_memory;
 use crate::api_native;
 use crate::api_task;
 use crate::api_v1::{self, V1Body, V1Result};
@@ -267,6 +268,19 @@ fn worker_loop<S: Substrate + Send + 'static>(
                         pager, registry, memory, &method, &segments, &body,
                     )
                 {
+                    match value {
+                        Some(value) => respond_json(request, status, &value),
+                        None => respond_empty(request, status),
+                    }
+                } else if let Some((status, value)) = {
+                    // `api_memory::dispatch` takes its segments as `&[&str]`
+                    // (unlike `api_task`/`api_native`'s `&[String]`) — it
+                    // spawns no worker that needs to own them past this call,
+                    // so there is nothing here to convert-and-keep, only to
+                    // borrow for the duration of the match below.
+                    let parts: Vec<&str> = segments.iter().map(String::as_str).collect();
+                    api_memory::dispatch(memory, &method, &parts)
+                } {
                     match value {
                         Some(value) => respond_json(request, status, &value),
                         None => respond_empty(request, status),
