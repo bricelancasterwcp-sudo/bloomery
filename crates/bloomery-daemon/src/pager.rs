@@ -482,6 +482,24 @@ impl<S: Substrate> Pager<S> {
         &self.substrate
     }
 
+    /// The model `agent_id` runs on, or `None` when `agent_id` names no
+    /// agent — the same `self.table.get(agent_id)` lookup
+    /// [`Pager::agent_task_policy`] and [`Pager::agent_budget_granted`] key
+    /// off, so all three answer `None` under exactly one condition.
+    ///
+    /// The memory organ's one caller (`task::registry`'s worker) records
+    /// this as a minted episode's `minted_by_model`
+    /// (`docs/superpowers/specs/2026-08-26-memory-organ-design.md` §2):
+    /// provenance that is **recorded, never compared** — retrieval gates on
+    /// the goal hash, the cited fingerprints and the grant, never on which
+    /// model minted the episode, so an episode minted by one model is
+    /// injectable into a task running on another (that model-agnosticism is
+    /// crucible's GATE-B finding, and the reason the field is provenance
+    /// rather than a key).
+    pub fn agent_model(&self, agent_id: &str) -> Option<String> {
+        self.table.get(agent_id).map(|a| a.model.clone())
+    }
+
     /// Registers (or re-registers) `name`, digesting the weights file so the
     /// image store can tell a resumable image from a stale one.
     ///

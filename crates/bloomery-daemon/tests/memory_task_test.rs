@@ -1,0 +1,701 @@
+//! The memory organ's full-loop binding tests (memory-organ Task 7; spec
+//! `docs/superpowers/specs/2026-08-26-memory-organ-design.md` §4/§5/§7, and
+//! §8's "Journal: stamp rows for on/injected, on/silent, mint,
+//! contradiction").
+//!
+//! Every test drives the REAL worker pipeline through
+//! `TaskRegistry::spawn_task` — retrieve, stamp, inject, run, mint or
+//! contradict — against a scripted `FakeSubstrate` and a REAL `exec_run`
+//! spawning `python3 -c pass`. GPU-free, per spec §8 ("the whole loop
+//! exercises GPU-free against `FakeSubstrate` with scripted `<action>`
+//! turns"), but deliberately NOT executor-free: the mint bar reads a
+//! completed run's own `" exit 0"` outcome
+//! (`memory::mint::verifying_run`), so a faked run step would leave the one
+//! predicate that gates every mint untested here.
+//!
+//! **Why `a.py` and a real interpreter.** `exec_patch` picks its landing
+//! lens by extension and a `.py` file goes through `PythonLens`, which
+//! shells out to `python3`; the granted command (`["python3","-c"]`) runs
+//! through the real `exec_run`. Both need an interpreter on the box — the
+//! same dependency `task_exec_patch_test.rs` and `task_loop_test.rs`
+//! already carry.
+//!
+//! **Sequencing.** `FakeSubstrate` serves one FIFO reply queue for the whole
+//! pager, and `spawn_task`'s worker holds the pager lock for its entire task
+//! (see `task/registry.rs`'s module docs), so every test drives its tasks
+//! strictly one at a time — spawn, poll to a terminal status, then spawn the
+//! next — and scripts the concatenation of their turns in that order.
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+
+use bloomery_core::action::PatchCodec;
+use bloomery_core::gguf::GgufMeta;
+use bloomery_core::grant::Grant;
+use bloomery_core::journal::{replay, sha256_hex_bytes, Event, Journal};
+use bloomery_daemon::agents::ImageStore;
+use bloomery_daemon::config::EnvelopeLens;
+use bloomery_daemon::memory::store::MemoryStore;
+use bloomery_daemon::memory::MemoryContext;
+use bloomery_daemon::pager::Pager;
+use bloomery_daemon::task::{ExecBounds, TaskRegistry, TaskResult, TaskSpec, TaskStatus};
+use bloomery_substrate::fake::FakeSubstrate;
+use bloomery_substrate::Reply;
+
+/// The bytes `a.py` carries before any task touches it — the pre-first-touch
+/// fingerprint every minted episode in this file cites.
+const BEFORE: &[u8] = b"x = 1\n";
+
+/// A fresh, per-test tempdir — PID + atomic counter so parallel test threads
+/// in one `cargo test` process never collide. Copied from
+/// `task/registry.rs`'s test helpers.
+fn fresh_dir(tag: &str) -> PathBuf {
+    static UNIQUE: AtomicU64 = AtomicU64::new(0);
+    let unique = UNIQUE.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "bloomery-memtask-{tag}-{}-{unique}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn meta() -> GgufMeta {
+    GgufMeta {
+        arch: "qwen2".into(),
+        layers: 4,
+        attention_layers: 4,
+        kv_heads: 2,
+        head_dim: 32,
+        training_ctx: 65536,
+        weights_bytes: 1000,
+        recurrent_state_bytes: 0,
+    }
+}
+
+fn build_pager(dir: &Path, replies: Vec<Reply>) -> (Pager<FakeSubstrate>, String) {
+    let journal = Journal::open(&dir.join("pager.jsonl")).unwrap();
+    let images = ImageStore::new(&dir.join("img")).unwrap();
+    let mut fake = FakeSubstrate::new();
+    for r in replies {
+        fake.script_reply(r);
+    }
+    let mut pager = Pager::new(fake, journal, images, Box::new(|| Some(1024 * 1024 * 1024)));
+    let gguf = dir.join("m.gguf");
+    std::fs::write(&gguf, b"fake weights").unwrap();
+    pager.register_model("m", &gguf, meta(), None).unwrap();
+    let info = pager.create_agent("m", 100, None, 1_000_000).unwrap();
+    (pager, info.id)
+}
+
+fn scripted(text: &str) -> Reply {
+    Reply {
+        text: text.to_string(),
+        prompt_tokens: Some(8),
+        completion_tokens: Some(4),
+        duration_ms: 1,
+    }
+}
+
+/// The four turns that clear the mint bar: touch `a.py`, land a patch, run a
+/// granted command that exits 0 afterward, finish `Done` (spec §2).
+fn fixing_turns() -> Vec<Reply> {
+    vec![
+        scripted("<action verb=\"read\" path=\"a.py\">\n</action>"),
+        scripted("<action verb=\"patch\" path=\"a.py\">\nx = 2\n</action>"),
+        scripted("<action verb=\"run\">\n[\"python3\", \"-c\", \"pass\"]\n</action>"),
+        scripted("<action verb=\"done\">\nfixed\n</action>"),
+    ]
+}
+
+/// A canonical sandbox under `dir` holding the planted `a.py`, plus a grant
+/// scoped to it that also grants the `["python3","-c"]` command prefix.
+fn sandbox(dir: &Path) -> (PathBuf, Grant) {
+    let sb = dir.join("sandbox");
+    std::fs::create_dir_all(&sb).unwrap();
+    let sb = std::fs::canonicalize(&sb).unwrap();
+    std::fs::write(sb.join("a.py"), BEFORE).unwrap();
+    let grant = Grant::from_json(&format!(
+        r#"{{"read_roots":["{s}"],"write_roots":["{s}"],"commands":[["python3","-c"]]}}"#,
+        s = sb.display()
+    ))
+    .unwrap();
+    (sb, grant)
+}
+
+fn spec_for(goal: &str, grant: &Grant, cwd: &Path) -> TaskSpec {
+    TaskSpec {
+        goal: goal.to_string(),
+        grant: grant.clone(),
+        budget_tokens: 1_000_000,
+        max_steps: 8,
+        cwd: cwd.to_path_buf(),
+        patch_codec: PatchCodec::WholeFile,
+        bounds: ExecBounds::default(),
+        mutating_verbs: true,
+        envelope: EnvelopeLens::V1,
+        memory_block: None,
+    }
+}
+
+/// An operational organ: config switch on, a store in `dir/memory`.
+fn memory_ctx(dir: &Path, enabled: bool) -> Arc<MemoryContext> {
+    let store = MemoryStore::load(&store_path(dir)).unwrap();
+    Arc::new(MemoryContext {
+        enabled,
+        max_episodes: 64,
+        disabled_reason: None,
+        store: Some(Mutex::new(store)),
+    })
+}
+
+fn store_path(dir: &Path) -> PathBuf {
+    dir.join("memory").join("episodes.jsonl")
+}
+
+/// Spawns one task and polls to a terminal status — the deadline loop from
+/// `task/registry.rs`'s own tests, with a longer bound because these tasks
+/// really spawn `python3`.
+fn drive(
+    registry: &TaskRegistry,
+    pager: &Arc<Mutex<Pager<FakeSubstrate>>>,
+    agent_id: &str,
+    spec: TaskSpec,
+    journal_path: &Path,
+    memory: Option<Arc<MemoryContext>>,
+) -> (String, TaskResult) {
+    let task_id = registry.spawn_task(
+        Arc::clone(pager),
+        agent_id.to_string(),
+        spec,
+        journal_path.to_path_buf(),
+        memory,
+    );
+    let entry = poll_to_terminal(registry, &task_id);
+    (task_id, entry)
+}
+
+fn poll_to_terminal(registry: &TaskRegistry, task_id: &str) -> TaskResult {
+    let mut entry = registry.get(task_id).expect("entry exists immediately");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while entry.status == TaskStatus::Running && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        entry = registry.get(task_id).expect("entry still exists");
+    }
+    assert_ne!(
+        entry.status,
+        TaskStatus::Running,
+        "task {task_id} never reached a terminal status"
+    );
+    entry
+}
+
+/// Blocks until `task_id`'s `MemoryStamp` row is on disk, and returns it.
+///
+/// The stamp is appended between retrieval and the pager lock, so its
+/// appearance is the one observable that says "this task has retrieved and
+/// has not yet run" — which is what
+/// [`an_injected_episode_deleted_mid_task_is_not_journaled_as_contradicted`]
+/// needs to interleave against, without a sleep-and-hope.
+fn await_stamp(journal_path: &Path, task_id: &str) -> (String, Option<String>, u32) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while std::time::Instant::now() < deadline {
+        if let Ok(events) = replay(journal_path) {
+            if events
+                .iter()
+                .any(|e| matches!(e, Event::MemoryStamp { task_id: t, .. } if t == task_id))
+            {
+                return stamp_for(&events, task_id);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("task {task_id} never wrote a MemoryStamp row");
+}
+
+/// `(mode, episode_id, candidates_checked)` for the one `MemoryStamp` row
+/// naming `task_id` — and it must be exactly one: spec §4 stamps every
+/// spawned task once, so a duplicate is as much a bug as a missing row.
+fn stamp_for(events: &[Event], task_id: &str) -> (String, Option<String>, u32) {
+    let mut found: Vec<(String, Option<String>, u32)> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::MemoryStamp {
+                task_id: t,
+                mode,
+                episode_id,
+                candidates_checked,
+                ..
+            } if t == task_id => Some((mode.clone(), episode_id.clone(), *candidates_checked)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        found.len(),
+        1,
+        "expected exactly one MemoryStamp for {task_id}, got {found:?}"
+    );
+    found.remove(0)
+}
+
+/// How many prompts the pager has been handed so far that carry a rendered
+/// memory block, read from the PAGER's journal (`Event::InferStarted` is the
+/// only place the daemon records a prompt verbatim).
+///
+/// This is the assertion that separates "the stamp claims an injection" from
+/// "the model was shown the block": the stamp and `TaskSpec::memory_block`
+/// are set in the same branch of the pipeline, so no journal row on the task
+/// side can tell a working injection from a stamp that lies about one.
+fn memory_prompts(dir: &Path) -> usize {
+    replay(&dir.join("pager.jsonl"))
+        .unwrap()
+        .into_iter()
+        .filter(|e| {
+            matches!(e, Event::InferStarted { prompt, .. }
+                if prompt.contains("[memory: verified prior attempt]"))
+        })
+        .count()
+}
+
+fn mint_ids(events: &[Event]) -> Vec<(String, String)> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::MemoryMint {
+                task_id,
+                episode_id,
+                ..
+            } => Some((task_id.clone(), episode_id.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+fn contradicted_ids(events: &[Event]) -> Vec<(String, String)> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::MemoryContradicted {
+                task_id,
+                episode_id,
+                ..
+            } => Some((task_id.clone(), episode_id.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Spec §2 + §4: a task that clears the mint bar stores exactly one verified
+/// episode citing the pre-patch bytes of every file it touched, and the
+/// journal carries the pair that makes the task → store trail walkable in
+/// both directions — a `MemoryStamp` (mode `silent`, because a first run has
+/// no candidates to match) and a `MemoryMint`.
+#[test]
+fn verified_task_mints_and_journal_carries_stamp_and_mint() {
+    let dir = fresh_dir("mint");
+    let (sb, grant) = sandbox(&dir);
+    let (pager, agent_id) = build_pager(&dir, fixing_turns());
+    let pager = Arc::new(Mutex::new(pager));
+    let registry = TaskRegistry::new();
+    let journal_path = dir.join("tasks.jsonl");
+    let ctx = memory_ctx(&dir, true);
+
+    let (task_id, result) = drive(
+        &registry,
+        &pager,
+        &agent_id,
+        spec_for("make a.py say two", &grant, &sb),
+        &journal_path,
+        Some(Arc::clone(&ctx)),
+    );
+    assert_eq!(result.status, TaskStatus::Done, "{result:?}");
+
+    // The store, re-read from disk: the mint is durable, not just in-memory.
+    let store = MemoryStore::load(&store_path(&dir)).unwrap();
+    let episodes: Vec<_> = store.episodes().collect();
+    assert_eq!(episodes.len(), 1, "{episodes:?}");
+    let ep = episodes[0];
+    assert_eq!(ep.status, "verified");
+    assert_eq!(ep.cited_files.len(), 1, "{:?}", ep.cited_files);
+    assert_eq!(
+        ep.cited_files[0].path,
+        sb.join("a.py").display().to_string()
+    );
+    assert_eq!(
+        ep.cited_files[0].fingerprint,
+        bloomery_daemon::memory::record::Fingerprint::Sha256(sha256_hex_bytes(BEFORE)),
+        "the citation must be the PRE-patch bytes"
+    );
+    // Step 4's provenance pair, recorded and never compared (spec §2): the
+    // model comes from `Pager::agent_model`, the envelope from the spec.
+    assert_eq!(ep.minted_by_model, "m");
+    assert_eq!(ep.minted_by_envelope, "V1");
+    assert!(ep.minted_at > 0, "a minted episode carries a mint clock");
+
+    let events = replay(&journal_path).unwrap();
+    assert_eq!(
+        stamp_for(&events, &task_id),
+        ("silent".to_string(), None, 0),
+        "a first run has nothing to retrieve"
+    );
+    assert_eq!(
+        mint_ids(&events),
+        vec![(task_id, ep.episode_id.clone())],
+        "exactly one mint row, naming this task and this episode"
+    );
+    assert!(contradicted_ids(&events).is_empty());
+}
+
+/// Spec §3/§4: the exact repeat of a verified goal against byte-identical
+/// starting files is injected; a stranger goal and a drifted cited file are
+/// both silent. The three negatives sit in one test because they share the
+/// one store the first task minted into — separating them would prove only
+/// that an empty store is silent.
+#[test]
+fn exact_repeat_is_injected_and_a_stranger_is_silent() {
+    let dir = fresh_dir("repeat");
+    let (sb, grant) = sandbox(&dir);
+    let mut replies = fixing_turns();
+    replies.extend(fixing_turns());
+    replies.push(scripted("<action verb=\"done\">\nnothing to do\n</action>"));
+    replies.push(scripted("<action verb=\"done\">\nnothing to do\n</action>"));
+    let (pager, agent_id) = build_pager(&dir, replies);
+    let pager = Arc::new(Mutex::new(pager));
+    let registry = TaskRegistry::new();
+    let journal_path = dir.join("tasks.jsonl");
+    let ctx = memory_ctx(&dir, true);
+    let goal = "make a.py say two";
+
+    // 1. Mint.
+    let (first_id, first) = drive(
+        &registry,
+        &pager,
+        &agent_id,
+        spec_for(goal, &grant, &sb),
+        &journal_path,
+        Some(Arc::clone(&ctx)),
+    );
+    assert_eq!(first.status, TaskStatus::Done, "{first:?}");
+    let minted = mint_ids(&replay(&journal_path).unwrap());
+    assert_eq!(minted.len(), 1, "{minted:?}");
+    let episode_id = minted[0].1.clone();
+    let prompts_before = memory_prompts(&dir);
+    assert_eq!(
+        prompts_before, 0,
+        "nothing was injectable yet, so no prompt may carry a memory block"
+    );
+
+    // 2. Reset the workspace to its pre-task bytes and repeat the same goal.
+    std::fs::write(sb.join("a.py"), BEFORE).unwrap();
+    let (repeat_id, repeat) = drive(
+        &registry,
+        &pager,
+        &agent_id,
+        spec_for(goal, &grant, &sb),
+        &journal_path,
+        Some(Arc::clone(&ctx)),
+    );
+    assert_eq!(repeat.status, TaskStatus::Done, "{repeat:?}");
+    let events = replay(&journal_path).unwrap();
+    assert_eq!(
+        stamp_for(&events, &repeat_id),
+        ("injected".to_string(), Some(episode_id.clone()), 1),
+        "an exact repeat against byte-identical files is injected"
+    );
+    assert_ne!(first_id, repeat_id);
+    // The stamp says the block was injected; this is what proves the model
+    // was actually shown it. Without this, a pipeline that stamped
+    // `"injected"` and forgot to set `TaskSpec::memory_block` would pass
+    // every other assertion in this file.
+    assert!(
+        memory_prompts(&dir) > 0,
+        "the injected task's prompts must carry the rendered memory block"
+    );
+    // Spec §5: "A repeat that succeeds refreshes `verified`" — a task that
+    // received an episode and then cleared the bar must never contradict the
+    // very episode it just confirmed.
+    assert!(
+        contradicted_ids(&events).is_empty(),
+        "a verifying repeat refreshes, it never contradicts: {events:?}"
+    );
+    // A verified repeat refreshes the same identity (spec §5).
+    assert_eq!(
+        mint_ids(&events)
+            .into_iter()
+            .map(|(_, id)| id)
+            .collect::<Vec<_>>(),
+        vec![episode_id.clone(), episode_id.clone()],
+    );
+
+    // 3. A stranger goal: no candidate even reaches the fingerprint gate.
+    let (stranger_id, stranger) = drive(
+        &registry,
+        &pager,
+        &agent_id,
+        spec_for("something else entirely", &grant, &sb),
+        &journal_path,
+        Some(Arc::clone(&ctx)),
+    );
+    assert_eq!(stranger.status, TaskStatus::Done, "{stranger:?}");
+    assert_eq!(
+        stamp_for(&replay(&journal_path).unwrap(), &stranger_id),
+        ("silent".to_string(), None, 0),
+        "a stranger goal hashes to nothing in the store"
+    );
+
+    // 4. One drifted byte in the one cited file: a candidate is checked and
+    //    disqualified, so `candidates_checked` is 1 and the mode is silent.
+    std::fs::write(sb.join("a.py"), b"x = 9\n").unwrap();
+    let (drifted_id, drifted) = drive(
+        &registry,
+        &pager,
+        &agent_id,
+        spec_for(goal, &grant, &sb),
+        &journal_path,
+        Some(Arc::clone(&ctx)),
+    );
+    assert_eq!(drifted.status, TaskStatus::Done, "{drifted:?}");
+    assert_eq!(
+        stamp_for(&replay(&journal_path).unwrap(), &drifted_id),
+        ("silent".to_string(), None, 1),
+        "a drifted cited file is checked, then disqualified"
+    );
+}
+
+/// Spec §5's passive falsification: a task that RECEIVED an injected episode
+/// and then failed its own verification (here: no productive run after any
+/// patch) marks that episode `contradicted`, journals the row, and the next
+/// repeat of the same goal is silent — the status gate, not the fingerprint
+/// gate, is what silences it, since the workspace bytes never moved.
+#[test]
+fn injected_then_failed_contradicts_and_next_repeat_is_silent() {
+    let dir = fresh_dir("contradict");
+    let (sb, grant) = sandbox(&dir);
+    let mut replies = fixing_turns();
+    replies.push(scripted("<action verb=\"read\" path=\"a.py\">\n</action>"));
+    replies.push(scripted(
+        "<action verb=\"done\">\nlooks fine to me\n</action>",
+    ));
+    replies.push(scripted(
+        "<action verb=\"done\">\nlooks fine to me\n</action>",
+    ));
+    let (pager, agent_id) = build_pager(&dir, replies);
+    let pager = Arc::new(Mutex::new(pager));
+    let registry = TaskRegistry::new();
+    let journal_path = dir.join("tasks.jsonl");
+    let ctx = memory_ctx(&dir, true);
+    let goal = "make a.py say two";
+
+    let (_, first) = drive(
+        &registry,
+        &pager,
+        &agent_id,
+        spec_for(goal, &grant, &sb),
+        &journal_path,
+        Some(Arc::clone(&ctx)),
+    );
+    assert_eq!(first.status, TaskStatus::Done, "{first:?}");
+    let episode_id = mint_ids(&replay(&journal_path).unwrap())[0].1.clone();
+
+    // The repeat is injected — and then ends `Done` with no patch and no
+    // verifying run, which is exactly the shape spec §5 calls a failed
+    // verification.
+    std::fs::write(sb.join("a.py"), BEFORE).unwrap();
+    let (failed_id, failed) = drive(
+        &registry,
+        &pager,
+        &agent_id,
+        spec_for(goal, &grant, &sb),
+        &journal_path,
+        Some(Arc::clone(&ctx)),
+    );
+    assert_eq!(failed.status, TaskStatus::Done, "{failed:?}");
+    let events = replay(&journal_path).unwrap();
+    assert_eq!(
+        stamp_for(&events, &failed_id),
+        ("injected".to_string(), Some(episode_id.clone()), 1),
+    );
+    assert_eq!(
+        contradicted_ids(&events),
+        vec![(failed_id.clone(), episode_id.clone())],
+        "the injected episode is contradicted by the task that received it"
+    );
+    assert_eq!(
+        mint_ids(&events).len(),
+        1,
+        "a contradicting task mints nothing"
+    );
+
+    let store = MemoryStore::load(&store_path(&dir)).unwrap();
+    let ep = store
+        .episodes()
+        .find(|e| e.episode_id == episode_id)
+        .expect("the episode survives contradiction");
+    assert_eq!(ep.status, "contradicted");
+    assert_eq!(ep.contradicted_by.as_deref(), Some(failed_id.as_str()));
+
+    // The bytes never drifted, so only the status gate can silence this.
+    assert_eq!(std::fs::read(sb.join("a.py")).unwrap(), BEFORE);
+    let (next_id, next) = drive(
+        &registry,
+        &pager,
+        &agent_id,
+        spec_for(goal, &grant, &sb),
+        &journal_path,
+        Some(Arc::clone(&ctx)),
+    );
+    assert_eq!(next.status, TaskStatus::Done, "{next:?}");
+    assert_eq!(
+        stamp_for(&replay(&journal_path).unwrap(), &next_id),
+        ("silent".to_string(), None, 1),
+        "a contradicted episode is never injected again"
+    );
+}
+
+/// Spec §4's "a stamp for every spawned task" and §7's "the organ being
+/// broken can only ever produce memory-off behavior": both the no-context
+/// case and the config-off case stamp `off`, and neither reads or writes the
+/// store — proven against tasks that would otherwise have minted.
+#[test]
+fn memory_none_and_disabled_stamp_off_and_never_touch_the_store() {
+    let dir = fresh_dir("off");
+    let (sb, grant) = sandbox(&dir);
+    let mut replies = fixing_turns();
+    replies.extend(fixing_turns());
+    let (pager, agent_id) = build_pager(&dir, replies);
+    let pager = Arc::new(Mutex::new(pager));
+    let registry = TaskRegistry::new();
+    let journal_path = dir.join("tasks.jsonl");
+    let goal = "make a.py say two";
+
+    let (none_id, none_result) = drive(
+        &registry,
+        &pager,
+        &agent_id,
+        spec_for(goal, &grant, &sb),
+        &journal_path,
+        None,
+    );
+    assert_eq!(none_result.status, TaskStatus::Done, "{none_result:?}");
+    assert_eq!(
+        stamp_for(&replay(&journal_path).unwrap(), &none_id),
+        ("off".to_string(), None, 0),
+    );
+
+    std::fs::write(sb.join("a.py"), BEFORE).unwrap();
+    let disabled = memory_ctx(&dir, false);
+    assert!(!disabled.operational());
+    let (off_id, off_result) = drive(
+        &registry,
+        &pager,
+        &agent_id,
+        spec_for(goal, &grant, &sb),
+        &journal_path,
+        Some(disabled),
+    );
+    assert_eq!(off_result.status, TaskStatus::Done, "{off_result:?}");
+    let events = replay(&journal_path).unwrap();
+    assert_eq!(
+        stamp_for(&events, &off_id),
+        ("off".to_string(), None, 0),
+        "a disabled organ is off, never silent — silence is a retrieval outcome"
+    );
+
+    assert!(
+        mint_ids(&events).is_empty() && contradicted_ids(&events).is_empty(),
+        "a memory-off task writes no store rows: {events:?}"
+    );
+    assert!(
+        !store_path(&dir).exists(),
+        "both tasks cleared the mint bar and neither may have created a store"
+    );
+}
+
+/// Controller ruling R-PF-2: a `MemoryContradicted` row is journaled only
+/// when `MemoryStore::mark_contradicted` actually changed a row
+/// (`Ok(true)`). An operator's `DELETE /memory/{id}` (spec §6 — "the
+/// operator's eviction right is part of the organ's trust story") can land
+/// while a task that was injected with that id is still running; the store
+/// then has nothing to mark, and journaling a contradiction anyway would
+/// fabricate store history — a replay would see an episode change status
+/// when no row ever did.
+///
+/// **Deterministic, not raced.** The worker retrieves and stamps *before* it
+/// takes the pager lock (`task/registry.rs`'s pipeline, steps 1-2 vs. 5), so
+/// this test holds the pager lock itself, waits for the stamp to land, and
+/// deletes inside that window. The scripted turns end without a verifying
+/// run, so the contradiction arm really is reached — without that, the test
+/// would pass for the wrong reason.
+#[test]
+fn an_injected_episode_deleted_mid_task_is_not_journaled_as_contradicted() {
+    let dir = fresh_dir("deleted");
+    let (sb, grant) = sandbox(&dir);
+    let mut replies = fixing_turns();
+    replies.push(scripted("<action verb=\"read\" path=\"a.py\">\n</action>"));
+    replies.push(scripted(
+        "<action verb=\"done\">\nlooks fine to me\n</action>",
+    ));
+    let (pager, agent_id) = build_pager(&dir, replies);
+    let pager = Arc::new(Mutex::new(pager));
+    let registry = TaskRegistry::new();
+    let journal_path = dir.join("tasks.jsonl");
+    let ctx = memory_ctx(&dir, true);
+    let goal = "make a.py say two";
+
+    let (_, first) = drive(
+        &registry,
+        &pager,
+        &agent_id,
+        spec_for(goal, &grant, &sb),
+        &journal_path,
+        Some(Arc::clone(&ctx)),
+    );
+    assert_eq!(first.status, TaskStatus::Done, "{first:?}");
+    let episode_id = mint_ids(&replay(&journal_path).unwrap())[0].1.clone();
+
+    std::fs::write(sb.join("a.py"), BEFORE).unwrap();
+    let guard = pager.lock().expect("the pager mutex is healthy");
+    let task_id = registry.spawn_task(
+        Arc::clone(&pager),
+        agent_id.clone(),
+        spec_for(goal, &grant, &sb),
+        journal_path.clone(),
+        Some(Arc::clone(&ctx)),
+    );
+    // Retrieval and the stamp are done; the worker is now parked on the
+    // pager lock this thread holds.
+    assert_eq!(
+        await_stamp(&journal_path, &task_id),
+        ("injected".to_string(), Some(episode_id.clone()), 1),
+    );
+    {
+        let store = ctx
+            .store
+            .as_ref()
+            .expect("an operational organ has a store");
+        let mut store = store.lock().expect("the store mutex is healthy");
+        assert!(
+            store.delete(&episode_id).unwrap(),
+            "the operator deletes the very id this task was shown"
+        );
+    }
+    drop(guard);
+
+    let result = poll_to_terminal(&registry, &task_id);
+    assert_eq!(result.status, TaskStatus::Done, "{result:?}");
+    let events = replay(&journal_path).unwrap();
+    assert!(
+        contradicted_ids(&events).is_empty(),
+        "no store row changed, so no contradiction may be journaled: {events:?}"
+    );
+    assert!(
+        MemoryStore::load(&store_path(&dir))
+            .unwrap()
+            .episodes()
+            .next()
+            .is_none(),
+        "the operator's deletion stands"
+    );
+}

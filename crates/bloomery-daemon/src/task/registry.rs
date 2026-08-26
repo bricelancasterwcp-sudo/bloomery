@@ -52,6 +52,23 @@
 //! state (`table`, `models`) is still fully consistent after a panic
 //! mid-mutation — only that the *lock* itself survives clean, which is
 //! what stops the failure from cascading to every other request.
+//!
+//! **The memory organ's pipeline lives here** (memory-organ design
+//! `docs/superpowers/specs/2026-08-26-memory-organ-design.md` §4/§5), inside
+//! the same worker thread and around the same `run_task` call: retrieve →
+//! stamp → inject → run → mint-or-contradict. This is the only place in the
+//! daemon that has all three things the organ needs at once — the task's
+//! `TaskSpec` (goal, grant, cwd) before step 1, the task's own `Journal`
+//! handle, and the terminal `TaskResult` after. `api_task::create_task` has
+//! the first but neither of the others, which is why the route threads a
+//! [`crate::memory::MemoryContext`] down here instead of retrieving itself.
+//!
+//! The organ is **advisory in the strongest sense**: nothing it does can
+//! change a task's status, steps or result. It writes to the journal, to the
+//! store, and to `TaskSpec::memory_block` — and to nothing else. Every store
+//! IO failure journals [`bloomery_core::journal::Event::Degraded`] and
+//! continues, per design §7 ("the organ being broken can only ever produce
+//! memory-off behavior — never a wrong injection, never a failed task").
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -59,9 +76,13 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use bloomery_core::journal::Journal;
+use bloomery_core::journal::{Event, Journal};
 use bloomery_substrate::Substrate;
 
+use crate::memory::mint::{build_episode, verifying_run, MintInputs};
+use crate::memory::render::render_memory_block;
+use crate::memory::store::MemoryStore;
+use crate::memory::{MemoryContext, MEMORY_BLOCK_MAX_BYTES};
 use crate::pager::Pager;
 use crate::task::{run_task, TaskResult, TaskSpec, TaskStatus};
 
@@ -143,6 +164,75 @@ fn without_evidence(status: TaskStatus, summary: Option<String>) -> TaskResult {
     }
 }
 
+/// Locks the memory store, recovering from poison rather than propagating
+/// it, and journaling the recovery so it is never silent.
+///
+/// Same reasoning as [`lock_entries`], one layer up: a poisoned store mutex
+/// means some worker panicked between the store's durable append and its
+/// in-memory index update. The **file** is the source of truth and is
+/// rebuilt at every `MemoryStore::load` (`memory::store`'s module docs), so
+/// the worst a recovered lock carries is one index entry that the next boot
+/// re-derives correctly — while refusing to recover would wedge the organ
+/// for the rest of the process's life, which is a strictly worse outcome for
+/// something advisory. The `Degraded` row is what keeps that trade visible
+/// to an operator instead of buried.
+fn lock_store<'a>(
+    store: &'a Mutex<MemoryStore>,
+    journal: &mut Journal,
+) -> MutexGuard<'a, MemoryStore> {
+    match store.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            degrade(
+                journal,
+                "memory organ: store mutex poisoned by a prior panic; recovered from the \
+                 durable file's own index"
+                    .to_string(),
+            );
+            poisoned.into_inner()
+        }
+    }
+}
+
+/// Appends one memory-organ row, best-effort — the single spelling every
+/// organ row in this module goes through.
+///
+/// **The append's own `io::Result` is deliberately dropped, and this is the
+/// one place that says why.** The journal *is* the organ's reporting
+/// channel, so a failed append has nowhere left to be reported: the obvious
+/// "handle it" — journal the failure — is the very operation that just
+/// failed. Escalating instead would let a broken journal fail a task the
+/// organ is forbidden to touch (design §7). Nor is the condition lost:
+/// `run_task` writes every one of its own `TaskStep` rows through this same
+/// handle and *does* end the task on an append error, so a journal that
+/// cannot be written surfaces through the task's own result — loudly, and
+/// through the subsystem that owns the failure.
+fn record(journal: &mut Journal, event: &Event) {
+    let _ = journal.append(event);
+}
+
+/// Journals one memory-organ degradation and returns — the organ's only
+/// reaction to any store failure (design §7: "Mint-time store IO failure:
+/// journal a warning row; the task's own result is unaffected").
+fn degrade(journal: &mut Journal, reason: String) {
+    record(journal, &Event::Degraded { reason });
+}
+
+/// The wall-clock mint stamp for an episode, in milliseconds since the Unix
+/// epoch — the same expression `Journal::append` derives its row stamp from
+/// (`bloomery-core/src/journal.rs`), including its two saturating edges: a
+/// pre-1970 clock reads `0` (visibly absurd rather than silently plausible)
+/// and a count past `u64` milliseconds saturates rather than truncating.
+///
+/// One spelling, so an episode's `minted_at` and the `MemoryMint` row's own
+/// `epoch_ms` can never disagree about what "now" means.
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
 /// A running or finished task, keyed by a monotonic `task-<n>` id.
 pub struct TaskRegistry {
     entries: Entries,
@@ -178,12 +268,20 @@ impl TaskRegistry {
     /// is safe here specifically (it would not be everywhere in this
     /// codebase; `Pager::journal_post`'s doc comment names the general
     /// hazard).
+    ///
+    /// `memory` is the daemon's memory organ, or `None` for a caller that
+    /// has none to offer. `Some` does not mean the organ speaks: it speaks
+    /// only when [`MemoryContext::operational`] holds, and even then only
+    /// when retrieval finds a survivor. Every other case runs the task
+    /// exactly as it ran before this parameter existed — see the module docs
+    /// for the pipeline this drives.
     pub fn spawn_task<S: Substrate + Send + 'static>(
         &self,
         pager: Arc<Mutex<Pager<S>>>,
         agent_id: String,
         spec: TaskSpec,
         journal_path: PathBuf,
+        memory: Option<Arc<MemoryContext>>,
     ) -> String {
         let n = self.next_id.fetch_add(1, Ordering::Relaxed);
         let task_id = format!("task-{n}");
@@ -196,9 +294,15 @@ impl TaskRegistry {
         let entries = Arc::clone(&self.entries);
         let worker_task_id = task_id.clone();
         std::thread::spawn(move || {
+            let mut spec = spec;
             let mut journal = match Journal::open(&journal_path) {
                 Ok(j) => j,
                 Err(e) => {
+                    // No journal means no stamp: design §4's "every task is
+                    // stamped" is a statement about tasks that run, and this
+                    // one never reaches step 1. Inventing a stamp elsewhere
+                    // would put a row about this task in a file this task
+                    // could not open.
                     let mut entries = lock_entries(&entries);
                     entries.insert(
                         worker_task_id,
@@ -214,10 +318,94 @@ impl TaskRegistry {
                 }
             };
 
-            // The v1 locking decision, exactly: one lock, held for the
-            // whole task — see this module's docs.
-            let result = match pager.lock() {
+            // The organ's handle for this task: `Some` exactly when the
+            // config switch is on AND a store loaded at boot. Re-deriving
+            // the store from `operational()`'s own two conjuncts is what
+            // keeps this `expect`-free — the invariant is documented on
+            // `MemoryContext`, and read here rather than trusted.
+            let organ: Option<(&Mutex<MemoryStore>, usize)> = memory
+                .as_ref()
+                .filter(|ctx| ctx.operational())
+                .and_then(|ctx| ctx.store.as_ref().map(|store| (store, ctx.max_episodes)));
+
+            // Step 1 (design §3): retrieve, holding the store lock only for
+            // the read itself — never across `run_task`, which would
+            // serialize every other task's retrieval behind this one's whole
+            // execution.
+            let retrieval = organ.map(|(store, _)| {
+                let store = lock_store(store, &mut journal);
+                crate::memory::retrieve::retrieve(&store, &spec.goal, &spec.grant, &spec.cwd)
+            });
+
+            // Steps 2 and 3 (design §4): decide the stamp, then inject.
+            // Rendering happens *before* the stamp is written because the
+            // oversize rule below can turn an otherwise-injected episode
+            // into a silent one, and a stamp that claimed an injection the
+            // prompt never carried would be the one lie this row exists to
+            // prevent.
+            let mut injected_id: Option<String> = None;
+            let (mode, candidates_checked) = match &retrieval {
+                None => ("off", 0),
+                Some(r) => match &r.injected {
+                    None => ("silent", r.candidates_checked),
+                    Some(episode) => {
+                        let block = render_memory_block(episode);
+                        if block.len() > MEMORY_BLOCK_MAX_BYTES {
+                            // Controller ruling (Task 6), see
+                            // `MEMORY_BLOCK_MAX_BYTES`: an oversized block
+                            // could push this task into `WindowExhausted`
+                            // where memory-off would have finished, and
+                            // design §7 forbids the organ damaging the task.
+                            // Skipped, stamped silent, and named in a
+                            // `Degraded` row — `injected_id` stays `None`,
+                            // so a later failure can never be blamed on an
+                            // episode this prompt did not carry.
+                            degrade(
+                                &mut journal,
+                                format!(
+                                    "memory organ: episode {} rendered {} bytes, over the \
+                                     {MEMORY_BLOCK_MAX_BYTES}-byte injection bound; task \
+                                     {worker_task_id} runs memory-off",
+                                    episode.episode_id,
+                                    block.len(),
+                                ),
+                            );
+                            ("silent", r.candidates_checked)
+                        } else {
+                            injected_id = Some(episode.episode_id.clone());
+                            spec.memory_block = Some(block);
+                            ("injected", r.candidates_checked)
+                        }
+                    }
+                },
+            };
+            record(
+                &mut journal,
+                &Event::MemoryStamp {
+                    id: agent_id.clone(),
+                    task_id: worker_task_id.clone(),
+                    mode: mode.to_string(),
+                    episode_id: injected_id.clone(),
+                    candidates_checked,
+                },
+            );
+
+            // Recorded, never compared (design §2) — the envelope this task
+            // ran under, read from the spec and so needing no pager guard.
+            let envelope = format!("{:?}", spec.envelope);
+
+            // Step 5. The v1 locking decision, exactly: one lock, held for
+            // the whole task — see this module's docs.
+            let (result, model) = match pager.lock() {
                 Ok(mut guard) => {
+                    // Step 4: the other half of the provenance pair, which
+                    // *does* need the guard (it is an agent-table lookup).
+                    // An agent that vanished mid-flight falls back to its
+                    // own id rather than an empty string — a name that is
+                    // visibly not a model beats a blank that reads as one.
+                    let model = guard
+                        .agent_model(&agent_id)
+                        .unwrap_or_else(|| agent_id.clone());
                     // Catch a panic from `run_task` HERE, inside the locked
                     // scope, so it is caught before it would ever reach
                     // `guard`'s `Drop` — see this module's "Panic
@@ -227,29 +415,111 @@ impl TaskRegistry {
                     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         run_task(&mut guard, &agent_id, &spec, &mut journal)
                     }));
-                    match outcome {
+                    let result = match outcome {
                         Ok(result) => result,
                         Err(payload) => without_evidence(
                             TaskStatus::Error,
                             Some(panic_message(payload.as_ref())),
                         ),
-                    }
+                    };
+                    (result, model)
                 }
                 Err(_) => {
                     // Deliberately NOT `.into_inner()` here: this is the
                     // pager's own mutex, not the registry's bookkeeping
                     // one, and `api_native::lock_pager`'s sticky-poison
                     // reasoning applies in full — a poisoned pager's state
-                    // is not vouched for, so this task did not run.
-                    without_evidence(
-                        TaskStatus::Error,
-                        Some(
-                            "pager state poisoned by a prior panic; restart the daemon".to_string(),
+                    // is not vouched for, so this task did not run. There is
+                    // no agent table to read a model out of either, so the
+                    // same fallback the `Ok` arm uses stands in; nothing
+                    // reads it, because an `Error` result can never mint.
+                    (
+                        without_evidence(
+                            TaskStatus::Error,
+                            Some(
+                                "pager state poisoned by a prior panic; restart the daemon"
+                                    .to_string(),
+                            ),
                         ),
+                        agent_id.clone(),
                     )
                 }
             };
 
+            // Step 6 (design §5, then §2): the pager guard is dropped, so
+            // the store work below never holds two locks at once.
+            if let Some((store, max_episodes)) = organ {
+                let mut store = lock_store(store, &mut journal);
+
+                if let Some(id) = &injected_id {
+                    if verifying_run(&result).is_none() {
+                        // Design §5: a task that received an episode and
+                        // then failed its own verification contradicts it.
+                        // This deliberately fires for `Error` and
+                        // caught-panic ends too, not only for a clean
+                        // non-verifying `Done`: §5 names "a non-`Done` end"
+                        // outright, and the direction is the safe one —
+                        // contradiction only ever *removes* an injection,
+                        // and §7's rule is "never a wrong injection". A task
+                        // that verifies falls through to the mint below,
+                        // which refreshes the same identity.
+                        match store.mark_contradicted(id, &worker_task_id) {
+                            Ok(true) => record(
+                                &mut journal,
+                                &Event::MemoryContradicted {
+                                    id: agent_id.clone(),
+                                    task_id: worker_task_id.clone(),
+                                    episode_id: id.clone(),
+                                },
+                            ),
+                            // R-PF-2: the id is gone from the store — an
+                            // operator's `DELETE /memory/{id}` can land
+                            // while this task runs. No row was written, so
+                            // journaling a contradiction here would
+                            // fabricate store history: a replay would see an
+                            // episode change status when nothing did.
+                            Ok(false) => {}
+                            Err(e) => degrade(
+                                &mut journal,
+                                format!(
+                                    "memory organ: could not contradict episode {id} from task \
+                                     {worker_task_id}: {e}"
+                                ),
+                            ),
+                        }
+                    }
+                }
+
+                let inputs = MintInputs {
+                    goal: &spec.goal,
+                    model: &model,
+                    envelope: &envelope,
+                    minted_at: now_millis(),
+                };
+                if let Some(episode) = build_episode(&result, &inputs) {
+                    let episode_id = episode.episode_id.clone();
+                    match store.mint(episode, max_episodes) {
+                        Ok(()) => record(
+                            &mut journal,
+                            &Event::MemoryMint {
+                                id: agent_id.clone(),
+                                task_id: worker_task_id.clone(),
+                                episode_id,
+                            },
+                        ),
+                        Err(e) => degrade(
+                            &mut journal,
+                            format!(
+                                "memory organ: could not mint episode {episode_id} from task \
+                                 {worker_task_id}: {e}"
+                            ),
+                        ),
+                    }
+                }
+            }
+
+            // Step 7: the registry entry, unchanged — the organ has not
+            // touched `result` on any path above.
             let mut entries = lock_entries(&entries);
             entries.insert(worker_task_id, result);
         });
@@ -366,8 +636,13 @@ mod tests {
             memory_block: None,
         };
 
-        let task_id =
-            registry.spawn_task(Arc::clone(&pager), agent_id, spec, dir.join("tasks.jsonl"));
+        let task_id = registry.spawn_task(
+            Arc::clone(&pager),
+            agent_id,
+            spec,
+            dir.join("tasks.jsonl"),
+            None,
+        );
         assert!(task_id.starts_with("task-"));
 
         let mut entry = registry.get(&task_id).expect("entry exists immediately");
@@ -430,12 +705,14 @@ mod tests {
             agent_id.clone(),
             spec(std::fs::canonicalize(&dir).unwrap(), ok_grant(&dir)),
             dir.join("tasks.jsonl"),
+            None,
         );
         let id2 = registry.spawn_task(
             Arc::clone(&pager),
             agent_id,
             spec(std::fs::canonicalize(&dir).unwrap(), ok_grant(&dir)),
             dir.join("tasks.jsonl"),
+            None,
         );
         assert_ne!(id1, id2);
     }
@@ -547,8 +824,13 @@ mod tests {
             memory_block: None,
         };
 
-        let task_id =
-            registry.spawn_task(Arc::clone(&pager), agent_id, spec, dir.join("tasks.jsonl"));
+        let task_id = registry.spawn_task(
+            Arc::clone(&pager),
+            agent_id,
+            spec,
+            dir.join("tasks.jsonl"),
+            None,
+        );
 
         // Property 1: bounded wait to a terminal state, never a stuck
         // `Running`.

@@ -325,6 +325,66 @@ fn drift_round_trips() {
     assert_eq!(replay(&path).unwrap(), vec![ran, never_ran]);
 }
 
+/// The memory organ's three rows (memory-organ design
+/// `docs/superpowers/specs/2026-08-26-memory-organ-design.md` §4/§5) round
+/// trip. Additive, like every variant since `TaskStep`: no existing row grew
+/// a field, so old journals carry none of these tags and replay unchanged —
+/// pinned per committed file by [`committed_g2_journal_still_replays`].
+///
+/// Asymmetric on every field that could be swapped with its neighbor — the
+/// two ids (`id` is the agent, `task_id` the task, `episode_id` the store
+/// row), and the two stamp modes with their `Some`/`None` episode — so a
+/// copy-paste mistake flips a byte the full-`Event` `assert_eq!` catches. A
+/// `silent` stamp's `None` in particular must survive as `None`: an absent
+/// episode that came back as `Some("")` would read as an injection nobody
+/// made.
+#[test]
+fn memory_organ_rows_round_trip() {
+    let dir = std::env::temp_dir().join("bloomery-journal-memory");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("j-memory.jsonl");
+    let _ = std::fs::remove_file(&path);
+    let mut j = Journal::open(&path).unwrap();
+    let injected = Event::MemoryStamp {
+        id: "agent-3".into(),
+        task_id: "task-11".into(),
+        mode: "injected".into(),
+        episode_id: Some("ep-a1".into()),
+        candidates_checked: 4,
+    };
+    let silent = Event::MemoryStamp {
+        id: "agent-5".into(),
+        task_id: "task-12".into(),
+        mode: "silent".into(),
+        episode_id: None,
+        candidates_checked: 2,
+    };
+    let off = Event::MemoryStamp {
+        id: "agent-7".into(),
+        task_id: "task-13".into(),
+        mode: "off".into(),
+        episode_id: None,
+        candidates_checked: 0,
+    };
+    let mint = Event::MemoryMint {
+        id: "agent-9".into(),
+        task_id: "task-14".into(),
+        episode_id: "ep-b2".into(),
+    };
+    let contradicted = Event::MemoryContradicted {
+        id: "agent-11".into(),
+        task_id: "task-15".into(),
+        episode_id: "ep-c3".into(),
+    };
+    for e in [&injected, &silent, &off, &mint, &contradicted] {
+        j.append(e).unwrap();
+    }
+    assert_eq!(
+        replay(&path).unwrap(),
+        vec![injected, silent, off, mint, contradicted]
+    );
+}
+
 /// The digest a `Blessed` row carries is of the profile's **bytes**, so a
 /// human with `sha256sum` can check the row's path claim against the file
 /// (design §5). Pins that the byte-taking helper and the str-taking one

@@ -224,7 +224,14 @@ fn worker_loop<S: Substrate + Send + 'static>(
                         api_v1::dispatch(pager, &method, &segments, &body, agent_header.as_deref());
                     respond_v1(request, result);
                 } else if let Some((status, value)) =
-                    api_task::dispatch(pager, registry, &method, &segments, &body)
+                    // `None`: this daemon has no memory organ wired to its
+                    // HTTP surface yet, so every task runs memory-off
+                    // (memory-organ design §7) — Task 8 builds the
+                    // `MemoryContext` from config at boot and threads it
+                    // here beside `swap`.
+                    api_task::dispatch(
+                        pager, registry, None, &method, &segments, &body,
+                    )
                 {
                     match value {
                         Some(value) => respond_json(request, status, &value),

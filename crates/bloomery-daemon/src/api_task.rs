@@ -25,6 +25,7 @@ use bloomery_core::grant::Grant;
 use bloomery_substrate::Substrate;
 
 use crate::api_native::{bad_request, lock_pager, ApiResult};
+use crate::memory::MemoryContext;
 use crate::pager::Pager;
 use crate::task::{TaskRegistry, TaskSpec};
 
@@ -56,16 +57,24 @@ struct CreateTaskReq {
 
 /// Routes one task-surface request. `segments` is the same `/`-split,
 /// non-empty path `api_native::dispatch` matches on.
+///
+/// `memory` is the daemon's memory organ, threaded straight through to
+/// `TaskRegistry::spawn_task` — the same borrowed-`Arc` shape
+/// `api_native::dispatch` gives `swap`, and for the same reason: only the
+/// spawned worker keeps it past the request, so the route never owns one.
+/// `None` is a daemon with no organ wired, which every task then runs
+/// memory-off against (memory-organ design §7).
 pub(crate) fn dispatch<S: Substrate + Send + 'static>(
     pager: &Arc<Mutex<Pager<S>>>,
     registry: &Arc<TaskRegistry>,
+    memory: Option<&Arc<MemoryContext>>,
     method: &str,
     segments: &[String],
     body: &str,
 ) -> Option<ApiResult> {
     let parts: Vec<&str> = segments.iter().map(String::as_str).collect();
     match (method, parts.as_slice()) {
-        ("POST", ["agents", id, "task"]) => Some(create_task(pager, registry, id, body)),
+        ("POST", ["agents", id, "task"]) => Some(create_task(pager, registry, memory, id, body)),
         ("GET", ["agents", _id, "task", task_id]) => Some(get_task(registry, task_id)),
         _ => None,
     }
@@ -103,6 +112,7 @@ fn budget_exceeds_grant(requested: u64, granted: u64) -> ApiResult {
 fn create_task<S: Substrate + Send + 'static>(
     pager: &Arc<Mutex<Pager<S>>>,
     registry: &Arc<TaskRegistry>,
+    memory: Option<&Arc<MemoryContext>>,
     agent_id: &str,
     body: &str,
 ) -> ApiResult {
@@ -214,16 +224,22 @@ fn create_task<S: Substrate + Send + 'static>(
         // resolved through the identical lookup rather than a second,
         // potentially-drifting path.
         envelope,
-        // The memory organ is not wired to this route yet (memory-organ
-        // design spec §3: retrieval runs "at task start … before step 1",
-        // which is the registry worker's moment, not this handler's — it
-        // has neither the store nor the task's own journal in hand). `None`
-        // is the honest value here and also the permanently correct default:
-        // a route that could not retrieve must never claim it did.
+        // Retrieval runs "at task start … before step 1" (memory-organ
+        // design spec §3), which is the registry worker's moment, not this
+        // handler's — it has neither the store nor the task's own journal
+        // in hand. `None` is the honest value here and also the permanently
+        // correct one: a route that could not retrieve must never claim it
+        // did. The worker overwrites it iff it injects.
         memory_block: None,
     };
 
-    let task_id = registry.spawn_task(Arc::clone(pager), agent_id.to_string(), spec, journal_path);
+    let task_id = registry.spawn_task(
+        Arc::clone(pager),
+        agent_id.to_string(),
+        spec,
+        journal_path,
+        memory.map(Arc::clone),
+    );
     (202, Some(json!({"task_id": task_id})))
 }
 

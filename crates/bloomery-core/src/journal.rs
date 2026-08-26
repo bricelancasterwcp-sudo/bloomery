@@ -332,6 +332,63 @@ pub enum Event {
         exit_code: Option<i32>,
         outcome: String,
     },
+    /// The memory organ's per-task stamp (memory-organ design
+    /// `docs/superpowers/specs/2026-08-26-memory-organ-design.md` §4).
+    /// Written **once per spawned task, before its first step** — including
+    /// tasks that ran with the organ off, which is the point: §4's
+    /// lens-travels-with-verdict rule is satisfied by *record*, so a replay
+    /// must be able to say of every task whether memory could have spoken to
+    /// it, not only of the tasks where it did.
+    ///
+    /// `mode` is read by equality against a closed set of three spellings,
+    /// unlike [`Event::Blessed::provenance`]'s prefix family:
+    ///
+    /// - `"off"` — no organ was offered to this task, or the operator's
+    ///   config switch is off, or the store failed to load at boot (design
+    ///   §7's disabled-with-reason). `episode_id` is `None` and
+    ///   `candidates_checked` is `0`, because retrieval never ran.
+    /// - `"silent"` — retrieval ran and produced nothing to inject.
+    ///   `candidates_checked` is how many stored episodes shared this goal's
+    ///   hash and were examined, survivor or not, so a `0` ("this goal is a
+    ///   stranger") is distinguishable from an `N` ("N candidates were
+    ///   checked and every one was disqualified") — the difference between
+    ///   an empty store and a drifted workspace.
+    /// - `"injected"` — `episode_id` names the one episode this task's
+    ///   prompt carried (design §3: at most one is ever injected).
+    ///
+    /// A `"silent"` stamp's `episode_id` is `None`, never `Some("")`: an
+    /// absent injection must not read as an injection of nothing.
+    MemoryStamp {
+        id: AgentId,
+        task_id: String,
+        mode: String,
+        episode_id: Option<String>,
+        candidates_checked: u32,
+    },
+    /// A verified task minted (or refreshed) an episode (design §2). Paired
+    /// with the task's own [`Event::MemoryStamp`] by `task_id`, which is
+    /// what makes the task → store evidence trail walkable in both
+    /// directions (design §4). A repeat that verifies re-mints the *same*
+    /// `episode_id` with a fresh `minted_at` (design §5), so two rows naming
+    /// one episode are a refresh, not a duplicate.
+    MemoryMint {
+        id: AgentId,
+        task_id: String,
+        episode_id: String,
+    },
+    /// An injected episode's task failed its own verification, so the
+    /// episode's stored status became `contradicted` and it will never be
+    /// injected again (design §5, passive falsification — the organ reads
+    /// outcomes, it never re-executes anything to produce them).
+    ///
+    /// `task_id` is the task that received the injection and then failed;
+    /// it is also the `contradicted_by` value written into the store row, so
+    /// the journal and the store name the same accuser.
+    MemoryContradicted {
+        id: AgentId,
+        task_id: String,
+        episode_id: String,
+    },
 }
 
 /// `Event::CodecFixture::expect`'s serde default (G5 design doc §4): every
