@@ -116,6 +116,71 @@ fn run_before_the_last_successful_patch_does_not_mint() {
     );
 }
 
+/// Ruling amendment (code review finding, 2026-08-26): the mint bar reads
+/// the LAST completed run in the window, not the first passing one. A
+/// stale earlier pass must not rescue a later completed failure — the
+/// trajectory's own final evidence in the window is a failure, so this
+/// must not mint.
+#[test]
+fn a_later_completed_failure_after_an_earlier_pass_does_not_mint() {
+    let steps = vec![
+        step("patch", "patched a.txt", false, &["a.txt"]),
+        step("run", "ran python3 exit 0", false, &["python3"]),
+        step("run", "ran python3 exit 1", false, &["python3"]),
+        step("done", "all set", false, &[]),
+    ];
+    let result = task_result(TaskStatus::Done, steps);
+
+    assert!(
+        verifying_run(&result).is_none(),
+        "the final completed run in the window failed, so an earlier pass must not save it: {result:?}"
+    );
+}
+
+/// Mirror of the above: a later completed PASS rescues an earlier
+/// completed failure in the same window — the final evidence is what
+/// counts, and here it passes.
+#[test]
+fn a_later_completed_pass_after_an_earlier_failure_mints_citing_the_later_run() {
+    let steps = vec![
+        step("patch", "patched a.txt", false, &["a.txt"]),
+        step("run", "ran python3 exit 1", false, &["python3"]),
+        step("run", "ran python3 exit 0", false, &["python3"]),
+        step("done", "all set", false, &[]),
+    ];
+    let result = task_result(TaskStatus::Done, steps);
+
+    let run = verifying_run(&result);
+    assert_eq!(
+        run.map(|s| s.outcome.as_str()),
+        Some("ran python3 exit 0"),
+        "must cite the LATER, passing run, not the earlier failure: {result:?}"
+    );
+}
+
+/// A structurally failed run (`failed: true` — a timeout here, never a
+/// completion at all per `exec_run`) occurring AFTER an earlier completed
+/// pass must not veto it: a run that never finished carries no evidence
+/// about anything, so the last COMPLETED run in the window is still the
+/// earlier pass.
+#[test]
+fn a_structurally_failed_run_after_a_completed_pass_does_not_veto_it() {
+    let steps = vec![
+        step("patch", "patched a.txt", false, &["a.txt"]),
+        step("run", "ran python3 exit 0", false, &["python3"]),
+        step("run", "ran python3 timed out", true, &["python3"]),
+        step("done", "all set", false, &[]),
+    ];
+    let result = task_result(TaskStatus::Done, steps);
+
+    let run = verifying_run(&result);
+    assert_eq!(
+        run.map(|s| s.outcome.as_str()),
+        Some("ran python3 exit 0"),
+        "a structurally-failed run is not a completion and must not veto the earlier pass: {result:?}"
+    );
+}
+
 #[test]
 fn non_done_status_and_failed_run_do_not_mint() {
     let steps_exhausted = task_result(

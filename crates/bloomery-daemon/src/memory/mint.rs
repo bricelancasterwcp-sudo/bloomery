@@ -14,7 +14,11 @@
 //!   `step: u32` field, which can repeat across a re-ask
 //!   (`task_loop::propose_action`'s multi-attempt journaling records one
 //!   entry per parse attempt, all under the same outer step number, before
-//!   the eventually-executed action's own entry).
+//!   the eventually-executed action's own entry). **Amendment (code review
+//!   finding, 2026-08-26):** when more than one run completes in the window
+//!   after the last successful patch, the bar reads the LAST completed run
+//!   in that window, not the first passing one — see [`verifying_run`]'s own
+//!   doc comment for the honesty rationale.
 //! - [`build_episode`] additionally refuses over any `PreTouch::Uncomputable`
 //!   in `result.touched_files` — deliberately conservative, never
 //!   downgraded to a guessed hash. A truncated `read` pins `Uncomputable`
@@ -39,23 +43,53 @@ use super::record::{
 ///
 /// 1. `result.status == TaskStatus::Done`.
 /// 2. At least one step with `verb == "patch" && !failed` exists.
-/// 3. Strictly after that LAST such patch step (by position in
-///    `result.steps`, not by the `step` field — see this module's docs), a
-///    step with `verb == "run" && !failed && outcome.ends_with(" exit 0")`
-///    exists.
+/// 3. Within the window strictly after that LAST such patch step (by
+///    position in `result.steps`, not by the `step` field — see this
+///    module's docs), the LAST COMPLETED run — `verb == "run" && !failed`,
+///    a run that finished, not necessarily one that passed — has an
+///    `outcome` ending in `" exit 0"`.
 ///
-/// The ` exit 0` suffix is the ONLY exit-code evidence available: `run`'s
-/// executor (`crate::task::exec_run::exec_run`, the `Ok(status) =>` arm)
-/// reports `failed: false` for a completed run at ANY exit code — zero or
-/// not — and reserves `failed: true` for a grant violation, a spawn
-/// failure, or a timeout (a command that never finished at all). So
-/// `!failed` alone proves the run *completed*, never that it *succeeded*;
-/// only the pinned `"ran {program} exit {code}"` outcome string
-/// (`exec_run.rs`) carries the exit code, and matching its `" exit 0"`
-/// suffix is the only way to read it back out.
+/// **Last completed run wins, not first passing run** (amendment; code
+/// review finding, 2026-08-26). Spec §2's own phrasing ("a granted `run`
+/// command exited 0 after the last successful `patch`") is existential —
+/// it does not say WHICH run, when several ran in the window. Taking the
+/// first passing run in that window was wrong: `patch → run exit 0 → run
+/// exit 1 → done` would mint citing a stale pass while the trajectory's own
+/// final, completed evidence is a failure — record dishonesty exactly the
+/// kind spec §2's "nothing in the record is model prose" line (extended in
+/// [`build_episode`]'s docs to "nothing in the record is a guess") exists
+/// to forbid. The ruling reads spec §2 strictly: the record must reflect
+/// the task's own FINAL verifying evidence in the window, so this searches
+/// backward from the end of the window for the last run that *completed*,
+/// and mints only if THAT run's outcome ends `" exit 0"`. Consequences:
+/// an earlier pass in the same window does not rescue a later completed
+/// failure (no mint); a later completed pass DOES rescue an earlier
+/// completed failure (mint, citing the later pass); and a later
+/// STRUCTURALLY failed run (timeout, spawn failure, grant violation —
+/// `failed: true`, meaning it never actually completed) does not veto an
+/// earlier completed pass, because a run that never finished carries no
+/// evidence about what the command would have reported — see the next
+/// paragraph for why `exec_run` makes that distinction exact.
 ///
-/// Returns the qualifying run step itself (the first one found after the
-/// last successful patch, in step order) — the caller's evidence for
+/// `!failed` distinguishes a run that *completed* (`exec_run`'s
+/// `Ok(status) =>` arm, `exec_run.rs`) from one that never did — a grant
+/// violation, a spawn failure, or a timeout (`Err(RunFailure::..)` arms) —
+/// which `exec_run` always marks `failed: true` and which never carries a
+/// real exit code in its `outcome` string. So a `failed: true` step is
+/// invisible to this search entirely: it neither verifies (it isn't a
+/// completion) nor vetoes (it says nothing about whether an earlier
+/// completed run in the same window actually passed).
+///
+/// The ` exit 0` suffix remains the only exit-code evidence a completed run
+/// carries: `exec_run`'s pinned success-arm format string is
+/// `"ran {program} exit {code}"` (`exec_run.rs`, the `Ok(status) =>` arm),
+/// and `failed: false` is reported for EVERY exit code, zero or not — so
+/// `!failed` alone proves a run completed, never that it exited zero; only
+/// matching the outcome's own `" exit 0"` suffix reads the exit code back
+/// out.
+///
+/// Returns the qualifying run step itself — the last completed run in the
+/// window, when its outcome passes — the caller's evidence for
 /// `run_evidence`.
 pub fn verifying_run(result: &TaskResult) -> Option<&TaskStepRecord> {
     if result.status != TaskStatus::Done {
@@ -67,9 +101,11 @@ pub fn verifying_run(result: &TaskResult) -> Option<&TaskStepRecord> {
         .iter()
         .rposition(|s| s.verb == "patch" && !s.failed)?;
 
-    result.steps[last_successful_patch + 1..]
-        .iter()
-        .find(|s| s.verb == "run" && !s.failed && s.outcome.ends_with(" exit 0"))
+    let window = &result.steps[last_successful_patch + 1..];
+    let last_completed_run = window.iter().rposition(|s| s.verb == "run" && !s.failed)?;
+    let candidate = &window[last_completed_run];
+
+    candidate.outcome.ends_with(" exit 0").then_some(candidate)
 }
 
 /// Everything [`build_episode`] needs beyond the task's own evidence: the
