@@ -151,6 +151,19 @@ fn corrupt_lines_are_counted_never_fatal() {
         1,
         "the corrupt line is counted, not silently dropped"
     );
+
+    // A count match alone can't catch a bug that swaps or corrupts survivor
+    // data while preserving the total, so pin the exact surviving ids and
+    // their field values against what was minted.
+    let mut survivors: Vec<_> = store.episodes().collect();
+    survivors.sort_by(|a, b| a.episode_id.cmp(&b.episode_id));
+    assert_eq!(survivors.len(), 2);
+    assert_eq!(survivors[0].episode_id, "e1");
+    assert_eq!(survivors[0].goal_hash, "gh1");
+    assert_eq!(survivors[0].minted_at, 1);
+    assert_eq!(survivors[1].episode_id, "e2");
+    assert_eq!(survivors[1].goal_hash, "gh2");
+    assert_eq!(survivors[1].minted_at, 2);
 }
 
 #[test]
