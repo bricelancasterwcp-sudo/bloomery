@@ -102,16 +102,28 @@ fn cited_file_matches(cf: &CitedFile, grant: &Grant) -> bool {
             sha256_hex_bytes(&bytes) == *expected_hex
         }
         Fingerprint::Absent => {
-            // A nonexistent path cannot be canonicalized, so `check_read`
-            // has nothing to resolve against for the "does not exist" case
-            // — per spec §3 the grant gate still applies to an `absent`
-            // expectation, so the honest check here is lexical: the path
-            // must sit under a declared read root via `Path::starts_with`.
-            // Stored `cited_files[].path` values are already canonical-
-            // absolute (Task 3's capture seam), so this lexical check is
-            // exactly the containment `check_read` would have confirmed had
-            // the file existed — not a traversal shortcut.
-            !path.exists() && grant.read_roots().iter().any(|root| path.starts_with(root))
+            // The grant gate still applies to an `absent` expectation (spec
+            // §3), but `check_read` cannot be called here: it canonicalizes
+            // `path` itself (`grant/path.rs`'s `resolve_within`), and a
+            // nonexistent path has nothing to canonicalize. So the target
+            // stays purely lexical — `path` is already canonical-absolute
+            // (Task 3's capture seam) — but the *roots* it is compared
+            // against must be canonicalized here too, to match
+            // `check_read`'s own containment semantics: `check_read`
+            // canonicalizes every root before comparing
+            // (`crates/bloomery-core/src/grant/path.rs:76-79`), so a
+            // declared root that is itself non-canonical (e.g. a symlinked
+            // directory) is still honored by `check_read` and must be
+            // honored here too — otherwise a symlinked grant root would
+            // silently miss every `absent` citation beneath it. A root that
+            // fails to canonicalize (doesn't exist) is skipped, same as
+            // `check_read` (spec §7: silent-on-failure).
+            !path.exists()
+                && grant
+                    .read_roots()
+                    .iter()
+                    .filter_map(|r| std::fs::canonicalize(r).ok())
+                    .any(|root| path.starts_with(&root))
         }
     }
 }

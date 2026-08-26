@@ -254,6 +254,56 @@ fn contradicted_is_silence() {
     );
 }
 
+/// A symlinked grant root must still cover an `absent` citation under the
+/// real (canonical) directory it points to. `check_read` canonicalizes
+/// every declared root before comparing
+/// (`crates/bloomery-core/src/grant/path.rs:76-79`), so a raw, non-canonical
+/// root (e.g. a symlink) is honored for an existing file; the `absent`
+/// branch's lexical containment check must canonicalize roots the same way,
+/// or a symlinked read root would silently fail to cover any `absent`
+/// citation beneath it — exactly the false-negative silence the fix in this
+/// module addresses.
+#[test]
+fn a_symlinked_grant_root_still_covers_an_absent_citation_beneath_it() {
+    let base = fresh_dir("absent-symlink");
+    let real_dir = base.join("real");
+    std::fs::create_dir(&real_dir).unwrap();
+    let link_path = base.join("link");
+    std::os::unix::fs::symlink(&real_dir, &link_path).unwrap();
+
+    // The grant's read root is the *symlink* path, deliberately not
+    // pre-canonicalized — this is the case the old lexical-only check
+    // missed.
+    let grant = Grant::from_json(&format!(
+        r#"{{"read_roots":["{s}"],"write_roots":["{s}"],"commands":[]}}"#,
+        s = link_path.display()
+    ))
+    .unwrap();
+
+    // The cited `absent` path is built from the REAL canonical directory —
+    // matching what the capture seam actually mints — and never created.
+    let canonical_real = std::fs::canonicalize(&real_dir).unwrap();
+    let missing = canonical_real.join("ghost.txt");
+    let cited = vec![CitedFile {
+        path: missing.display().to_string(),
+        fingerprint: Fingerprint::Absent,
+    }];
+
+    let mut store = empty_store(&base);
+    store
+        .mint(ep("e1", GOAL, cited, "verified", 1), 10)
+        .unwrap();
+
+    let result = retrieve(&store, GOAL, &grant, &base);
+
+    assert_eq!(result.candidates_checked, 1);
+    assert_eq!(
+        result.injected.map(|e| e.episode_id),
+        Some("e1".to_string()),
+        "an absent citation under a symlinked grant root must still inject"
+    );
+}
+
 #[test]
 fn unreadable_cited_file_is_silence_not_error() {
     let dir = fresh_dir("unreadable");
