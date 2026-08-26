@@ -906,3 +906,78 @@ fn an_oversized_memory_block_is_skipped_and_stamped_silent() {
         "the skip must name the episode and the bound: {reasons:?}"
     );
 }
+
+/// Spec §7's "Mint-time store IO failure: journal a warning row; the task's
+/// own result is unaffected", end to end — and the reachable half of the
+/// review finding that put both organ regions under `catch_unwind`: whatever
+/// the organ does wrong, **step 7's registry write still runs and the task's
+/// earned result survives intact**.
+///
+/// The failure is real and deterministic, not mocked: the store loads
+/// normally, then its file is replaced by a *directory* before the task
+/// runs, so `MemoryStore::mint`'s append (`OpenOptions::append(true).open`)
+/// gets a genuine `io::Error` from the OS. The task is one that clears the
+/// mint bar, so the organ definitely reaches the failing call — a task with
+/// nothing to mint would pass this test vacuously.
+///
+/// This does not exercise the *panic* path (every organ function is
+/// unwrap-free and returns `Result` for each fallible operation, so an
+/// integration test cannot honestly make one panic without a test-only
+/// production seam — see `registry.rs`'s
+/// `contained_catches_a_panic_journals_it_and_lets_the_caller_continue`,
+/// which pins the guard itself). It does pin the property the guard exists
+/// to protect, on the one organ-failure path that is reachable from outside.
+#[test]
+fn a_store_io_failure_leaves_the_task_result_intact_and_terminal() {
+    let dir = fresh_dir("store-io-fail");
+    let (sb, grant) = sandbox(&dir);
+    let (pager, agent_id) = build_pager(&dir, fixing_turns());
+    let pager = Arc::new(Mutex::new(pager));
+    let registry = TaskRegistry::new();
+    let journal_path = dir.join("tasks.jsonl");
+    let ctx = memory_ctx(&dir, true);
+
+    // The store loaded fine; now make every future append fail at the OS
+    // level by putting a directory where its file belongs.
+    let store_file = store_path(&dir);
+    let _ = std::fs::remove_file(&store_file);
+    std::fs::create_dir_all(&store_file).unwrap();
+    assert!(store_file.is_dir());
+
+    let (task_id, result) = drive(
+        &registry,
+        &pager,
+        &agent_id,
+        spec_for("make a.py say two", &grant, &sb),
+        &journal_path,
+        Some(Arc::clone(&ctx)),
+    );
+
+    // The task is terminal (never wedged at `Running`) and its evidence is
+    // whole — the organ discarded nothing.
+    assert_eq!(result.status, TaskStatus::Done, "{result:?}");
+    assert_eq!(result.steps.len(), 4, "{:?}", result.steps);
+    assert!(result.steps.iter().all(|s| !s.failed), "{:?}", result.steps);
+    assert_eq!(result.summary.as_deref(), Some("fixed"));
+    assert_eq!(result.landed_patches.len(), 1);
+    // And a later poll reads the same terminal entry back, which is the
+    // property a wedged worker would break.
+    let polled = registry.get(&task_id).expect("the entry is still there");
+    assert_eq!(polled.status, TaskStatus::Done);
+    assert_eq!(polled.steps.len(), 4);
+
+    let events = replay(&journal_path).unwrap();
+    // The organ tried and failed, loudly: no mint row, and a Degraded row
+    // naming the task.
+    assert!(
+        mint_ids(&events).is_empty(),
+        "the append failed, so nothing was minted: {events:?}"
+    );
+    let reasons = degraded_reasons(&events);
+    assert!(
+        reasons
+            .iter()
+            .any(|r| r.contains("could not mint") && r.contains(&task_id)),
+        "the failure must be on the record, naming the task: {reasons:?}"
+    );
+}

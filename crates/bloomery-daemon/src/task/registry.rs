@@ -218,6 +218,259 @@ fn degrade(journal: &mut Journal, reason: String) {
     record(journal, &Event::Degraded { reason });
 }
 
+/// The words a caught panic carries, phrased for a `Degraded` reason — the
+/// organ's counterpart to [`panic_message`]'s task-worker subject, built on
+/// the same [`panic_payload_message`] extractor so there is one place that
+/// knows how to read a payload.
+fn panic_note(payload: &(dyn Any + Send + 'static)) -> String {
+    panic_payload_message(payload).unwrap_or_else(|| "no string message on the payload".to_string())
+}
+
+/// Runs one memory-organ region under panic containment, journaling a
+/// `Degraded` row and returning `None` if it unwinds.
+///
+/// **This is the module's "Panic containment" discipline applied to the
+/// organ.** That section explains why a panic under the worker's `run_task`
+/// call had to be caught: an unwind escapes the closure, so the thread dies
+/// before the terminal registry write and `TaskRegistry::get` reports
+/// `Running` forever — an unbounded wait for every poller. The organ's own
+/// code sits in the same thread, on both sides of that call, and inherits
+/// the identical hazard plus a second one: a panic in the POST-run region
+/// would discard a `TaskResult` the task had already earned.
+///
+/// It also inherits the organ's own hard constraint (memory-organ design §7,
+/// "the organ being broken can only ever produce memory-off behavior — never
+/// a wrong injection, never a failed task"): the organ is advisory, so
+/// nothing it does — including dying — may change a task's status, steps or
+/// result. Containment is what makes that true of a *panic* and not merely
+/// of the `Result`-returning failures every organ call already handles.
+///
+/// Every organ function is unwrap-free today and every fallible operation in
+/// them returns `Result`, so this wrapper is defence in depth rather than a
+/// live bug fix — which is exactly why it must be structural: the next
+/// contributor to `retrieve`/`render`/`mint` should not have to know that an
+/// index-out-of-bounds there wedges unrelated tasks.
+///
+/// `f` is handed the journal by reborrow (not by move) so the caller keeps
+/// using the same handle afterward — including for the `Degraded` row this
+/// writes on the failing path.
+fn contained<T>(
+    journal: &mut Journal,
+    region: &str,
+    f: impl FnOnce(&mut Journal) -> T,
+) -> Option<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&mut *journal))) {
+        Ok(value) => Some(value),
+        Err(payload) => {
+            degrade(
+                journal,
+                format!(
+                    "memory organ: {region} panicked ({}); the task itself is unaffected",
+                    panic_note(payload.as_ref())
+                ),
+            );
+            None
+        }
+    }
+}
+
+/// What the organ decided before the task ran: what its stamp will say, and
+/// the block (if any) to inject into the spec.
+///
+/// Returned rather than written straight into the `TaskSpec` so that a panic
+/// inside [`organ_before_run`] cannot leave a half-injected spec behind: the
+/// caller assigns `spec.memory_block` only from a decision that was returned
+/// intact, so an unwinding organ injects nothing at all rather than
+/// something partial.
+struct OrganDecision {
+    /// `"off"` | `"silent"` | `"injected"` — see `Event::MemoryStamp`.
+    mode: &'static str,
+    candidates_checked: u32,
+    injected_id: Option<String>,
+    block: Option<String>,
+}
+
+impl OrganDecision {
+    /// The memory-off decision: the organ said nothing and examined nothing.
+    /// Also the honest fallback when the organ *panicked* before deciding —
+    /// design §7 already folds "the organ is broken" into the `"off"` mode
+    /// (that is what the store-unreadable-at-boot case stamps), and the
+    /// accompanying `Degraded` row carries the why.
+    fn off() -> OrganDecision {
+        OrganDecision {
+            mode: "off",
+            candidates_checked: 0,
+            injected_id: None,
+            block: None,
+        }
+    }
+}
+
+/// Steps 1-3 of the pipeline (design §3/§4): retrieve, then decide whether
+/// to inject, silence, or stay off.
+///
+/// Rendering happens here, before the caller writes the stamp, because the
+/// oversize rule can turn an otherwise-injected episode into a silent one —
+/// and a stamp claiming an injection the prompt never carried would be the
+/// one lie that row exists to prevent.
+fn organ_before_run(
+    organ: Option<(&Mutex<MemoryStore>, usize)>,
+    spec: &TaskSpec,
+    task_id: &str,
+    journal: &mut Journal,
+) -> OrganDecision {
+    // Step 1: retrieve, holding the store lock only for the read itself —
+    // never across `run_task`, which would serialize every other task's
+    // retrieval behind this one's whole execution.
+    let Some((store, _)) = organ else {
+        return OrganDecision::off();
+    };
+    let retrieval = {
+        let store = lock_store(store, journal);
+        crate::memory::retrieve::retrieve(&store, &spec.goal, &spec.grant, &spec.cwd)
+    };
+
+    let Some(episode) = retrieval.injected else {
+        return OrganDecision {
+            mode: "silent",
+            candidates_checked: retrieval.candidates_checked,
+            injected_id: None,
+            block: None,
+        };
+    };
+
+    let block = render_memory_block(&episode);
+    if block.len() > MEMORY_BLOCK_MAX_BYTES {
+        // Controller ruling (Task 6), see `MEMORY_BLOCK_MAX_BYTES`: an
+        // oversized block could push this task into `WindowExhausted` where
+        // memory-off would have finished, and design §7 forbids the organ
+        // damaging the task. Skipped, stamped silent, and named in a
+        // `Degraded` row — `injected_id` stays `None`, so a later failure
+        // can never be blamed on an episode this prompt did not carry.
+        degrade(
+            journal,
+            format!(
+                "memory organ: episode {} rendered {} bytes, over the \
+                 {MEMORY_BLOCK_MAX_BYTES}-byte injection bound; task {task_id} runs memory-off",
+                episode.episode_id,
+                block.len(),
+            ),
+        );
+        return OrganDecision {
+            mode: "silent",
+            candidates_checked: retrieval.candidates_checked,
+            injected_id: None,
+            block: None,
+        };
+    }
+
+    OrganDecision {
+        mode: "injected",
+        candidates_checked: retrieval.candidates_checked,
+        injected_id: Some(episode.episode_id.clone()),
+        block: Some(block),
+    }
+}
+
+/// Everything [`organ_after_run`] needs beyond the task's own `TaskResult` —
+/// bundled into one struct (rather than six `&str` params) for the same
+/// too-many-arguments reason `task_loop::TaskState` is.
+struct OrganOutcome<'a> {
+    goal: &'a str,
+    /// Provenance, recorded and never compared (design §2).
+    model: &'a str,
+    envelope: &'a str,
+    agent_id: &'a str,
+    task_id: &'a str,
+    /// The episode this task's prompt actually carried, if any.
+    injected_id: Option<&'a str>,
+}
+
+/// Step 6 of the pipeline (design §5, then §2): contradict what the task
+/// falsified, then mint what it verified. Called after the pager guard has
+/// dropped, so the store lock is never held alongside it.
+fn organ_after_run(
+    organ: Option<(&Mutex<MemoryStore>, usize)>,
+    result: &TaskResult,
+    outcome: &OrganOutcome<'_>,
+    journal: &mut Journal,
+) {
+    let Some((store, max_episodes)) = organ else {
+        return;
+    };
+    let mut store = lock_store(store, journal);
+
+    if let Some(id) = outcome.injected_id {
+        // Design §5: a task that received an episode and then failed its own
+        // verification contradicts it. Both conjuncts are load-bearing and
+        // neither implies the other:
+        //
+        // - `is_scored_outcome` — the task must have *measured* something.
+        //   `TaskStatus::Error` is bloomery's infra bucket, not a verdict
+        //   about the episode; see that function's doc comment for the
+        //   ruling, the G4 protocol citation, and why an infra hiccup must
+        //   never read as a fresh contradiction.
+        // - `verifying_run(..).is_none()` — within a scored outcome, the
+        //   task produced no productive run after its last landed patch
+        //   (spec §2's bar, read backwards).
+        //
+        // A task that verifies falls through to the mint below, which
+        // refreshes the same identity.
+        if is_scored_outcome(&result.status) && verifying_run(result).is_none() {
+            match store.mark_contradicted(id, outcome.task_id) {
+                Ok(true) => record(
+                    journal,
+                    &Event::MemoryContradicted {
+                        id: outcome.agent_id.to_string(),
+                        task_id: outcome.task_id.to_string(),
+                        episode_id: id.to_string(),
+                    },
+                ),
+                // R-PF-2: the id is gone from the store — an operator's
+                // `DELETE /memory/{id}` can land while this task runs. No
+                // row was written, so journaling a contradiction here would
+                // fabricate store history: a replay would see an episode
+                // change status when nothing did.
+                Ok(false) => {}
+                Err(e) => degrade(
+                    journal,
+                    format!(
+                        "memory organ: could not contradict episode {id} from task {}: {e}",
+                        outcome.task_id
+                    ),
+                ),
+            }
+        }
+    }
+
+    let inputs = MintInputs {
+        goal: outcome.goal,
+        model: outcome.model,
+        envelope: outcome.envelope,
+        minted_at: now_millis(),
+    };
+    if let Some(episode) = build_episode(result, &inputs) {
+        let episode_id = episode.episode_id.clone();
+        match store.mint(episode, max_episodes) {
+            Ok(()) => record(
+                journal,
+                &Event::MemoryMint {
+                    id: outcome.agent_id.to_string(),
+                    task_id: outcome.task_id.to_string(),
+                    episode_id,
+                },
+            ),
+            Err(e) => degrade(
+                journal,
+                format!(
+                    "memory organ: could not mint episode {episode_id} from task {}: {e}",
+                    outcome.task_id
+                ),
+            ),
+        }
+    }
+}
+
 /// Whether `status` is a **scored** terminal outcome — one this daemon
 /// actually measured — rather than its infrastructure bucket.
 ///
@@ -368,65 +621,32 @@ impl TaskRegistry {
                 .filter(|ctx| ctx.operational())
                 .and_then(|ctx| ctx.store.as_ref().map(|store| (store, ctx.max_episodes)));
 
-            // Step 1 (design §3): retrieve, holding the store lock only for
-            // the read itself — never across `run_task`, which would
-            // serialize every other task's retrieval behind this one's whole
-            // execution.
-            let retrieval = organ.map(|(store, _)| {
-                let store = lock_store(store, &mut journal);
-                crate::memory::retrieve::retrieve(&store, &spec.goal, &spec.grant, &spec.cwd)
-            });
-
-            // Steps 2 and 3 (design §4): decide the stamp, then inject.
-            // Rendering happens *before* the stamp is written because the
-            // oversize rule below can turn an otherwise-injected episode
-            // into a silent one, and a stamp that claimed an injection the
-            // prompt never carried would be the one lie this row exists to
-            // prevent.
-            let mut injected_id: Option<String> = None;
-            let (mode, candidates_checked) = match &retrieval {
-                None => ("off", 0),
-                Some(r) => match &r.injected {
-                    None => ("silent", r.candidates_checked),
-                    Some(episode) => {
-                        let block = render_memory_block(episode);
-                        if block.len() > MEMORY_BLOCK_MAX_BYTES {
-                            // Controller ruling (Task 6), see
-                            // `MEMORY_BLOCK_MAX_BYTES`: an oversized block
-                            // could push this task into `WindowExhausted`
-                            // where memory-off would have finished, and
-                            // design §7 forbids the organ damaging the task.
-                            // Skipped, stamped silent, and named in a
-                            // `Degraded` row — `injected_id` stays `None`,
-                            // so a later failure can never be blamed on an
-                            // episode this prompt did not carry.
-                            degrade(
-                                &mut journal,
-                                format!(
-                                    "memory organ: episode {} rendered {} bytes, over the \
-                                     {MEMORY_BLOCK_MAX_BYTES}-byte injection bound; task \
-                                     {worker_task_id} runs memory-off",
-                                    episode.episode_id,
-                                    block.len(),
-                                ),
-                            );
-                            ("silent", r.candidates_checked)
-                        } else {
-                            injected_id = Some(episode.episode_id.clone());
-                            spec.memory_block = Some(block);
-                            ("injected", r.candidates_checked)
-                        }
-                    }
-                },
-            };
+            // Steps 1-3 (design §3/§4), under panic containment: this whole
+            // region runs in the worker thread ahead of the terminal
+            // registry write, so an unwind here would wedge the task at
+            // `Running` forever — the same failure this module's "Panic
+            // containment" section closed for `run_task`, and the same
+            // advisory-organ constraint (design §7) that forbids the organ
+            // changing a task's outcome. A panicked organ decides `off`.
+            let decision = contained(
+                &mut journal,
+                &format!("retrieval for task {worker_task_id}"),
+                |journal| organ_before_run(organ, &spec, &worker_task_id, journal),
+            )
+            .unwrap_or_else(OrganDecision::off);
+            // Step 3: injection is the caller's write, from a decision that
+            // came back intact — see `OrganDecision`.
+            spec.memory_block = decision.block;
+            let injected_id = decision.injected_id;
+            // Step 2: the stamp.
             record(
                 &mut journal,
                 &Event::MemoryStamp {
                     id: agent_id.clone(),
                     task_id: worker_task_id.clone(),
-                    mode: mode.to_string(),
+                    mode: decision.mode.to_string(),
                     episode_id: injected_id.clone(),
-                    candidates_checked,
+                    candidates_checked: decision.candidates_checked,
                 },
             );
 
@@ -486,88 +706,30 @@ impl TaskRegistry {
                 }
             };
 
-            // Step 6 (design §5, then §2): the pager guard is dropped, so
-            // the store work below never holds two locks at once.
-            if let Some((store, max_episodes)) = organ {
-                let mut store = lock_store(store, &mut journal);
-
-                if let Some(id) = &injected_id {
-                    // Design §5: a task that received an episode and then
-                    // failed its own verification contradicts it. Both
-                    // conjuncts are load-bearing and neither implies the
-                    // other:
-                    //
-                    // - `is_scored_outcome` — the task must have *measured*
-                    //   something. `TaskStatus::Error` is bloomery's infra
-                    //   bucket, not a verdict about the episode; see that
-                    //   function's doc comment for the ruling, the G4
-                    //   protocol citation, and why an infra hiccup must
-                    //   never read as a fresh contradiction.
-                    // - `verifying_run(..).is_none()` — within a scored
-                    //   outcome, the task produced no productive run after
-                    //   its last landed patch (spec §2's bar, read
-                    //   backwards).
-                    //
-                    // A task that verifies falls through to the mint below,
-                    // which refreshes the same identity.
-                    if is_scored_outcome(&result.status) && verifying_run(&result).is_none() {
-                        match store.mark_contradicted(id, &worker_task_id) {
-                            Ok(true) => record(
-                                &mut journal,
-                                &Event::MemoryContradicted {
-                                    id: agent_id.clone(),
-                                    task_id: worker_task_id.clone(),
-                                    episode_id: id.clone(),
-                                },
-                            ),
-                            // R-PF-2: the id is gone from the store — an
-                            // operator's `DELETE /memory/{id}` can land
-                            // while this task runs. No row was written, so
-                            // journaling a contradiction here would
-                            // fabricate store history: a replay would see an
-                            // episode change status when nothing did.
-                            Ok(false) => {}
-                            Err(e) => degrade(
-                                &mut journal,
-                                format!(
-                                    "memory organ: could not contradict episode {id} from task \
-                                     {worker_task_id}: {e}"
-                                ),
-                            ),
-                        }
-                    }
-                }
-
-                let inputs = MintInputs {
-                    goal: &spec.goal,
-                    model: &model,
-                    envelope: &envelope,
-                    minted_at: now_millis(),
-                };
-                if let Some(episode) = build_episode(&result, &inputs) {
-                    let episode_id = episode.episode_id.clone();
-                    match store.mint(episode, max_episodes) {
-                        Ok(()) => record(
-                            &mut journal,
-                            &Event::MemoryMint {
-                                id: agent_id.clone(),
-                                task_id: worker_task_id.clone(),
-                                episode_id,
-                            },
-                        ),
-                        Err(e) => degrade(
-                            &mut journal,
-                            format!(
-                                "memory organ: could not mint episode {episode_id} from task \
-                                 {worker_task_id}: {e}"
-                            ),
-                        ),
-                    }
-                }
-            }
+            // Step 6 (design §5, then §2), under the same containment as the
+            // pre-run region — and here the stakes are higher: an unwind
+            // would discard a `TaskResult` this task had already earned,
+            // leaving `get` on `Running` forever with the work done and
+            // thrown away. `contained`'s `Option` is only "did it finish";
+            // the `Degraded` row it writes carries the why, so nothing here
+            // needs to branch on it.
+            let outcome = OrganOutcome {
+                goal: &spec.goal,
+                model: &model,
+                envelope: &envelope,
+                agent_id: &agent_id,
+                task_id: &worker_task_id,
+                injected_id: injected_id.as_deref(),
+            };
+            let _completed = contained(
+                &mut journal,
+                &format!("mint/contradiction for task {worker_task_id}"),
+                |journal| organ_after_run(organ, &result, &outcome, journal),
+            );
 
             // Step 7: the registry entry, unchanged — the organ has not
-            // touched `result` on any path above.
+            // touched `result` on any path above, and cannot skip this write
+            // on any path either.
             let mut entries = lock_entries(&entries);
             entries.insert(worker_task_id, result);
         });
@@ -596,6 +758,74 @@ mod tests {
     use crate::config::EnvelopeLens;
     use crate::task::ExecBounds;
     use bloomery_core::action::PatchCodec;
+    use bloomery_core::journal::replay;
+
+    /// The organ's panic containment, at the seam that carries it (review
+    /// finding, 2026-08-26). Both organ regions run in the worker thread
+    /// ahead of step 7's terminal registry write, so an unwind out of either
+    /// would leave `TaskRegistry::get` reporting `Running` forever — and, in
+    /// the post-run region, would discard a `TaskResult` the task had
+    /// already earned. [`contained`] is what makes that impossible, and this
+    /// pins its three properties:
+    ///
+    /// 1. a panicking region yields `None` rather than unwinding out;
+    /// 2. the panic is journaled — a `Degraded` row naming the region and
+    ///    carrying the payload's own words, so a swallowed panic is never
+    ///    silent;
+    /// 3. the caller keeps going, with the *same* journal handle still
+    ///    usable — which is the whole point: step 7 must still run.
+    ///
+    /// Tested here rather than through the pipeline because every organ
+    /// function is unwrap-free and returns `Result` for every fallible
+    /// operation, so there is no honest way to make one panic from an
+    /// integration test without adding a production seam that exists only
+    /// for tests. This tests the guard itself, which both call sites use.
+    #[test]
+    fn contained_catches_a_panic_journals_it_and_lets_the_caller_continue() {
+        let dir = fresh_dir("contained");
+        let path = dir.join("j.jsonl");
+        let mut journal = Journal::open(&path).unwrap();
+
+        // Property 1: the panic does not escape, and the region reports it
+        // did not finish.
+        let outcome: Option<u8> = contained(&mut journal, "a scripted region", |_| {
+            panic!("scripted organ panic");
+        });
+        assert!(outcome.is_none());
+
+        // Property 3: the same handle still works afterward — a caller that
+        // must write one more row (step 7's analogue) can.
+        record(
+            &mut journal,
+            &Event::Degraded {
+                reason: "the caller continued".to_string(),
+            },
+        );
+
+        // The happy path returns the region's value untouched, so the guard
+        // is not silently swallowing successes too.
+        assert_eq!(contained(&mut journal, "a quiet region", |_| 7u8), Some(7));
+
+        // Property 2: the panic is on the record, named and attributed.
+        let reasons: Vec<String> = replay(&path)
+            .unwrap()
+            .into_iter()
+            .filter_map(|e| match e {
+                Event::Degraded { reason } => Some(reason),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(reasons.len(), 2, "{reasons:?}");
+        assert!(
+            reasons[0].contains("a scripted region")
+                && reasons[0].contains("scripted organ panic")
+                && reasons[0].contains("the task itself is unaffected"),
+            "the row must name the region, quote the payload, and say the \
+             task is unaffected: {:?}",
+            reasons[0]
+        );
+        assert_eq!(reasons[1], "the caller continued");
+    }
 
     fn fresh_dir(tag: &str) -> PathBuf {
         static UNIQUE: AtomicU64 = AtomicU64::new(0);
