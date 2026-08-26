@@ -25,10 +25,11 @@
 //!    (tracked for a future pass, not silently assumed away).
 
 use crate::task::lens_py::PythonLens;
-use crate::task::{ExecBounds, Observation};
+use crate::task::{ExecBounds, Observation, PreTouch, Touched};
 use bloomery_core::action::lens::{land, Landing, LandingLens, PlainText};
 use bloomery_core::action::PatchBody;
 use bloomery_core::grant::{Grant, GrantViolation};
+use bloomery_core::journal::sha256_hex_bytes;
 use regex::Regex;
 use std::io::{Read as _, Write as _};
 use std::os::unix::fs::OpenOptionsExt;
@@ -107,6 +108,13 @@ pub(crate) fn describe(v: &GrantViolation) -> String {
 /// short reason to both the journal tag and the model transcript, so
 /// there is nothing to keep in sync between the two.
 ///
+/// `touched: None` unconditionally, and that is a memory-organ invariant,
+/// not an omission: a failed step contributes no citation (memory-organ
+/// spec §2 — the store "can only ever contain what has execution
+/// evidence"). Because every failure path in this module and in `exec_run`
+/// routes through this one constructor, "a refused or failed step captures
+/// nothing" is structural rather than a rule each arm has to remember.
+///
 /// `pub(crate)`, not private — see [`describe`]'s doc comment; `exec_run`
 /// shares this too.
 pub(crate) fn failed(text: String) -> Observation {
@@ -114,6 +122,7 @@ pub(crate) fn failed(text: String) -> Observation {
         outcome: text.clone(),
         content: text,
         failed: true,
+        touched: None,
     }
 }
 
@@ -149,6 +158,16 @@ fn window_lines(text: &str, lines: Option<(u32, u32)>) -> String {
 /// Execute a `Read` action against `grant`. `cwd` is the task's working
 /// directory, used only to absolutize a relative `path` — see
 /// [`absolutize`].
+///
+/// **Memory-organ capture (spec §2):** a successful read reports the file's
+/// pre-touch fingerprint in [`Observation::touched`], hashed from the very
+/// `bytes` this call already read under the grant check and `O_NOFOLLOW`
+/// open above — no second open of a model-supplied path is added. When the
+/// read was truncated at `bounds.read_cap_bytes` those bytes are only a
+/// prefix, so the fingerprint is [`PreTouch::Uncomputable`] rather than a
+/// hash of the prefix: a prefix hash could never legitimately match a whole
+/// file, and recording one as if it were the file is the silent-truncation
+/// lie this module's cap+1 read exists to make impossible.
 pub fn exec_read(
     grant: &Grant,
     cwd: &Path,
@@ -181,6 +200,14 @@ pub fn exec_read(
         outcome,
         content,
         failed: false,
+        touched: Some(Touched {
+            canonical: canon,
+            pre: if truncated {
+                PreTouch::Uncomputable
+            } else {
+                PreTouch::Sha256(sha256_hex_bytes(&bytes))
+            },
+        }),
     }
 }
 
@@ -315,6 +342,18 @@ fn atomic_write(canon: &Path, contents: &str) -> std::io::Result<()> {
 ///    [`Landing::Unparsed`], the file is left completely untouched (no
 ///    write is even attempted) and a failed [`Observation`] is returned
 ///    naming which step failed and the lens involved.
+///
+/// **Memory-organ capture (spec §2):** step 1's read already distinguishes
+/// "the file exists, here are its bytes" from "the file does not exist
+/// yet", which is exactly the pre-touch fingerprint distinction the store
+/// needs — so `pre` is derived from that same read rather than from a
+/// second open, and the `NotFound` arm becomes spec §2's distinguished
+/// `absent`. The capture is attached ONLY on the [`Landing::Lands`] write
+/// success arm: on every other path the file's bytes are unchanged, so the
+/// task never touched it and has nothing to cite. A successful patch can
+/// never be [`PreTouch::Uncomputable`] — an over-cap pre-read fails the
+/// patch outright at step 1, so the bytes hashed here are always the
+/// complete file.
 pub fn exec_patch(grant: &Grant, cwd: &Path, path: &str, body: &PatchBody) -> Observation {
     let abs = absolutize(cwd, path);
     let canon = match grant.check_write(&abs) {
@@ -322,7 +361,7 @@ pub fn exec_patch(grant: &Grant, cwd: &Path, path: &str, body: &PatchBody) -> Ob
         Err(v) => return failed(format!("grant violation: {}", describe(&v))),
     };
 
-    let current = match open_nofollow_read(&canon, PATCH_READ_CAP_BYTES) {
+    let (current, pre) = match open_nofollow_read(&canon, PATCH_READ_CAP_BYTES) {
         Ok((_bytes, true)) => {
             return failed(format!(
                 "patch failed: {} exceeds the {PATCH_READ_CAP_BYTES}-byte patch read cap — \
@@ -330,8 +369,11 @@ pub fn exec_patch(grant: &Grant, cwd: &Path, path: &str, body: &PatchBody) -> Ob
                 canon.display()
             ));
         }
-        Ok((bytes, false)) => String::from_utf8_lossy(&bytes).into_owned(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Ok((bytes, false)) => (
+            String::from_utf8_lossy(&bytes).into_owned(),
+            PreTouch::Sha256(sha256_hex_bytes(&bytes)),
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (String::new(), PreTouch::Absent),
         Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
             return failed(format!(
                 "patch failed: {e} — O_NOFOLLOW refused a symlink at the final path component \
@@ -348,24 +390,34 @@ pub fn exec_patch(grant: &Grant, cwd: &Path, path: &str, body: &PatchBody) -> Ob
                 outcome: format!("patched (lens: {lens})"),
                 content: new_contents,
                 failed: false,
+                touched: Some(Touched {
+                    canonical: canon,
+                    pre,
+                }),
             },
             Err(e) => failed(format!(
                 "patch failed: could not write {}: {e}",
                 canon.display()
             )),
         },
+        // The three did-not-land arms leave the file's bytes exactly as
+        // they were, so `touched: None` is the literal truth: this task
+        // never touched that path, and citing it would put a file in the
+        // episode's evidence that the task did not actually act on.
         Landing::DidNotApply { reason, lens } => {
             let detail = format!("{reason:?}");
             Observation {
                 outcome: format!("patch did not land: did not apply (lens: {lens}): {detail}"),
                 content: detail,
                 failed: true,
+                touched: None,
             }
         }
         Landing::DidNotParse { detail, lens } => Observation {
             outcome: format!("patch did not land: did not parse (lens: {lens}): {detail}"),
             content: detail,
             failed: true,
+            touched: None,
         },
         Landing::Unparsed { language, lens } => {
             let detail = format!("lens {lens} cannot judge language {language}");
@@ -373,6 +425,7 @@ pub fn exec_patch(grant: &Grant, cwd: &Path, path: &str, body: &PatchBody) -> Ob
                 outcome: format!("patch did not land: unparsed (lens: {lens}): {detail}"),
                 content: detail,
                 failed: true,
+                touched: None,
             }
         }
     }
@@ -527,6 +580,11 @@ pub fn exec_find(
         outcome,
         content: out.join("\n"),
         failed: false,
+        // Memory-organ spec §2: "`find` steps contribute no citations
+        // (their evidence is directory state, not file bytes)" — a
+        // recorded limitation, deliberately not papered over by citing
+        // every file the walk happened to open.
+        touched: None,
     }
 }
 

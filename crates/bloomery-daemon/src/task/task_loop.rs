@@ -21,7 +21,9 @@
 use std::path::Path;
 use std::time::Instant;
 
-use bloomery_core::action::{parse_action_with_codec, verb_card_for, Action, PatchCodec};
+use bloomery_core::action::{
+    parse_action_with_codec, verb_card_for, Action, PatchBody, PatchCodec,
+};
 use bloomery_core::grant::Grant;
 use bloomery_core::journal::{Event, Journal};
 use bloomery_substrate::Substrate;
@@ -30,7 +32,7 @@ use crate::config::EnvelopeLens;
 use crate::pager::{Pager, PagerError};
 use crate::task::exec::absolutize;
 use crate::task::grant_line::grant_line;
-use crate::task::{exec_find, exec_patch, exec_read, exec_run, ExecBounds, Observation};
+use crate::task::{exec_find, exec_patch, exec_read, exec_run, ExecBounds, Observation, PreTouch};
 
 /// Everything `run_task` needs to run one task to completion: what the
 /// model is trying to do, the capability boundary it may act within, and
@@ -121,11 +123,38 @@ pub struct TaskStepRecord {
     pub args: Vec<String>,
 }
 
+/// One task's terminal outcome, plus the evidence a later mint step reads.
+///
+/// `touched_files` and `landed_patches` are the memory organ's capture
+/// (design spec `docs/superpowers/specs/2026-08-26-memory-organ-design.md`
+/// §2), carried here rather than recomputed after the fact: the pre-touch
+/// fingerprints only exist *during* execution, and the landed bodies are
+/// deliberately absent from the journal (`action_args` excludes patch
+/// bodies on purpose). Both are populated at every `run_task` return site,
+/// including the terminal ones — a task that ran out of steps or window
+/// still touched whatever it touched, and hiding that from a caller would
+/// make the two fields silently mean "only on a clean finish".
+///
+/// **Serialized but not exposed:** `get_task`'s HTTP response
+/// (`api_task.rs`) is built field-by-field from `status`/`steps`/`summary`
+/// and is deliberately untouched by this addition — the capture is
+/// in-process evidence for minting, not a public API surface.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TaskResult {
     pub status: TaskStatus,
     pub steps: Vec<TaskStepRecord>,
     pub summary: Option<String>,
+    /// Canonical path → the file's fingerprint as of this task's FIRST
+    /// touch of it. A `BTreeMap` so iteration order is the path order spec
+    /// §2's `episode_id` hash requires ("cited files sorted by path
+    /// first"), rather than a hash order that would make the same task mint
+    /// different ids on different runs.
+    pub touched_files: std::collections::BTreeMap<String, PreTouch>,
+    /// Every successfully landed patch, in step order: `(canonical path,
+    /// the decoded body verbatim)`. Spec §2 stores these so "on an exact
+    /// repeat the model can literally replay them" — which only works if
+    /// the body is the codec text that actually landed, not a re-rendering.
+    pub landed_patches: Vec<(String, PatchBody)>,
 }
 
 /// Per-step model-completion budget passed as `pager.infer`'s `max_tokens`.
@@ -153,6 +182,28 @@ const MUTATING_VERB_DEMOTED: &str = "verb unavailable: mutating verbs demoted (g
 struct TaskState {
     steps: Vec<TaskStepRecord>,
     transcript: String,
+    /// The memory-organ capture accumulating across this task's steps —
+    /// see [`TaskResult`]'s fields of the same names, which these are
+    /// moved into at every return site.
+    touched: std::collections::BTreeMap<String, PreTouch>,
+    landed: Vec<(String, PatchBody)>,
+}
+
+/// Consumes `state` into the terminal [`TaskResult`] for `status`.
+///
+/// **Every** one of [`run_task`]'s return sites goes through this function,
+/// which is the point: the memory-organ capture (`touched_files`,
+/// `landed_patches`) is carried out of the loop by construction, so a
+/// future early-return arm cannot quietly drop the evidence the way it
+/// could if each site built its own struct literal.
+fn finish(state: TaskState, status: TaskStatus, summary: Option<String>) -> TaskResult {
+    TaskResult {
+        status,
+        steps: state.steps,
+        summary,
+        touched_files: state.touched,
+        landed_patches: state.landed,
+    }
 }
 
 /// One journaled-and-recorded step's content, bundled for the same
@@ -542,6 +593,8 @@ pub fn run_task<S: Substrate>(
     let mut state = TaskState {
         steps: Vec::new(),
         transcript: String::new(),
+        touched: std::collections::BTreeMap::new(),
+        landed: Vec::new(),
     };
 
     for step in 1..=spec.max_steps {
@@ -550,11 +603,7 @@ pub fn run_task<S: Substrate>(
                 ProposeOutcome::Action(action, duration_ms) => (action, duration_ms),
                 ProposeOutcome::StepFailed => continue,
                 ProposeOutcome::Terminate(status, summary) => {
-                    return TaskResult {
-                        status,
-                        steps: state.steps,
-                        summary,
-                    };
+                    return finish(state, status, summary);
                 }
             };
 
@@ -568,17 +617,9 @@ pub fn run_task<S: Substrate>(
                 args: Vec::new(),
             };
             if let Err(msg) = record_step(journal, agent_id, &mut state, step, report) {
-                return TaskResult {
-                    status: TaskStatus::Error,
-                    steps: state.steps,
-                    summary: Some(msg),
-                };
+                return finish(state, TaskStatus::Error, Some(msg));
             }
-            return TaskResult {
-                status: TaskStatus::Done,
-                steps: state.steps,
-                summary: Some(summary.clone()),
-            };
+            return finish(state, TaskStatus::Done, Some(summary.clone()));
         }
 
         // Gate G4 structural enforcement (docs/superpowers/evidence/
@@ -608,11 +649,7 @@ pub fn run_task<S: Substrate>(
                     args: action_args(&action),
                 };
                 if let Err(msg) = record_step(journal, agent_id, &mut state, step, report) {
-                    return TaskResult {
-                        status: TaskStatus::Error,
-                        steps: state.steps,
-                        summary: Some(msg),
-                    };
+                    return finish(state, TaskStatus::Error, Some(msg));
                 }
                 continue;
             }
@@ -630,17 +667,50 @@ pub fn run_task<S: Substrate>(
             args: action_args(&action),
         };
         if let Err(msg) = record_step(journal, agent_id, &mut state, step, report) {
-            return TaskResult {
-                status: TaskStatus::Error,
-                steps: state.steps,
-                summary: Some(msg),
-            };
+            return finish(state, TaskStatus::Error, Some(msg));
+        }
+
+        // Memory-organ capture (design spec §2). Deliberately AFTER
+        // `record_step`: a journal write that fails means this step was
+        // not observed at all (this module's journal rule), and evidence
+        // from an unobserved step is exactly what the store must not
+        // contain — so that early return skips the capture rather than
+        // racing it. Gated on `!obs.failed`
+        // rather than on the verb: only an executor that actually achieved
+        // its verb sets `obs.touched`, and only a succeeded step is
+        // evidence. That gate is deliberately redundant with the executors'
+        // own `touched: None` on every failure arm — belt and braces on the
+        // one rule the whole store rests on ("only what has execution
+        // evidence"), so neither side alone can readmit a failed step's
+        // citation. `or_insert` IS the first-touch rule — the task's LATER
+        // touches of a path it already touched (the read-then-patch habit
+        // the flywheel trains) must not overwrite the fingerprint of the
+        // bytes as they stood before the task ran, which is the only thing
+        // a retrieval fingerprint gate can honestly compare an incoming
+        // task's workspace against.
+        if !obs.failed {
+            if let Some(t) = &obs.touched {
+                state
+                    .touched
+                    .entry(t.canonical.display().to_string())
+                    .or_insert(t.pre.clone());
+            }
+        }
+
+        // The landed bodies, in step order. Keyed off the *observation's*
+        // canonical path, not the action's model-supplied string, so a
+        // patch and the read that preceded it cite one identical path key.
+        // The `obs.touched` match is what makes "landed" mean landed: a
+        // patch that did not apply, did not parse, or failed its write
+        // never sets it.
+        if verb == "patch" && !obs.failed {
+            if let (Action::Patch { body, .. }, Some(t)) = (&action, &obs.touched) {
+                state
+                    .landed
+                    .push((t.canonical.display().to_string(), body.clone()));
+            }
         }
     }
 
-    TaskResult {
-        status: TaskStatus::StepsExhausted,
-        steps: state.steps,
-        summary: None,
-    }
+    finish(state, TaskStatus::StepsExhausted, None)
 }

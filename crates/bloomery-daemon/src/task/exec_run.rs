@@ -298,12 +298,18 @@ pub fn exec_run(grant: &Grant, cwd: &Path, argv: &[String], bounds: &ExecBounds)
                 outcome: format!("ran {program} exit {code}"),
                 content: format!("exit {code}\n{output}"),
                 failed: false,
+                // A `run` is a citation of *command* evidence, not file
+                // bytes: memory-organ spec §2 carries it as the episode's
+                // `run_evidence`, separate from `cited_files`, and this
+                // executor never reads a file to hash in the first place.
+                touched: None,
             }
         }
         Err(RunFailure::TimedOut) => Observation {
             outcome: format!("ran {program} timed out"),
             content: format!("timed out after {run_timeout_secs}s\n{output}"),
             failed: true,
+            touched: None,
         },
         Err(RunFailure::WaitFailed(e)) => {
             failed(format!("run failed: could not wait for {program:?}: {e}"))

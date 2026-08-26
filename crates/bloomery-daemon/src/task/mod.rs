@@ -25,6 +25,52 @@ pub use grant_line::grant_line;
 pub use registry::TaskRegistry;
 pub use task_loop::{run_task, TaskResult, TaskSpec, TaskStatus, TaskStepRecord};
 
+/// A file's content fingerprint as it stood *immediately before* the task
+/// first touched it — the memory organ's citation unit (memory-organ design
+/// spec `docs/superpowers/specs/2026-08-26-memory-organ-design.md` §2: each
+/// cited file carries "the sha256 of its bytes **before the task's first
+/// touch** of that path, captured during execution").
+///
+/// Three variants, not two, because there are three honestly distinct
+/// states and collapsing any pair would make a stored episode lie:
+///
+/// - `Sha256` — the executor held the file's *complete* bytes and hashed
+///   them. The only variant a retrieval fingerprint gate can compare
+///   against.
+/// - `Absent` — the file did not exist when the task first touched it (an
+///   `exec_patch` whose pre-read returned `NotFound`, i.e. the task created
+///   it). Spec §2's "distinguished fingerprint `absent`". Distinct from
+///   `Sha256` of the empty string: "no file" and "an empty file" are
+///   different prior states, and a repeat that finds one where the episode
+///   recorded the other is not the same situation.
+/// - `Uncomputable` — the file was touched, but its full pre-touch bytes
+///   were never in hand, so no honest whole-file hash exists. Produced by a
+///   read truncated at `ExecBounds::read_cap_bytes`: the executor saw a
+///   prefix, and hashing a prefix as if it were the file is exactly the
+///   silent-truncation lie this crate's caps exist to prevent. Task 5's
+///   mint bar refuses to mint an episode over one of these rather than
+///   storing a fingerprint that can never legitimately match.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub enum PreTouch {
+    Sha256(String),
+    Absent,
+    Uncomputable,
+}
+
+/// One successful `read`/`patch` step's capture: *which* file it touched,
+/// and that file's [`PreTouch`] fingerprint.
+///
+/// `canonical` is the path the `Grant` check *returned* — never the model's
+/// raw target string — for the same reason every open in [`exec`] uses it
+/// (see that module's obligation 1): it is the single resolved identity of
+/// the file the executor actually operated on, so two spellings of one path
+/// cite one file rather than two.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Touched {
+    pub canonical: std::path::PathBuf,
+    pub pre: PreTouch,
+}
+
 /// The result of executing one action: what to feed back to the model, and
 /// a short outcome tag for the `TaskStep` journal entry.
 ///
@@ -36,11 +82,24 @@ pub use task_loop::{run_task, TaskResult, TaskSpec, TaskStatus, TaskStepRecord};
 /// violation or an execution failure — never for a verb that ran cleanly
 /// but simply found nothing (e.g. a `find` with zero matches is not a
 /// failure of `find`).
+///
+/// `touched` is the memory organ's capture seam (spec §2): `Some` exactly
+/// when this step *successfully* `read` or `patch`ed one file, carrying
+/// that file's canonical path and pre-first-touch fingerprint. It is
+/// deliberately part of the `Observation` rather than recomputed later:
+/// the fingerprint must be of the bytes the executor already held, under
+/// the grant check and `O_NOFOLLOW` open that authorized reading them —
+/// re-opening a model-supplied path a second time to hash it would both
+/// re-open the TOCTOU window [`exec`]'s obligations exist to narrow and
+/// hash the *wrong* (post-patch) bytes. Every other construction site —
+/// `exec_find`, `exec_run`, and the shared `failed()` helper — sets `None`:
+/// a step that did not touch a file's bytes has nothing to cite.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Observation {
     pub outcome: String,
     pub content: String,
     pub failed: bool,
+    pub touched: Option<Touched>,
 }
 
 /// The bounds an executor enforces. Sourced from `Config` (Task 5 wires

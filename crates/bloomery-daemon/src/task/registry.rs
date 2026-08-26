@@ -122,6 +122,27 @@ fn lock_entries(
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// A [`TaskResult`] for a task this registry has no execution evidence for:
+/// the `Running` placeholder written before the worker thread starts, and
+/// the three arms where `run_task` either never ran (journal open failed,
+/// pager poisoned) or did not return (a caught panic).
+///
+/// Every field is empty, including the memory-organ capture
+/// (`docs/superpowers/specs/2026-08-26-memory-organ-design.md` §2). That is
+/// the honest value, not a placeholder to fill in later — most sharply for
+/// the caught-panic arm: a task that died mid-flight touched files this
+/// thread cannot enumerate, and the store may "only ever contain what has
+/// execution evidence" (§2). Reporting nothing is correct; guessing is not.
+fn without_evidence(status: TaskStatus, summary: Option<String>) -> TaskResult {
+    TaskResult {
+        status,
+        steps: Vec::new(),
+        summary,
+        touched_files: std::collections::BTreeMap::new(),
+        landed_patches: Vec::new(),
+    }
+}
+
 /// A running or finished task, keyed by a monotonic `task-<n>` id.
 pub struct TaskRegistry {
     entries: Entries,
@@ -169,14 +190,7 @@ impl TaskRegistry {
 
         {
             let mut entries = lock_entries(&self.entries);
-            entries.insert(
-                task_id.clone(),
-                TaskResult {
-                    status: TaskStatus::Running,
-                    steps: Vec::new(),
-                    summary: None,
-                },
-            );
+            entries.insert(task_id.clone(), without_evidence(TaskStatus::Running, None));
         }
 
         let entries = Arc::clone(&self.entries);
@@ -188,14 +202,13 @@ impl TaskRegistry {
                     let mut entries = lock_entries(&entries);
                     entries.insert(
                         worker_task_id,
-                        TaskResult {
-                            status: TaskStatus::Error,
-                            steps: Vec::new(),
-                            summary: Some(format!(
+                        without_evidence(
+                            TaskStatus::Error,
+                            Some(format!(
                                 "failed to open task journal {}: {e}",
                                 journal_path.display()
                             )),
-                        },
+                        ),
                     );
                     return;
                 }
@@ -216,11 +229,10 @@ impl TaskRegistry {
                     }));
                     match outcome {
                         Ok(result) => result,
-                        Err(payload) => TaskResult {
-                            status: TaskStatus::Error,
-                            steps: Vec::new(),
-                            summary: Some(panic_message(payload.as_ref())),
-                        },
+                        Err(payload) => without_evidence(
+                            TaskStatus::Error,
+                            Some(panic_message(payload.as_ref())),
+                        ),
                     }
                 }
                 Err(_) => {
@@ -229,13 +241,12 @@ impl TaskRegistry {
                     // one, and `api_native::lock_pager`'s sticky-poison
                     // reasoning applies in full — a poisoned pager's state
                     // is not vouched for, so this task did not run.
-                    TaskResult {
-                        status: TaskStatus::Error,
-                        steps: Vec::new(),
-                        summary: Some(
+                    without_evidence(
+                        TaskStatus::Error,
+                        Some(
                             "pager state poisoned by a prior panic; restart the daemon".to_string(),
                         ),
-                    }
+                    )
                 }
             };
 

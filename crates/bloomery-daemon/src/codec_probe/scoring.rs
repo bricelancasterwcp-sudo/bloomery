@@ -223,6 +223,9 @@ mod tests {
 
     #[test]
     fn detail_prefers_the_last_patch_step_then_falls_back_to_the_status() {
+        // `fixture_detail` reads only `status` and `steps`; the
+        // memory-organ capture fields are empty here because this test has
+        // no opinion about them, not because a real task's would be.
         let result = TaskResult {
             status: TaskStatus::Done,
             steps: vec![
@@ -231,6 +234,8 @@ mod tests {
                 step("done", false, "all set"),
             ],
             summary: None,
+            touched_files: std::collections::BTreeMap::new(),
+            landed_patches: Vec::new(),
         };
         assert_eq!(fixture_detail(&result), "patched (lens: plaintext)");
 
@@ -238,6 +243,8 @@ mod tests {
             status: TaskStatus::StepsExhausted,
             steps: vec![step("read", false, "read 2 lines")],
             summary: None,
+            touched_files: std::collections::BTreeMap::new(),
+            landed_patches: Vec::new(),
         };
         assert_eq!(fixture_detail(&no_patch), "StepsExhausted");
     }
