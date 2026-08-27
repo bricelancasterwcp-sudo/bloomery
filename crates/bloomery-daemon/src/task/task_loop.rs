@@ -142,6 +142,11 @@ pub struct TaskStepRecord {
     pub failed: bool,
     /// Same list `Event::TaskStep::args` carries (turn-5 spec §3).
     pub args: Vec<String>,
+    /// The ladder rung this step's prompt was sent at (window-ladder spec
+    /// §6) — the same value `Event::TaskStep::rung` carries. Always 1 for a
+    /// ladder-off task. Serialized, so `get_task`'s `"steps"` array exposes
+    /// it without any `api_task` change.
+    pub rung: u32,
 }
 
 /// One task's terminal outcome, plus the evidence a later mint step reads.
@@ -236,6 +241,10 @@ struct StepReport<'a> {
     duration_ms: u64,
     failed: bool,
     args: Vec<String>,
+    /// The ladder rung the prompt behind this step was ACTUALLY sent at
+    /// (window-ladder spec §6), carried into both the journal row and the
+    /// [`TaskStepRecord`].
+    rung: u32,
 }
 
 /// The action's arguments as the journal records them (turn-5 spec §3).
@@ -297,6 +306,7 @@ fn record_step(
             outcome: report.outcome.to_string(),
             duration_ms: report.duration_ms,
             args: report.args.clone(),
+            rung: report.rung,
         })
         .map_err(|e| format!("journal write failed: {e}"))?;
     state.steps.push(TaskStepRecord {
@@ -306,6 +316,7 @@ fn record_step(
         content: report.content.to_string(),
         failed: report.failed,
         args: report.args,
+        rung: report.rung,
     });
     state.transcript.push_str(&transcript_entry(
         step,
@@ -589,6 +600,7 @@ fn propose_action<S: Substrate>(
                     duration_ms,
                     failed: true,
                     args: Vec::new(),
+                    rung: 1,
                 };
                 if let Err(msg) = record_step(journal, agent_id, state, step, report) {
                     return ProposeOutcome::Terminate(TaskStatus::Error, Some(msg));
@@ -669,6 +681,7 @@ pub fn run_task<S: Substrate>(
                 duration_ms: propose_duration_ms,
                 failed: false,
                 args: Vec::new(),
+                rung: 1,
             };
             if let Err(msg) = record_step(journal, agent_id, &mut state, step, report) {
                 return finish(state, TaskStatus::Error, Some(msg));
@@ -701,6 +714,7 @@ pub fn run_task<S: Substrate>(
                     duration_ms: propose_duration_ms,
                     failed: true,
                     args: action_args(&action),
+                    rung: 1,
                 };
                 if let Err(msg) = record_step(journal, agent_id, &mut state, step, report) {
                     return finish(state, TaskStatus::Error, Some(msg));
@@ -719,6 +733,7 @@ pub fn run_task<S: Substrate>(
             duration_ms,
             failed: obs.failed,
             args: action_args(&action),
+            rung: 1,
         };
         if let Err(msg) = record_step(journal, agent_id, &mut state, step, report) {
             return finish(state, TaskStatus::Error, Some(msg));

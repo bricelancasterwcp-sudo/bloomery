@@ -94,6 +94,16 @@ pub enum Event {
         /// replay with an empty list.
         #[serde(default)]
         args: Vec<String>,
+        /// The window-ladder rung (1-4) this step's prompt was ACTUALLY
+        /// sent at — for a parse-failure row, the rung its own failed
+        /// attempt used (window-ladder design doc §6,
+        /// `docs/superpowers/specs/2026-08-27-window-ladder-design.md`).
+        /// A named default, not a bare `#[serde(default)]`: a row carrying
+        /// no `rung` key must replay as 1 — what every pre-ladder row WAS,
+        /// there being no ladder to climb — never the nonexistent rung 0
+        /// (the `default_expect_patch` compat pattern).
+        #[serde(default = "default_rung_one")]
+        rung: u32,
     },
     /// One codec-probe fixture run (G4/G5 instrument). `detail` is the last
     /// patch step's outcome, or the terminal status when no patch step ran
@@ -397,6 +407,14 @@ pub enum Event {
 /// replaying as exactly what they always were.
 fn default_expect_patch() -> String {
     "patch".to_string()
+}
+
+/// `Event::TaskStep::rung`'s serde default (window-ladder design doc §6):
+/// every step's prompt was sent at full scope before the ladder existed, so
+/// an absent key means rung 1, not rung 0 — a rung the ladder never had, and
+/// the value a bare `#[serde(default)]` would silently replay old rows as.
+fn default_rung_one() -> u32 {
+    1
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]

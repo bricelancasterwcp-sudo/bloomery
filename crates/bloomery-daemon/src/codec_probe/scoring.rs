@@ -207,6 +207,7 @@ mod tests {
             content: String::new(),
             failed,
             args: Vec::new(),
+            rung: 1,
         }
     }
 

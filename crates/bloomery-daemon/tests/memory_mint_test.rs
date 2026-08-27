@@ -32,6 +32,7 @@ fn step(verb: &str, outcome: &str, failed: bool, args: &[&str]) -> TaskStepRecor
         content: String::new(),
         failed,
         args: args.iter().map(|s| (*s).to_string()).collect(),
+        rung: 1,
     }
 }
 

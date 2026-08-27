@@ -168,6 +168,7 @@ fn agent_removed_and_task_step_round_trip() {
         outcome: "applied".into(),
         duration_ms: 41,
         args: Vec::new(),
+        rung: 1,
     };
     j.append(&e1).unwrap();
     j.append(&e2).unwrap();
@@ -511,6 +512,7 @@ fn task_step_args_and_codec_fixture_agent_round_trip() {
             "unittest".into(),
             "test_x.py".into(),
         ],
+        rung: 1,
     };
     let e2 = Event::CodecFixture {
         model: "m1".into(),
@@ -526,4 +528,43 @@ fn task_step_args_and_codec_fixture_agent_round_trip() {
     j.append(&e1).unwrap();
     j.append(&e2).unwrap();
     assert_eq!(replay(&path).unwrap(), vec![e1, e2]);
+}
+
+/// Window-ladder spec §6 compat pin: a `TaskStep` row journaled before the
+/// `rung` field existed carries no `rung` key at all, and the absent-key
+/// default must be 1 — what every such row WAS, since there was no ladder
+/// to climb — never the nonexistent rung 0 a bare `#[serde(default)]`
+/// would replay it as (the same pin `CodecFixture::expect` carries).
+#[test]
+fn a_pre_ladder_task_step_row_replays_as_rung_1() {
+    let line = r#"{"event":"TaskStep","id":"a1","step":3,"verb":"read","outcome":"ok","duration_ms":5,"args":["src/lib.rs"]}"#;
+    let event: Event = serde_json::from_str(line).expect("a pre-ladder TaskStep line must parse");
+    match event {
+        Event::TaskStep { rung, step, .. } => {
+            assert_eq!(rung, 1, "absent rung must default to 1, never 0");
+            assert_eq!(step, 3);
+        }
+        other => panic!("expected TaskStep, got {other:?}"),
+    }
+}
+
+/// New-writer round trip: a `TaskStep` row carries the rung its prompt was
+/// actually sent at (window-ladder spec §6) through serialization and back.
+#[test]
+fn a_task_step_row_round_trips_its_rung() {
+    let event = Event::TaskStep {
+        id: "a1".into(),
+        step: 7,
+        verb: "read".into(),
+        outcome: "ok".into(),
+        duration_ms: 5,
+        args: Vec::new(),
+        rung: 3,
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    assert!(json.contains(r#""rung":3"#), "rung serializes: {json}");
+    match serde_json::from_str::<Event>(&json).unwrap() {
+        Event::TaskStep { rung, .. } => assert_eq!(rung, 3),
+        other => panic!("expected TaskStep, got {other:?}"),
+    }
 }

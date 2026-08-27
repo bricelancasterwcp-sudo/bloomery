@@ -116,6 +116,10 @@ fn a_task_runs_and_is_pollable_to_done() {
     assert_eq!(steps[0]["failed"], false);
     assert_eq!(steps[1]["verb"], "done");
     assert_eq!(steps[1]["failed"], false);
+    // Window-ladder spec §6: each step object exposes the ladder rung its
+    // prompt was actually sent at. 1 here — this task's prompts all fit.
+    assert_eq!(steps[0]["rung"], 1, "{last_body}");
+    assert_eq!(steps[1]["rung"], 1, "{last_body}");
     assert_eq!(v["summary"], "read the file");
 
     handle.shutdown();
