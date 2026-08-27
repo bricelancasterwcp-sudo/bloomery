@@ -175,11 +175,8 @@ fn ladder_off_dies_window_exhausted_on_the_first_refusal() {
     };
     let result = run_task(&mut pager, &agent_id, &spec, &mut journal);
     assert_eq!(result.status, TaskStatus::WindowExhausted);
-    assert_eq!(
-        refusals(&dir).len(),
-        1,
-        "exactly one refusal — no ladder walk"
-    );
+    let refused = refusals(&dir);
+    assert_eq!(refused.len(), 1, "exactly one refusal — no ladder walk");
     assert_eq!(
         infer_count(&pager),
         0,
@@ -188,8 +185,12 @@ fn ladder_off_dies_window_exhausted_on_the_first_refusal() {
     let summary = result
         .summary
         .expect("summary carries the pager arithmetic");
+    // Spec §2 is specific: the terminal summary carries *the pager's
+    // arithmetic*, which is both journaled numbers — a summary that kept
+    // the word "window" but lost `needed`/`window` would not satisfy it.
+    let (needed, window) = refused[0];
     assert!(
-        summary.contains("window"),
-        "arithmetic summary, got: {summary}"
+        summary.contains(&needed.to_string()) && summary.contains(&window.to_string()),
+        "summary must carry the journaled arithmetic (needed {needed}, window {window}), got: {summary}"
     );
 }
