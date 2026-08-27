@@ -403,32 +403,79 @@ fn ladder_lands_rung_3_eliding_old_entries_behind_the_head_note() {
 
 #[test]
 fn ladder_lands_rung_4_when_two_full_entries_are_too_many() {
-    // Spec §2 rung 4: two big entries; the window fits one full entry plus
-    // the other's header, not two full. Kills a MAX_RUNG 4->3 mutant.
+    // Spec §2 rung 4: big entries, a window that fits exactly ONE full entry
+    // plus the others' headers and the note. Kills a MAX_RUNG 4->3 mutant.
+    //
+    // THREE big entries, not two, on purpose. With two, rung 4 elides
+    // exactly one entry and the head note reads `1-1` — a palindrome that a
+    // `head_note(steps[0], steps[elide_end - 1])` ARGUMENT SWAP renders
+    // identically, so the range would go unpinned. The third entry makes the
+    // final rung-4 note `1-2`, which a swap renders `2-1` and this test's
+    // byte-exact `ends_with` catches.
     let dir = fresh_dir("rung4");
     let big = "y".repeat(2400);
     std::fs::write(dir.join("b.txt"), &big).unwrap();
     let read_big = "<action verb=\"read\" path=\"b.txt\">\n</action>";
     let e1 = full_entry(1, "read", "read 2400 bytes", &big);
     let e2 = full_entry(2, "read", "read 2400 bytes", &big);
-    let rung4_tail = format!("{}{}{e2}", note(1, 1), elided(1, "read", "read 2400 bytes"));
+    let e3 = full_entry(3, "read", "read 2400 bytes", &big);
+    let head1 = elided(1, "read", "read 2400 bytes");
+    let head2 = elided(2, "read", "read 2400 bytes");
+    // Step 3's rung 4: two entries, one elided behind the `1-1` note.
     let rung4_step3 = render_task_prompt(
         GOAL,
         PatchCodec::SearchReplace,
         EnvelopeLens::V1,
         &[],
-        &rung4_tail,
+        &format!("{}{head1}{e2}", note(1, 1)),
+    );
+    // Step 4's rung 4: three entries, the first TWO elided behind a `1-2`
+    // note — the range this test exists to pin.
+    let rung4_step4 = render_task_prompt(
+        GOAL,
+        PatchCodec::SearchReplace,
+        EnvelopeLens::V1,
+        &[],
+        &format!("{}{head1}{head2}{e3}", note(1, 2)),
     );
     let rung1_step2 =
         render_task_prompt(GOAL, PatchCodec::SearchReplace, EnvelopeLens::V1, &[], &e1);
-    // One big entry (step 2's rung-1) must fit; two must not. rung-4's
-    // prompt (~ one big + header + note) is the larger of the two "fits"
-    // candidates, so cap on it admits both.
-    let cap = cap_fitting(&rung4_step3).max(cap_fitting(&rung1_step2));
+    // The two prompts that must REFUSE: step 3's rung 1 (two full big
+    // entries) and step 4's rung 3 (which elides only e1 — still two full
+    // big entries, so it refuses through rung 3 naturally).
+    let rung1_step3 = render_task_prompt(
+        GOAL,
+        PatchCodec::SearchReplace,
+        EnvelopeLens::V1,
+        &[],
+        &format!("{e1}{e2}"),
+    );
+    let rung3_step4 = render_task_prompt(
+        GOAL,
+        PatchCodec::SearchReplace,
+        EnvelopeLens::V1,
+        &[],
+        &format!("{}{head1}{e2}{e3}", note(1, 1)),
+    );
+    // One big entry must fit, however much header/note rides along; two must
+    // not. Cap on the largest of the three "fits" candidates — step 4's
+    // rung 4, which carries the extra header — so all three are admitted.
+    let cap = cap_fitting(&rung4_step4)
+        .max(cap_fitting(&rung4_step3))
+        .max(cap_fitting(&rung1_step2));
+    assert!(
+        cap < cap_fitting(&rung1_step3),
+        "sizing sanity: step 3's rung 1 (two full entries) must refuse"
+    );
+    assert!(
+        cap < cap_fitting(&rung3_step4),
+        "sizing sanity: step 4's rung 3 (still two full entries) must refuse"
+    );
     let (mut pager, agent_id) = fixture(
         &dir,
         Some(cap),
         vec![
+            scripted(read_big),
             scripted(read_big),
             scripted(read_big),
             scripted("<action verb=\"done\">\nok\n</action>"),
@@ -444,20 +491,34 @@ fn ladder_lands_rung_4_when_two_full_entries_are_too_many() {
     assert_eq!(result.status, TaskStatus::Done);
     let history = pager.substrate().ctx_history(1).expect("agent ctx exists");
     assert!(
-        history.ends_with(&rung4_step3),
-        "step 3 sent the pinned rung-4 bytes"
+        history.contains(&rung4_step3),
+        "step 3 sent the pinned rung-4 bytes (note 1-1 + elided e1 + full e2)"
+    );
+    assert!(
+        history.ends_with(&rung4_step4),
+        "step 4 sent the pinned rung-4 bytes (note 1-2 + elided e1,e2 + full e3)"
     );
     let rungs: Vec<u32> = result.steps.iter().map(|s| s.rung).collect();
-    assert_eq!(rungs, vec![1, 1, 4]);
-    // Step 3 refused rungs 1, 2 (== 1: no memory), and 3 (two full entries
-    // with only two entries total elides nothing — == rung 2, §2's
-    // "renders identical ... refuses through it naturally").
+    assert_eq!(rungs, vec![1, 1, 4, 4]);
+    // Steps 3 AND 4 each refused rungs 1, 2, 3 before landing on 4 — six
+    // refusals, three per degraded step, in walk order.
     let r = refusals(&dir);
-    assert_eq!(r.len(), 3);
-    assert_eq!(r[0].0, r[1].0, "rung 2 bytes == rung 1 (no memory)");
+    assert_eq!(r.len(), 6);
+    // Step 3: rung 2 == rung 1 (no memory to drop), and rung 3 with only
+    // two entries elides nothing — == rung 2, §2's "renders identical ...
+    // refuses through it naturally".
+    assert_eq!(r[0].0, r[1].0, "step 3: rung 2 bytes == rung 1 (no memory)");
     assert_eq!(
         r[1].0, r[2].0,
-        "rung 3 with 2 entries elides nothing == rung 2"
+        "step 3: rung 3 with 2 entries elides nothing == rung 2"
+    );
+    // Step 4: rung 2 == rung 1 again, but rung 3 now DOES elide (e1 →
+    // header) and still refuses — the ladder shrank the prompt and the
+    // pager still said no, which is what makes rung 4 load-bearing here.
+    assert_eq!(r[3].0, r[4].0, "step 4: rung 2 bytes == rung 1 (no memory)");
+    assert!(
+        r[5].0 < r[4].0,
+        "step 4: rung 3 elided e1 (smaller than rung 2) and STILL refused"
     );
 }
 
