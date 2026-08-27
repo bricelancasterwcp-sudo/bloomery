@@ -9,10 +9,10 @@
 //!
 //! - Prompts: [`bloomery_daemon::task::task_loop::render_task_prompt`] and
 //!   [`bloomery_daemon::task::task_loop::transcript_entry`] — thin `pub`
-//!   wrappers task_loop.rs added around its own private `render_prompt`
-//!   and `record_step` formatting, so this binary's prompts are the exact
-//!   bytes a live task would render, not a second implementation of the
-//!   envelope.
+//!   wrappers task_loop.rs added around its own private
+//!   `render_prompt_at_rung` and `record_step` formatting, so this
+//!   binary's prompts are the exact bytes a live task would render, not a
+//!   second implementation of the envelope.
 //! - Landing: [`bloomery_core::action::lens::land`], the real
 //!   [`bloomery_core::action::lens::PlainText`] lens, and the real
 //!   [`bloomery_daemon::task::lens_py::PythonLens`] — the same applier and
@@ -21,10 +21,11 @@
 //! **A separate crate, on purpose.** A `[[bin]]` target in the same Cargo
 //! package as a library is still its own compiled crate: it can only see
 //! the library's `pub` surface, never `pub(crate)` internals. That is
-//! exactly the boundary this file is built to respect — `render_prompt`
-//! and `record_step` themselves stay private; only the two pinned wrappers
-//! (and `land`/the lenses, already `pub`) cross into this binary. The one
-//! piece of logic this file does duplicate is trivial and stated as such:
+//! exactly the boundary this file is built to respect —
+//! `render_prompt_at_rung` and `record_step` themselves stay private; only
+//! the two pinned wrappers (and `land`/the lenses, already `pub`) cross into
+//! this binary. The one piece of logic this file does duplicate is trivial
+//! and stated as such:
 //! choosing which lens applies to `target` (`.py` -> [`PythonLens`], else
 //! [`PlainText`]) is a one-line extension check, not landing logic itself
 //! — the actual apply-and-parse work is 100% delegated to the real

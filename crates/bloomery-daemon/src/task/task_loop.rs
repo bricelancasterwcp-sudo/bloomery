@@ -64,7 +64,7 @@ pub struct TaskSpec {
     /// Gate G4 (`docs/superpowers/evidence/2026-08-15-g4-protocol.md` §6):
     /// `false` means this model is demoted (or unmeasured — fail-closed
     /// read-only, same §6) and may not use `patch`/`run` this task.
-    /// `render_prompt` reflects this in the verb card the model sees
+    /// `render_prompt_at_rung` reflects this in the verb card the model sees
     /// (`verb_card_for(spec.patch_codec, spec.mutating_verbs)`), and
     /// `run_task` enforces it structurally — a `patch`/`run` action is
     /// refused before `execute_action` ever dispatches it, regardless of
@@ -74,7 +74,7 @@ pub struct TaskSpec {
     pub mutating_verbs: bool,
     /// The task-loop prompt envelope
     /// (`docs/superpowers/evidence/2026-08-15-g4-protocol.md` §10/§11,
-    /// Amendments 2 and 3; turn-4 spec §2 for `V4`): [`render_prompt`]
+    /// Amendments 2 and 3; turn-4 spec §2 for `V4`): [`render_prompt_at_rung`]
     /// appends the literal [`THINK_PRESEED`] pre-seed at the very end of the
     /// rendered prompt for `V2` and up; [`propose_action`] passes
     /// [`ACTION_STOP`] as the substrate's stop sequence for `V3` and up; and
@@ -205,6 +205,12 @@ const STEP_MAX_TOKENS: u32 = 1024;
 /// first attempt plus 2 re-asks, per the binding brief ("re-ask ... up to 2
 /// times per step").
 const MAX_PARSE_ATTEMPTS: u32 = 3;
+
+/// The fixed ladder's smallest rung (spec §2). Four rungs then refusal —
+/// robigo's shape. A rung outside 1..=MAX_RUNG reaching the renderer is a
+/// programming error and panics (spec §7: no silent clamping, either
+/// direction, ever).
+const MAX_RUNG: u32 = 4;
 
 /// The pinned gate-G4 refusal outcome (Task 7 brief — exact bytes; Task 9's
 /// scoring and the journal read this string). Recorded, not raised: a
@@ -387,14 +393,44 @@ const ACTION_STOP: &str = "</action>";
 /// existed. `tests/memory_render_test.rs` pins that against a real
 /// `run_task` under all four lenses.
 ///
-/// Deliberately does no windowing or truncation of its own. The pager's own
+/// Deliberately does no SILENT windowing or truncation. The pager's own
 /// `infer` is what refuses — with arithmetic — a prompt too large for the
-/// agent's measured window, and [`propose_action`] turns that refusal into
-/// `TaskStatus::Error`. Truncating here instead would silently drop context
-/// the model needs, exactly what the pager's "refuse, never truncate" rule
-/// (see `pager.rs`'s module docs) forbids applying to this loop's own
-/// prompt.
-fn render_prompt(spec: &TaskSpec, transcript: &str) -> String {
+/// agent's measured window (its "refuse, never truncate" rule stands
+/// untouched). What `rung` adds (window-ladder spec,
+/// `docs/superpowers/specs/2026-08-27-window-ladder-design.md`) is the
+/// CLIENT's honest response to that refusal: an explicit, fixed, journaled
+/// re-scope — rung 1 is today's bytes exactly, rung 2 drops the memory
+/// block, rungs 3/4 elide old entries to headers behind a pinned head note.
+/// Silent truncation is still forbidden; this is neither silent (the note,
+/// the `rung` field on every step row) nor heuristic (the ladder is fixed,
+/// spec §2).
+fn render_prompt_at_rung(
+    spec: &TaskSpec,
+    steps: &[TaskStepRecord],
+    transcript: &str,
+    rung: u32,
+) -> String {
+    assert!(
+        (1..=MAX_RUNG).contains(&rung),
+        "rung {rung} outside the fixed ladder 1..={MAX_RUNG} (spec §7: no silent clamping)"
+    );
+    let memory_block = if rung == 1 {
+        spec.memory_block.as_deref()
+    } else {
+        None
+    };
+    let degraded;
+    let transcript = match rung {
+        1 | 2 => transcript,
+        3 => {
+            degraded = degraded_transcript(steps, 2);
+            degraded.as_str()
+        }
+        _ => {
+            degraded = degraded_transcript(steps, 1);
+            degraded.as_str()
+        }
+    };
     render_prompt_from(
         &spec.goal,
         RenderInputs {
@@ -402,7 +438,7 @@ fn render_prompt(spec: &TaskSpec, transcript: &str) -> String {
             mutating_verbs: spec.mutating_verbs,
             envelope: spec.envelope,
             commands: spec.grant.commands(),
-            memory_block: spec.memory_block.as_deref(),
+            memory_block,
         },
         transcript,
     )
@@ -427,11 +463,12 @@ struct RenderInputs<'a> {
     memory_block: Option<&'a str>,
 }
 
-/// **The one and only prompt renderer.** Both the loop's [`render_prompt`]
-/// and the flywheel factory's [`render_task_prompt`] are thin adapters over
-/// this body; there is no second implementation of prompt assembly anywhere
-/// in the daemon or the factory, which is the property the four anti-drift
-/// tests pin against real `run_task` runs.
+/// **The one and only prompt renderer.** Both the loop's
+/// [`render_prompt_at_rung`] and the flywheel factory's
+/// [`render_task_prompt`] are thin adapters over this body; there is no
+/// second implementation of prompt assembly anywhere in the daemon or the
+/// factory, which is the property the four anti-drift tests pin against
+/// real `run_task` runs.
 ///
 /// **Demotion wins over the grant.** A gate-G4-demoted task
 /// (`mutating_verbs == false`) may not use `run` at all — [`run_task`]
@@ -479,10 +516,48 @@ fn render_prompt_from(goal: &str, inputs: RenderInputs<'_>, transcript: &str) ->
     }
 }
 
+/// Spec §2 rung 3/4: an elided entry is [`transcript_entry`]'s pinned shape
+/// minus the content line — the record of what was done survives, the
+/// re-obtainable content goes.
+fn elided_entry(step: u32, verb: &str, outcome: &str) -> String {
+    format!("\n[step {step} {verb}] {outcome}\n")
+}
+
+/// Spec §3: the pinned head note. Always the `{a}-{b}` form, even when
+/// `a == b` — fixed format, no branching. One trailing newline; the first
+/// entry's own leading newline supplies the blank line after it.
+fn head_note(first_step: u32, last_step: u32) -> String {
+    format!(
+        "[context note: contents of steps {first_step}-{last_step} elided to fit the window; outcomes retained — re-read files if needed]\n"
+    )
+}
+
+/// The rung-3/4 transcript: every entry except the last `full_window`
+/// rendered elided, behind the head note — which renders ONLY when at
+/// least one entry was actually elided (spec §3: absence adds nothing).
+/// Rebuilt from `steps` rather than sliced out of the accumulated string;
+/// [`record_step`] appends both from the same values, so the full entries
+/// here are byte-identical to their accumulated originals by construction.
+fn degraded_transcript(steps: &[TaskStepRecord], full_window: usize) -> String {
+    let elide_end = steps.len().saturating_sub(full_window);
+    let mut out = String::new();
+    if elide_end > 0 {
+        out.push_str(&head_note(steps[0].step, steps[elide_end - 1].step));
+    }
+    for (i, s) in steps.iter().enumerate() {
+        if i < elide_end {
+            out.push_str(&elided_entry(s.step, &s.verb, &s.outcome));
+        } else {
+            out.push_str(&transcript_entry(s.step, &s.verb, &s.outcome, &s.content));
+        }
+    }
+    out
+}
+
 /// Serving-faithful prompt rendering for `flywheel-tool`
 /// (`crates/bloomery-daemon/src/bin/flywheel_tool.rs`, design spec §2,
 /// `docs/superpowers/specs/2026-08-16-flywheel-14b-design.md`): **this
-/// function and [`render_prompt`] MUST share one body** — the wrapper
+/// function and [`render_prompt_at_rung`] MUST share one body** — the wrapper
 /// constructs a minimal [`TaskSpec`] and calls the real function. No
 /// second implementation of rendering, anywhere in the flywheel factory.
 ///
@@ -490,9 +565,9 @@ fn render_prompt_from(goal: &str, inputs: RenderInputs<'_>, transcript: &str) ->
 /// `transcript` affect the rendered text — that is exactly
 /// [`RenderInputs`] plus the goal and the transcript, and this wrapper
 /// hands them straight to [`render_prompt_from`], the same body
-/// [`render_prompt`] runs. Every other `TaskSpec` field (`budget_tokens`,
-/// `max_steps`, `cwd`, `bounds`, and the grant's *roots*) is irrelevant to
-/// rendering and is not asked for.
+/// [`render_prompt_at_rung`] runs at rung 1. Every other `TaskSpec` field
+/// (`budget_tokens`, `max_steps`, `cwd`, `bounds`, and the grant's *roots*)
+/// is irrelevant to rendering and is not asked for.
 ///
 /// `commands` became an argument with envelope-v4 (turn-4 spec §2): the
 /// grant line is rendered from the real grant, so a caller that could not
@@ -539,8 +614,9 @@ pub fn render_task_prompt(
 
 /// What one call to [`propose_action`] produced.
 enum ProposeOutcome {
-    /// A validated action, and how long the successful `infer` call took.
-    Action(Action, u64),
+    /// A validated action, how long the successful `infer` took, and the
+    /// ladder rung the prompt was sent at — 1 for every ladder-off task.
+    Action(Action, u64, u32),
     /// Every attempt for this step failed to parse; the step has already
     /// been recorded as failed, and `run_task` moves on to the next step —
     /// a stuck step is not a stuck task.
@@ -574,29 +650,47 @@ fn propose_action<S: Substrate>(
     // since `spec.envelope` never changes across re-asks.
     let stop = spec.envelope.action_stop().then_some(ACTION_STOP);
     for attempt in 1..=MAX_PARSE_ATTEMPTS {
-        let prompt = render_prompt(spec, &state.transcript);
-        let started = Instant::now();
-        let reply = match pager.infer(agent_id, &prompt, STEP_MAX_TOKENS, stop) {
-            Ok(reply) => reply,
-            Err(e) => {
-                // Protocol Amendment 1 (docs/superpowers/evidence/
-                // 2026-08-15-g4-protocol.md §9): ONLY `PromptTooLarge`
-                // becomes the scored `WindowExhausted` terminal — every
-                // other `infer` failure (substrate faults, journal
-                // failures, contract violations, unknown agent) stays
-                // `Error`, the infrastructure abort §3 already defines.
-                let status = match &e {
-                    PagerError::Budget { .. } => TaskStatus::BudgetExhausted,
-                    PagerError::PromptTooLarge { .. } => TaskStatus::WindowExhausted,
-                    _ => TaskStatus::Error,
-                };
-                return ProposeOutcome::Terminate(status, Some(e.to_string()));
+        // Spec §4: every attempt walks the fixed ladder from rung 1 — a
+        // step-down-only ratchet can never step back up (robigo's
+        // `_select_rung` lesson), and a re-walk costs at most three refused
+        // pre-inference arithmetic checks. The pager is the ONLY measurer:
+        // nothing here estimates tokens; a rung is rendered, submitted, and
+        // the pager's accept/refuse IS the measurement. That covers both
+        // refusal paths — the pre-inference window gate and a substrate-side
+        // error classified `PromptTooLarge` after submission — identically:
+        // a window refusal is a window refusal.
+        let mut rung: u32 = 1;
+        let (reply, duration_ms, sent_rung) = loop {
+            let prompt = render_prompt_at_rung(spec, &state.steps, &state.transcript, rung);
+            let started = Instant::now();
+            match pager.infer(agent_id, &prompt, STEP_MAX_TOKENS, stop) {
+                Ok(reply) => {
+                    let d = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    break (reply, d, rung);
+                }
+                Err(PagerError::PromptTooLarge { .. }) if spec.window_ladder && rung < MAX_RUNG => {
+                    rung += 1;
+                }
+                Err(e) => {
+                    // Protocol Amendment 1 (docs/superpowers/evidence/
+                    // 2026-08-15-g4-protocol.md §9), unchanged: ONLY
+                    // `PromptTooLarge` becomes the scored `WindowExhausted`
+                    // terminal (now reached at rung MAX_RUNG for a
+                    // ladder-on task, at rung 1 otherwise); `Budget` stays
+                    // `BudgetExhausted` at every rung; everything else stays
+                    // `Error`, the infrastructure abort §3 already defines.
+                    let status = match &e {
+                        PagerError::Budget { .. } => TaskStatus::BudgetExhausted,
+                        PagerError::PromptTooLarge { .. } => TaskStatus::WindowExhausted,
+                        _ => TaskStatus::Error,
+                    };
+                    return ProposeOutcome::Terminate(status, Some(e.to_string()));
+                }
             }
         };
-        let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
         match parse_action_with_codec(&reply.text, spec.patch_codec) {
-            Ok(action) => return ProposeOutcome::Action(action, duration_ms),
+            Ok(action) => return ProposeOutcome::Action(action, duration_ms, sent_rung),
             Err(e) => {
                 let final_attempt = attempt == MAX_PARSE_ATTEMPTS;
                 let outcome = if final_attempt {
@@ -611,7 +705,7 @@ fn propose_action<S: Substrate>(
                     duration_ms,
                     failed: true,
                     args: Vec::new(),
-                    rung: 1,
+                    rung: sent_rung,
                 };
                 if let Err(msg) = record_step(journal, agent_id, state, step, report) {
                     return ProposeOutcome::Terminate(TaskStatus::Error, Some(msg));
@@ -675,9 +769,9 @@ pub fn run_task<S: Substrate>(
     };
 
     for step in 1..=spec.max_steps {
-        let (action, propose_duration_ms) =
+        let (action, propose_duration_ms, rung) =
             match propose_action(pager, agent_id, spec, journal, &mut state, step) {
-                ProposeOutcome::Action(action, duration_ms) => (action, duration_ms),
+                ProposeOutcome::Action(action, duration_ms, rung) => (action, duration_ms, rung),
                 ProposeOutcome::StepFailed => continue,
                 ProposeOutcome::Terminate(status, summary) => {
                     return finish(state, status, summary);
@@ -692,7 +786,7 @@ pub fn run_task<S: Substrate>(
                 duration_ms: propose_duration_ms,
                 failed: false,
                 args: Vec::new(),
-                rung: 1,
+                rung,
             };
             if let Err(msg) = record_step(journal, agent_id, &mut state, step, report) {
                 return finish(state, TaskStatus::Error, Some(msg));
@@ -725,7 +819,7 @@ pub fn run_task<S: Substrate>(
                     duration_ms: propose_duration_ms,
                     failed: true,
                     args: action_args(&action),
-                    rung: 1,
+                    rung,
                 };
                 if let Err(msg) = record_step(journal, agent_id, &mut state, step, report) {
                     return finish(state, TaskStatus::Error, Some(msg));
@@ -744,7 +838,7 @@ pub fn run_task<S: Substrate>(
             duration_ms,
             failed: obs.failed,
             args: action_args(&action),
-            rung: 1,
+            rung,
         };
         if let Err(msg) = record_step(journal, agent_id, &mut state, step, report) {
             return finish(state, TaskStatus::Error, Some(msg));

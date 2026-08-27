@@ -13,7 +13,7 @@
 //! cue that dissolves the conflict.
 //!
 //! **Rendered from the enforced `Grant`, never from task text.** The caller
-//! ([`crate::task::task_loop::render_prompt`]) passes
+//! ([`crate::task::task_loop::render_prompt_at_rung`]) passes
 //! `spec.grant.commands()` — the very allowlist `exec_run` checks against —
 //! so the model can never be told something the loop would refuse. (The one
 //! place the grant is not the last word is gate-G4 demotion, which is

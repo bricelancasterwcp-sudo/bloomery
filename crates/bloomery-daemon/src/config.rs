@@ -82,7 +82,7 @@ impl EnvelopeLens {
 
     /// Whether this lens renders the grant line
     /// (`task::grant_line::grant_line`) between the goal and the verb card
-    /// — `V4` only (turn-4 spec §2). The one predicate `render_prompt`
+    /// — `V4` only (turn-4 spec §2). The one predicate `render_prompt_from`
     /// branches on, so "which lenses show the grant" is stated here rather
     /// than spelled out at the render site.
     pub const fn grant_line(&self) -> bool {
