@@ -110,9 +110,11 @@ pub struct TaskSpec {
     /// only when rung 4 still doesn't fit. `false` — the default at EVERY
     /// construction site except `api_task`'s request wiring — is today's
     /// behavior byte-for-byte: the first `PromptTooLarge` is terminal.
-    /// Every frozen instrument (codec probe, flywheel factory, batteries)
-    /// passes `false` permanently; their measured verdicts were taken under
-    /// die-on-413 and stay comparable only if that never moves.
+    /// Every frozen instrument that builds a spec (codec probe, batteries)
+    /// passes `false` permanently, and the flywheel factory builds none at
+    /// all — it renders through [`render_task_prompt`], rung 1 by signature;
+    /// their measured verdicts were taken under die-on-413 and stay
+    /// comparable only if that never moves.
     pub window_ladder: bool,
 }
 
@@ -557,9 +559,10 @@ fn degraded_transcript(steps: &[TaskStepRecord], full_window: usize) -> String {
 /// Serving-faithful prompt rendering for `flywheel-tool`
 /// (`crates/bloomery-daemon/src/bin/flywheel_tool.rs`, design spec §2,
 /// `docs/superpowers/specs/2026-08-16-flywheel-14b-design.md`): **this
-/// function and [`render_prompt_at_rung`] MUST share one body** — the wrapper
-/// constructs a minimal [`TaskSpec`] and calls the real function. No
-/// second implementation of rendering, anywhere in the flywheel factory.
+/// function and [`render_prompt_at_rung`] MUST share one body** — that body
+/// is [`render_prompt_from`], which this wrapper calls directly (it builds
+/// no [`TaskSpec`] of its own). No second implementation of rendering,
+/// anywhere in the flywheel factory.
 ///
 /// Only `goal`, `patch_codec`, `envelope`, the grant's `commands`, and
 /// `transcript` affect the rendered text — that is exactly
