@@ -100,11 +100,20 @@ semantic store, appliance boot) is not built. See
   report rather than a verdict. `POST /models/{m}/unload`, then the
   swap-candidate POST, is the operator flow — measured live, same evidence
   doc.
+* **A memory organ (config-off by default).** An exact-repeat episodic store:
+  a task that ends `done` with a landed patch and a passing granted run mints
+  an episode; a byte-identical repeat (same goal, same pre-touch file bytes,
+  grant-gated) gets the prior evidence injected into its prompt; strangers and
+  drifted workspaces get silence; every outcome is journal-stamped, and every
+  frozen instrument runs memory-off. `[memory] enabled = true` to turn on;
+  operator surface `GET /memory` + `DELETE /memory/{id}` + a `/status` block.
+  Design: `docs/superpowers/specs/2026-08-26-memory-organ-design.md`; live
+  acceptance: `docs/superpowers/evidence/2026-08-26-memory-organ-acceptance.md`.
 * **Two HTTP surfaces.** A native API (`/agents`, `/agents/{id}/infer`,
   `/suspend`, `/resume`, `/models/{m}/unload`, `/models/{m}/bless`,
-  `/models/{m}/unblock`, `POST`/`GET /models/{m}/swap-candidate`, `/status`)
-  and an OpenAI-compatible shim (`GET /v1/models`, `POST
-  /v1/chat/completions`).
+  `/models/{m}/unblock`, `POST`/`GET /models/{m}/swap-candidate`,
+  `GET`/`DELETE /memory`, `/status`) and an OpenAI-compatible shim
+  (`GET /v1/models`, `POST /v1/chat/completions`).
 * **A journal you can replay.** Every boot writes `boot-<ts>.jsonl`; every
   admission, decision, paging op, refusal and degradation is a line in it, and
   every row carries its writer's wall-clock stamp (`epoch_ms`) so a row can be
