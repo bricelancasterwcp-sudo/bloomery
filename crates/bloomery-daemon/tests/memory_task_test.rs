@@ -141,6 +141,7 @@ fn spec_for(goal: &str, grant: &Grant, cwd: &Path) -> TaskSpec {
         mutating_verbs: true,
         envelope: EnvelopeLens::V1,
         memory_block: None,
+        window_ladder: false,
     }
 }
 

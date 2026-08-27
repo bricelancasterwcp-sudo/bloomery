@@ -332,6 +332,7 @@ fn absent_memory_renders_byte_identical_prompts() {
             mutating_verbs: true,
             envelope,
             memory_block: None,
+            window_ladder: false,
         };
 
         let result = run_task(&mut pager, &agent_id, &spec, &mut journal);
@@ -388,6 +389,7 @@ fn injected_memory_appears_after_goal_before_grant_line() {
         mutating_verbs: true,
         envelope: EnvelopeLens::V4,
         memory_block: Some(block.clone()),
+        window_ladder: false,
     };
 
     let result = run_task(&mut pager, &agent_id, &spec, &mut journal);

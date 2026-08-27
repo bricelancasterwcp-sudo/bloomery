@@ -246,6 +246,9 @@ fn run_one_fixture_mixed<S: Substrate + Send + 'static>(
         // memory-off". A probe rung measured with an episode in its prompt
         // would not be comparable to any rung already in the ledger.
         memory_block: None,
+        // Window-ladder spec §5's freeze, same reasoning: every G5 rung in
+        // the ledger was measured under die-on-first-refusal.
+        window_ladder: false,
     };
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         run_task(&mut guard, &agent.id, &spec, &mut journal)

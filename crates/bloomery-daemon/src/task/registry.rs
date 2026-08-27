@@ -912,6 +912,7 @@ mod tests {
             mutating_verbs: false,
             envelope: EnvelopeLens::V1,
             memory_block: None,
+            window_ladder: false,
         };
 
         let task_id = registry.spawn_task(
@@ -976,6 +977,7 @@ mod tests {
             mutating_verbs: true,
             envelope: EnvelopeLens::V1,
             memory_block: None,
+            window_ladder: false,
         };
 
         let id1 = registry.spawn_task(
@@ -1100,6 +1102,7 @@ mod tests {
             mutating_verbs: true,
             envelope: EnvelopeLens::V1,
             memory_block: None,
+            window_ladder: false,
         };
 
         let task_id = registry.spawn_task(

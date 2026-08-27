@@ -103,6 +103,17 @@ pub struct TaskSpec {
     /// renders identically under every lens, and no lens version was minted
     /// for it.
     pub memory_block: Option<String>,
+    /// The window ladder (spec
+    /// `docs/superpowers/specs/2026-08-27-window-ladder-design.md`): `true`
+    /// opts this task into fixed scope degradation on `PromptTooLarge` —
+    /// `propose_action` re-renders one rung smaller and re-submits, refusing
+    /// only when rung 4 still doesn't fit. `false` — the default at EVERY
+    /// construction site except `api_task`'s request wiring — is today's
+    /// behavior byte-for-byte: the first `PromptTooLarge` is terminal.
+    /// Every frozen instrument (codec probe, flywheel factory, batteries)
+    /// passes `false` permanently; their measured verdicts were taken under
+    /// die-on-413 and stay comparable only if that never moves.
+    pub window_ladder: bool,
 }
 
 /// How a task ended. `run_task` only ever returns `Done`, `BudgetExhausted`,

@@ -53,6 +53,11 @@ struct CreateTaskReq {
     budget_tokens: Option<u64>,
     #[serde(default)]
     max_steps: Option<u32>,
+    /// Spec §5: opt-in over HTTP, absent → false. A bare bool with
+    /// `#[serde(default)]` (false), not an Option — there is no
+    /// absent-vs-explicit-false distinction to preserve.
+    #[serde(default)]
+    window_ladder: bool,
 }
 
 /// Routes one task-surface request. `segments` is the same `/`-split,
@@ -231,6 +236,7 @@ fn create_task<S: Substrate + Send + 'static>(
         // correct one: a route that could not retrieve must never claim it
         // did. The worker overwrites it iff it injects.
         memory_block: None,
+        window_ladder: req.window_ladder,
     };
 
     let task_id = registry.spawn_task(

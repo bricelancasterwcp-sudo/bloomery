@@ -382,6 +382,11 @@ fn run_one_fixture<S: Substrate + Send + 'static>(
         // memory-off". A probe rung measured with an episode in its prompt
         // would not be comparable to any rung already in the ledger.
         memory_block: None,
+        // Window-ladder spec §5, same freeze: a probe rung that silently
+        // shed scope on a 413 instead of dying would not be comparable to
+        // any rung already in the ledger, all of which were measured under
+        // die-on-first-refusal.
+        window_ladder: false,
     };
     // Caught inside the locked scope for exactly the reason
     // `task::registry`'s module docs give: a panic unwinding past a live

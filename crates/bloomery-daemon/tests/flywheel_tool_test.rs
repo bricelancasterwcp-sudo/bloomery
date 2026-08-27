@@ -138,6 +138,7 @@ fn spec(grant: Grant, cwd: PathBuf, envelope: EnvelopeLens) -> TaskSpec {
         // which hardcodes memory-off (memory-organ design spec §4). A spec
         // carrying a block here would be comparing two different prompts.
         memory_block: None,
+        window_ladder: false,
     }
 }
 

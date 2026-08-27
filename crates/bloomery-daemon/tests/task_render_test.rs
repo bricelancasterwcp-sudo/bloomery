@@ -388,6 +388,7 @@ fn a_demoted_v4_task_renders_the_none_line_even_with_a_command_bearing_grant() {
         // The goldens above are memory-off bytes (memory-organ design spec
         // §4) — this live-loop check must be too.
         memory_block: None,
+        window_ladder: false,
     };
     let mut task_journal = Journal::open(&dir.join("task.jsonl")).unwrap();
     let result = run_task(&mut pager, &agent.id, &spec, &mut task_journal);

@@ -130,6 +130,7 @@ fn demoted_spec(grant: Grant, cwd: PathBuf, max_steps: u32, mutating_verbs: bool
         mutating_verbs,
         envelope: EnvelopeLens::V1,
         memory_block: None,
+        window_ladder: false,
     }
 }
 
