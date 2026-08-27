@@ -1,0 +1,1617 @@
+{
+  "corpus_seed": 20260826,
+  "families": {
+    "py_inverted_boolean_run_verified": 7,
+    "py_off_by_one_index_run_verified": 7,
+    "py_off_by_one_range_bound_run_verified": 6,
+    "py_wrong_comparison_operator_run_verified": 6,
+    "py_wrong_constant_multiplier_run_verified": 6,
+    "py_wrong_dict_key_run_verified": 6,
+    "py_wrong_fstring_field_run_verified": 6,
+    "py_wrong_variable_reference_run_verified": 6
+  },
+  "instrument": "memory-battery-v1",
+  "n": 50,
+  "tasks": [
+    {
+      "family": "py_inverted_boolean_run_verified",
+      "goal": "starfield.py's is_eligible() requires both conditions instead of either one (or vice versa) -- is_eligible(69, True) returns True instead of False. Fix the condition in is_eligible() in starfield.py so the connector is correct. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_inverted_boolean_run_verified-0000/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_inverted_boolean_run_verified-0000/workspace"
+        ]
+      },
+      "name": "py_inverted_boolean_run_verified-0000",
+      "replace": "    if exposure_seconds >= 88 and redshift_ready:",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_starfield.py"
+      ],
+      "search": "    if exposure_seconds >= 88 or redshift_ready:",
+      "target": "starfield.py",
+      "test_file": "test_starfield.py",
+      "workspace": "tasks/py_inverted_boolean_run_verified-0000/workspace",
+      "workspace_sha256": "c1cbe528f17a359f32302e42688633c1f47678aad063b9ea797a845399a8f186"
+    },
+    {
+      "family": "py_off_by_one_index_run_verified",
+      "goal": "A reviewer flagged splitlog.py because first_and_last_effort_level() returns the first effort_level reading twice instead of the first and last, shown by first_and_last_effort_level([401, 325, 41, 330, 65]) returns (401, 401) instead of (401, 65). Needed change: the last assignment in first_and_last_effort_level() in splitlog.py -- it takes the last effort_level reading. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_index_run_verified-0001/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_index_run_verified-0001/workspace"
+        ]
+      },
+      "name": "py_off_by_one_index_run_verified-0001",
+      "replace": "    last_standout_value = effort_level_values[-1]",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_splitlog.py"
+      ],
+      "search": "    last_standout_value = effort_level_values[0]",
+      "target": "splitlog.py",
+      "test_file": "test_splitlog.py",
+      "workspace": "tasks/py_off_by_one_index_run_verified-0001/workspace",
+      "workspace_sha256": "6f37a9d46e3d831d9075f04bbdce5e13afb2b5cf2d300661f895efe7f957d1be"
+    },
+    {
+      "family": "py_off_by_one_range_bound_run_verified",
+      "goal": "Bug ticket for mixdesk.py: sample_rate_checkpoints() stops one short of producing a marker for every cycle from 1 through count. Evidence: sample_rate_checkpoints(11) yields only 10 markers and cycle 11 never appears. Resolution: update the loop bound in sample_rate_checkpoints() in mixdesk.py -- the final cycle is included. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_range_bound_run_verified-0002/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_range_bound_run_verified-0002/workspace"
+        ]
+      },
+      "name": "py_off_by_one_range_bound_run_verified-0002",
+      "replace": "    for cursor in range(1, sample_rate_count + 1):",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_mixdesk.py"
+      ],
+      "search": "    for cursor in range(1, sample_rate_count):",
+      "target": "mixdesk.py",
+      "test_file": "test_mixdesk.py",
+      "workspace": "tasks/py_off_by_one_range_bound_run_verified-0002/workspace",
+      "workspace_sha256": "fc35cf352d6c2b59f6baec4890245d0c133e460c8081b7880021e59cff27dd2e"
+    },
+    {
+      "family": "py_wrong_comparison_operator_run_verified",
+      "goal": "aquacare.py's lowest_aeration_rate() keeps the highest aeration_rate instead of the lowest one -- lowest_aeration_rate([226, 146, 52, 230, 186]) returns 230 instead of 52. Fix the comparison in lowest_aeration_rate() in aquacare.py so it keeps the lowest aeration_rate. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_comparison_operator_run_verified-0003/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_comparison_operator_run_verified-0003/workspace"
+        ]
+      },
+      "name": "py_wrong_comparison_operator_run_verified-0003",
+      "replace": "        if x < running_peak:",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_aquacare.py"
+      ],
+      "search": "        if x > running_peak:",
+      "target": "aquacare.py",
+      "test_file": "test_aquacare.py",
+      "workspace": "tasks/py_wrong_comparison_operator_run_verified-0003/workspace",
+      "workspace_sha256": "6a95b08150a8d24cd89797106607044e053b0ec045da167fbfe5d333b2040dc0"
+    },
+    {
+      "family": "py_wrong_constant_multiplier_run_verified",
+      "goal": "Please correct scaled_humidity() in forecastcalc.py: scaled_humidity() currently scales by the wrong calibration factor, and scaled_humidity(85) returns 170.0 instead of 106.25 proves it. Once corrected, it multiplies by 1.25. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_constant_multiplier_run_verified-0004/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_constant_multiplier_run_verified-0004/workspace"
+        ]
+      },
+      "name": "py_wrong_constant_multiplier_run_verified-0004",
+      "replace": "    return value * 1.25",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_forecastcalc.py"
+      ],
+      "search": "    return value * 2.0",
+      "target": "forecastcalc.py",
+      "test_file": "test_forecastcalc.py",
+      "workspace": "tasks/py_wrong_constant_multiplier_run_verified-0004/workspace",
+      "workspace_sha256": "8ec4717c22cb78b81daabbf1e35ae4de35c5e4c3785b75d9143b27314be805f3"
+    },
+    {
+      "family": "py_wrong_dict_key_run_verified",
+      "goal": "summitlog.py's permit_quota_value() reads the \"baseline\" entry instead of \"nominal\" -- permit_quota_value({'nominal': 12, 'baseline': 456}) returns 456 instead of 12. Fix the dict lookup in permit_quota_value() in summitlog.py so it reads \"nominal\". Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_dict_key_run_verified-0005/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_dict_key_run_verified-0005/workspace"
+        ]
+      },
+      "name": "py_wrong_dict_key_run_verified-0005",
+      "replace": "    return entry[\"nominal\"]",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_summitlog.py"
+      ],
+      "search": "    return entry[\"baseline\"]",
+      "target": "summitlog.py",
+      "test_file": "test_summitlog.py",
+      "workspace": "tasks/py_wrong_dict_key_run_verified-0005/workspace",
+      "workspace_sha256": "46a3c48b8460b4db417fd926b593d3fc4c769b4f5203dfcfe958c8bdef357867"
+    },
+    {
+      "family": "py_wrong_fstring_field_run_verified",
+      "goal": "Please correct the f-string in describe_quarantine_days() in aquacare.py: describe_quarantine_days() currently reports quarantine_days where salinity should appear, and describe_quarantine_days(267, 246) returns 'quarantine_days=267, salinity=267' instead of 'quarantine_days=267, salinity=246' proves it. Once corrected, it reports salinity, not quarantine_days. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_fstring_field_run_verified-0006/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_fstring_field_run_verified-0006/workspace"
+        ]
+      },
+      "name": "py_wrong_fstring_field_run_verified-0006",
+      "replace": "    return f\"quarantine_days={quarantine_days}, salinity={salinity}\"",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_aquacare.py"
+      ],
+      "search": "    return f\"quarantine_days={quarantine_days}, salinity={quarantine_days}\"",
+      "target": "aquacare.py",
+      "test_file": "test_aquacare.py",
+      "workspace": "tasks/py_wrong_fstring_field_run_verified-0006/workspace",
+      "workspace_sha256": "b65a7e25b5e6b89d44f98d54a01b5e3a32e06f2237a60414b980f8ee7ff99e89"
+    },
+    {
+      "family": "py_wrong_variable_reference_run_verified",
+      "goal": "A reviewer flagged starfield.py because combined_apparent_magnitude_transit_depth() adds the adjusted apparent_magnitude in twice instead of combining apparent_magnitude and transit_depth, shown by combined_apparent_magnitude_transit_depth(16, 189) returns 64 instead of 410. Needed change: the return in combined_apparent_magnitude_transit_depth() in starfield.py -- it adds adjusted_transit_depth instead of repeating adjusted_apparent_magnitude. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_variable_reference_run_verified-0007/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_variable_reference_run_verified-0007/workspace"
+        ]
+      },
+      "name": "py_wrong_variable_reference_run_verified-0007",
+      "replace": "    return adjusted_apparent_magnitude + adjusted_transit_depth",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_starfield.py"
+      ],
+      "search": "    return adjusted_apparent_magnitude + adjusted_apparent_magnitude",
+      "target": "starfield.py",
+      "test_file": "test_starfield.py",
+      "workspace": "tasks/py_wrong_variable_reference_run_verified-0007/workspace",
+      "workspace_sha256": "95ad1faaaade62a5501bac26d9a0c5b00c930888aafeb679ecd3d522ccf86535"
+    },
+    {
+      "family": "py_inverted_boolean_run_verified",
+      "goal": "A reviewer flagged dwelltrack.py because passes_check() requires both conditions instead of either one (or vice versa), shown by passes_check(7, True) returns False instead of True. Needed change: the condition in passes_check() in dwelltrack.py -- the connector is correct. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_inverted_boolean_run_verified-0008/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_inverted_boolean_run_verified-0008/workspace"
+        ]
+      },
+      "name": "py_inverted_boolean_run_verified-0008",
+      "replace": "    if delay_minutes >= 34 or headway_minutes_ready:",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_dwelltrack.py"
+      ],
+      "search": "    if delay_minutes >= 34 and headway_minutes_ready:",
+      "target": "dwelltrack.py",
+      "test_file": "test_dwelltrack.py",
+      "workspace": "tasks/py_inverted_boolean_run_verified-0008/workspace",
+      "workspace_sha256": "e513f59d4b9b5f17bbc67fa47dc2bd985f4558a0d6e22f2f5cd77135678f518d"
+    },
+    {
+      "family": "py_off_by_one_index_run_verified",
+      "goal": "Please correct the last assignment in first_and_last_schedule_slot() in dwelltrack.py: first_and_last_schedule_slot() currently returns the first schedule_slot reading twice instead of the first and last, and first_and_last_schedule_slot([223, 228, 84, 193]) returns (223, 223) instead of (223, 193) proves it. Once corrected, it takes the last schedule_slot reading. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_index_run_verified-0009/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_index_run_verified-0009/workspace"
+        ]
+      },
+      "name": "py_off_by_one_index_run_verified-0009",
+      "replace": "    last_standout_value = schedule_slot_values[-1]",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_dwelltrack.py"
+      ],
+      "search": "    last_standout_value = schedule_slot_values[0]",
+      "target": "dwelltrack.py",
+      "test_file": "test_dwelltrack.py",
+      "workspace": "tasks/py_off_by_one_index_run_verified-0009/workspace",
+      "workspace_sha256": "67601087c18768b0e1b58f879404f73ca3baef5aa666b99bfef0f9934d54fec5"
+    },
+    {
+      "family": "py_off_by_one_range_bound_run_verified",
+      "goal": "Bug ticket for brewcheck.py: yield_grams_checkpoints() stops one short of producing a marker for every cycle from 1 through count. Evidence: yield_grams_checkpoints(8) yields only 7 markers and cycle 8 never appears. Resolution: update the loop bound in yield_grams_checkpoints() in brewcheck.py -- the final cycle is included. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_range_bound_run_verified-0010/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_range_bound_run_verified-0010/workspace"
+        ]
+      },
+      "name": "py_off_by_one_range_bound_run_verified-0010",
+      "replace": "    for offset_index in range(1, yield_grams_count + 1):",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_brewcheck.py"
+      ],
+      "search": "    for offset_index in range(1, yield_grams_count):",
+      "target": "brewcheck.py",
+      "test_file": "test_brewcheck.py",
+      "workspace": "tasks/py_off_by_one_range_bound_run_verified-0010/workspace",
+      "workspace_sha256": "72396f0b677657f9d56eb4c04af19f5d12b596b1fffb19557186c00181d28570"
+    },
+    {
+      "family": "py_wrong_comparison_operator_run_verified",
+      "goal": "manifestcheck.py's highest_pick_sequence() keeps the lowest pick_sequence instead of the highest one -- highest_pick_sequence([323, 201, 268, 96, 218]) returns 96 instead of 323. Fix the comparison in highest_pick_sequence() in manifestcheck.py so it keeps the highest pick_sequence. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_comparison_operator_run_verified-0011/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_comparison_operator_run_verified-0011/workspace"
+        ]
+      },
+      "name": "py_wrong_comparison_operator_run_verified-0011",
+      "replace": "        if x > current_leader:",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_manifestcheck.py"
+      ],
+      "search": "        if x < current_leader:",
+      "target": "manifestcheck.py",
+      "test_file": "test_manifestcheck.py",
+      "workspace": "tasks/py_wrong_comparison_operator_run_verified-0011/workspace",
+      "workspace_sha256": "54749ad555484eadd553d44faab3d018c333104dc097aef76d40d735dd5ffc97"
+    },
+    {
+      "family": "py_wrong_constant_multiplier_run_verified",
+      "goal": "Please correct scaled_salinity() in aquacare.py: scaled_salinity() currently scales by the wrong calibration factor, and scaled_salinity(88) returns 22.0 instead of 132.0 proves it. Once corrected, it multiplies by 1.5. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_constant_multiplier_run_verified-0012/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_constant_multiplier_run_verified-0012/workspace"
+        ]
+      },
+      "name": "py_wrong_constant_multiplier_run_verified-0012",
+      "replace": "    return value * 1.5",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_aquacare.py"
+      ],
+      "search": "    return value * 0.25",
+      "target": "aquacare.py",
+      "test_file": "test_aquacare.py",
+      "workspace": "tasks/py_wrong_constant_multiplier_run_verified-0012/workspace",
+      "workspace_sha256": "b3ae6300e7450df4fe2156e46ee29e56709c2bf0b2e59feb0f7ec1f1275d93d7"
+    },
+    {
+      "family": "py_wrong_dict_key_run_verified",
+      "goal": "A reviewer flagged summitlog.py because water_capacity_value() reads the \"baseline\" entry instead of \"override\", shown by water_capacity_value({'override': 400, 'baseline': 156}) returns 156 instead of 400. Needed change: the dict lookup in water_capacity_value() in summitlog.py -- it reads \"override\". Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_dict_key_run_verified-0013/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_dict_key_run_verified-0013/workspace"
+        ]
+      },
+      "name": "py_wrong_dict_key_run_verified-0013",
+      "replace": "    return entry[\"override\"]",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_summitlog.py"
+      ],
+      "search": "    return entry[\"baseline\"]",
+      "target": "summitlog.py",
+      "test_file": "test_summitlog.py",
+      "workspace": "tasks/py_wrong_dict_key_run_verified-0013/workspace",
+      "workspace_sha256": "88beafc1f93779d0fe5b0dbe13ba63db3e5e598f99d6f8b4160bba3221d0d7a4"
+    },
+    {
+      "family": "py_wrong_fstring_field_run_verified",
+      "goal": "Bug ticket for trailplan.py: describe_summit_elevation() reports summit_elevation where trail_length should appear. Evidence: describe_summit_elevation(116, 34) returns 'summit_elevation=116, trail_length=116' instead of 'summit_elevation=116, trail_length=34'. Resolution: update the f-string in describe_summit_elevation() in trailplan.py -- it reports trail_length, not summit_elevation. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_fstring_field_run_verified-0014/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_fstring_field_run_verified-0014/workspace"
+        ]
+      },
+      "name": "py_wrong_fstring_field_run_verified-0014",
+      "replace": "    return f\"summit_elevation={summit_elevation}, trail_length={trail_length}\"",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_trailplan.py"
+      ],
+      "search": "    return f\"summit_elevation={summit_elevation}, trail_length={summit_elevation}\"",
+      "target": "trailplan.py",
+      "test_file": "test_trailplan.py",
+      "workspace": "tasks/py_wrong_fstring_field_run_verified-0014/workspace",
+      "workspace_sha256": "3fc27b753c323464b58a509f382853712f69e267f46752434480974891153343"
+    },
+    {
+      "family": "py_wrong_variable_reference_run_verified",
+      "goal": "Please correct the return in combined_algae_growth_tank_volume() in aquacare.py: combined_algae_growth_tank_volume() currently adds the adjusted algae_growth in twice instead of combining algae_growth and tank_volume, and combined_algae_growth_tank_volume(14, 127) returns 56 instead of 282 proves it. Once corrected, it adds adjusted_tank_volume instead of repeating adjusted_algae_growth. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_variable_reference_run_verified-0015/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_variable_reference_run_verified-0015/workspace"
+        ]
+      },
+      "name": "py_wrong_variable_reference_run_verified-0015",
+      "replace": "    return adjusted_algae_growth + adjusted_tank_volume",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_aquacare.py"
+      ],
+      "search": "    return adjusted_algae_growth + adjusted_algae_growth",
+      "target": "aquacare.py",
+      "test_file": "test_aquacare.py",
+      "workspace": "tasks/py_wrong_variable_reference_run_verified-0015/workspace",
+      "workspace_sha256": "596b1861596db4071855c2328aebcfdb326d31ba91d038a1c7a5f2549042bc68"
+    },
+    {
+      "family": "py_inverted_boolean_run_verified",
+      "goal": "Bug ticket for sessiontrack.py: meets_criteria() requires both conditions instead of either one (or vice versa). Evidence: meets_criteria(0, True) returns True instead of False. Resolution: update the condition in meets_criteria() in sessiontrack.py -- the connector is correct. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_inverted_boolean_run_verified-0016/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_inverted_boolean_run_verified-0016/workspace"
+        ]
+      },
+      "name": "py_inverted_boolean_run_verified-0016",
+      "replace": "    if split_time >= 10 and interval_count_ready:",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_sessiontrack.py"
+      ],
+      "search": "    if split_time >= 10 or interval_count_ready:",
+      "target": "sessiontrack.py",
+      "test_file": "test_sessiontrack.py",
+      "workspace": "tasks/py_inverted_boolean_run_verified-0016/workspace",
+      "workspace_sha256": "cdd72cf627dc11108c0a0bdf50d7aab91a5bb7894423e3d6700be1750e0910a4"
+    },
+    {
+      "family": "py_off_by_one_index_run_verified",
+      "goal": "Bug ticket for roastlog.py: first_and_last_cupping_score() returns the first cupping_score reading twice instead of the first and last. Evidence: first_and_last_cupping_score([18, 200, 169, 363, 421]) returns (18, 18) instead of (18, 421). Resolution: update the last assignment in first_and_last_cupping_score() in roastlog.py -- it takes the last cupping_score reading. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_index_run_verified-0017/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_index_run_verified-0017/workspace"
+        ]
+      },
+      "name": "py_off_by_one_index_run_verified-0017",
+      "replace": "    last_standout_value = cupping_score_values[-1]",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_roastlog.py"
+      ],
+      "search": "    last_standout_value = cupping_score_values[0]",
+      "target": "roastlog.py",
+      "test_file": "test_roastlog.py",
+      "workspace": "tasks/py_off_by_one_index_run_verified-0017/workspace",
+      "workspace_sha256": "2fefdf374c1745a94d5562d6253540d03e583d8a1e34cf29c7f878f9e0131ef2"
+    },
+    {
+      "family": "py_off_by_one_range_bound_run_verified",
+      "goal": "Bug ticket for climatetrend.py: dew_point_checkpoints() stops one short of producing a marker for every cycle from 1 through count. Evidence: dew_point_checkpoints(7) yields only 6 markers and cycle 7 never appears. Resolution: update the loop bound in dew_point_checkpoints() in climatetrend.py -- the final cycle is included. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_range_bound_run_verified-0018/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_range_bound_run_verified-0018/workspace"
+        ]
+      },
+      "name": "py_off_by_one_range_bound_run_verified-0018",
+      "replace": "    for marker in range(1, dew_point_count + 1):",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_climatetrend.py"
+      ],
+      "search": "    for marker in range(1, dew_point_count):",
+      "target": "climatetrend.py",
+      "test_file": "test_climatetrend.py",
+      "workspace": "tasks/py_off_by_one_range_bound_run_verified-0018/workspace",
+      "workspace_sha256": "67dc5dd1b763c4e6cd2940656dd35a451f2b4f805b03c97a447bc5faae6f8231"
+    },
+    {
+      "family": "py_wrong_comparison_operator_run_verified",
+      "goal": "A reviewer flagged roastlog.py because highest_yield_grams() keeps the lowest yield_grams instead of the highest one, shown by highest_yield_grams([358, 368, 186, 134, 179]) returns 134 instead of 368. Needed change: the comparison in highest_yield_grams() in roastlog.py -- it keeps the highest yield_grams. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_comparison_operator_run_verified-0019/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_comparison_operator_run_verified-0019/workspace"
+        ]
+      },
+      "name": "py_wrong_comparison_operator_run_verified-0019",
+      "replace": "        if x > running_peak:",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_roastlog.py"
+      ],
+      "search": "        if x < running_peak:",
+      "target": "roastlog.py",
+      "test_file": "test_roastlog.py",
+      "workspace": "tasks/py_wrong_comparison_operator_run_verified-0019/workspace",
+      "workspace_sha256": "d6f8c17fdfc31a34a412aeb9a67453e0f5f9e15a8b7a678f1dfc636596083f01"
+    },
+    {
+      "family": "py_wrong_constant_multiplier_run_verified",
+      "goal": "A reviewer flagged brewcheck.py because scaled_extraction_time() scales by the wrong calibration factor, shown by scaled_extraction_time(39) returns 97.5 instead of 156.0. Needed change: scaled_extraction_time() in brewcheck.py -- it multiplies by 4.0. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_constant_multiplier_run_verified-0020/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_constant_multiplier_run_verified-0020/workspace"
+        ]
+      },
+      "name": "py_wrong_constant_multiplier_run_verified-0020",
+      "replace": "    return value * 4.0",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_brewcheck.py"
+      ],
+      "search": "    return value * 2.5",
+      "target": "brewcheck.py",
+      "test_file": "test_brewcheck.py",
+      "workspace": "tasks/py_wrong_constant_multiplier_run_verified-0020/workspace",
+      "workspace_sha256": "e28b829ca126d9e4522104f6e724aa177b4bb2126be745f9c111dce6f1379b6b"
+    },
+    {
+      "family": "py_wrong_dict_key_run_verified",
+      "goal": "A reviewer flagged bedtracker.py because seedling_count_value() reads the \"adjusted\" entry instead of \"override\", shown by seedling_count_value({'override': 176, 'adjusted': 482}) returns 482 instead of 176. Needed change: the dict lookup in seedling_count_value() in bedtracker.py -- it reads \"override\". Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_dict_key_run_verified-0021/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_dict_key_run_verified-0021/workspace"
+        ]
+      },
+      "name": "py_wrong_dict_key_run_verified-0021",
+      "replace": "    return entry[\"override\"]",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_bedtracker.py"
+      ],
+      "search": "    return entry[\"adjusted\"]",
+      "target": "bedtracker.py",
+      "test_file": "test_bedtracker.py",
+      "workspace": "tasks/py_wrong_dict_key_run_verified-0021/workspace",
+      "workspace_sha256": "daa93362fba1bd812aa95399552ebb9ab46c372acbf0ee16fe30270823427de2"
+    },
+    {
+      "family": "py_wrong_fstring_field_run_verified",
+      "goal": "Please correct the f-string in describe_declination() in skyledger.py: describe_declination() currently reports declination where observation_night should appear, and describe_declination(192, 219) returns 'declination=192, observation_night=192' instead of 'declination=192, observation_night=219' proves it. Once corrected, it reports observation_night, not declination. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_fstring_field_run_verified-0022/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_fstring_field_run_verified-0022/workspace"
+        ]
+      },
+      "name": "py_wrong_fstring_field_run_verified-0022",
+      "replace": "    return f\"declination={declination}, observation_night={observation_night}\"",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_skyledger.py"
+      ],
+      "search": "    return f\"declination={declination}, observation_night={declination}\"",
+      "target": "skyledger.py",
+      "test_file": "test_skyledger.py",
+      "workspace": "tasks/py_wrong_fstring_field_run_verified-0022/workspace",
+      "workspace_sha256": "31711c0b227c26a8db3a2062b6c729c6e59f3741052426a5fe7f8f50573d9df8"
+    },
+    {
+      "family": "py_wrong_variable_reference_run_verified",
+      "goal": "Please correct the return in combined_species_count_ph_level() in tanktrack.py: combined_species_count_ph_level() currently adds the adjusted species_count in twice instead of combining species_count and ph_level, and combined_species_count_ph_level(8, 173) returns 32 instead of 362 proves it. Once corrected, it adds adjusted_ph_level instead of repeating adjusted_species_count. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_variable_reference_run_verified-0023/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_variable_reference_run_verified-0023/workspace"
+        ]
+      },
+      "name": "py_wrong_variable_reference_run_verified-0023",
+      "replace": "    return adjusted_species_count + adjusted_ph_level",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_tanktrack.py"
+      ],
+      "search": "    return adjusted_species_count + adjusted_species_count",
+      "target": "tanktrack.py",
+      "test_file": "test_tanktrack.py",
+      "workspace": "tasks/py_wrong_variable_reference_run_verified-0023/workspace",
+      "workspace_sha256": "0aef2bebfb2bafa3b5bcc4645207d39c8dead2e901dbeabe46801b671822d646"
+    },
+    {
+      "family": "py_inverted_boolean_run_verified",
+      "goal": "splitlog.py's passes_check() requires both conditions instead of either one (or vice versa) -- passes_check(28, True) returns True instead of False. Fix the condition in passes_check() in splitlog.py so the connector is correct. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_inverted_boolean_run_verified-0024/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_inverted_boolean_run_verified-0024/workspace"
+        ]
+      },
+      "name": "py_inverted_boolean_run_verified-0024",
+      "replace": "    if stride_length >= 30 and rep_count_ready:",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_splitlog.py"
+      ],
+      "search": "    if stride_length >= 30 or rep_count_ready:",
+      "target": "splitlog.py",
+      "test_file": "test_splitlog.py",
+      "workspace": "tasks/py_inverted_boolean_run_verified-0024/workspace",
+      "workspace_sha256": "89e0ab8306e587105db7f0d0d70c2c24d081648d6b81af65f0740b753bfcb3dc"
+    },
+    {
+      "family": "py_off_by_one_index_run_verified",
+      "goal": "transitscan.py's first_and_last_exposure_seconds() returns the first exposure_seconds reading twice instead of the first and last -- first_and_last_exposure_seconds([387, 386, 243]) returns (387, 387) instead of (387, 243). Fix the last assignment in first_and_last_exposure_seconds() in transitscan.py so it takes the last exposure_seconds reading. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_index_run_verified-0025/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_index_run_verified-0025/workspace"
+        ]
+      },
+      "name": "py_off_by_one_index_run_verified-0025",
+      "replace": "    last_top_pick = exposure_seconds_values[-1]",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_transitscan.py"
+      ],
+      "search": "    last_top_pick = exposure_seconds_values[0]",
+      "target": "transitscan.py",
+      "test_file": "test_transitscan.py",
+      "workspace": "tasks/py_off_by_one_index_run_verified-0025/workspace",
+      "workspace_sha256": "6a6ef7969a283e8753d69f5931aa917237d0520f5bfcc4cf4a9c13708dca8d17"
+    },
+    {
+      "family": "py_off_by_one_range_bound_run_verified",
+      "goal": "dwelltrack.py's headway_minutes_checkpoints() stops one short of producing a marker for every cycle from 1 through count -- headway_minutes_checkpoints(10) yields only 9 markers and cycle 10 never appears. Fix the loop bound in headway_minutes_checkpoints() in dwelltrack.py so the final cycle is included. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_range_bound_run_verified-0026/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_range_bound_run_verified-0026/workspace"
+        ]
+      },
+      "name": "py_off_by_one_range_bound_run_verified-0026",
+      "replace": "    for marker in range(1, headway_minutes_count + 1):",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_dwelltrack.py"
+      ],
+      "search": "    for marker in range(1, headway_minutes_count):",
+      "target": "dwelltrack.py",
+      "test_file": "test_dwelltrack.py",
+      "workspace": "tasks/py_off_by_one_range_bound_run_verified-0026/workspace",
+      "workspace_sha256": "2be83b8a4b9fe10b48be3d6a6a4b27a3e648c3a0c3e85bc4a1e2a8e6b42c7a18"
+    },
+    {
+      "family": "py_wrong_comparison_operator_run_verified",
+      "goal": "Please correct the comparison in highest_tamp_pressure() in extractiontrack.py: highest_tamp_pressure() currently keeps the lowest tamp_pressure instead of the highest one, and highest_tamp_pressure([58, 169, 61, 237, 221]) returns 58 instead of 237 proves it. Once corrected, it keeps the highest tamp_pressure. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_comparison_operator_run_verified-0027/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_comparison_operator_run_verified-0027/workspace"
+        ]
+      },
+      "name": "py_wrong_comparison_operator_run_verified-0027",
+      "replace": "        if x > selected_reading:",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_extractiontrack.py"
+      ],
+      "search": "        if x < selected_reading:",
+      "target": "extractiontrack.py",
+      "test_file": "test_extractiontrack.py",
+      "workspace": "tasks/py_wrong_comparison_operator_run_verified-0027/workspace",
+      "workspace_sha256": "ef12ff1218c2cf14b22e8d2f11ac35551af29046bc74aadabfa49ce55300ec50"
+    },
+    {
+      "family": "py_wrong_constant_multiplier_run_verified",
+      "goal": "roastlog.py's scaled_batch_id() scales by the wrong calibration factor -- scaled_batch_id(182) returns 318.5 instead of 364.0. Fix scaled_batch_id() in roastlog.py so it multiplies by 2.0. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_constant_multiplier_run_verified-0028/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_constant_multiplier_run_verified-0028/workspace"
+        ]
+      },
+      "name": "py_wrong_constant_multiplier_run_verified-0028",
+      "replace": "    return value * 2.0",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_roastlog.py"
+      ],
+      "search": "    return value * 1.75",
+      "target": "roastlog.py",
+      "test_file": "test_roastlog.py",
+      "workspace": "tasks/py_wrong_constant_multiplier_run_verified-0028/workspace",
+      "workspace_sha256": "778a7b28897408eee3f3ba81d232aa3381c895e47c4baecabe01ecbeaf3c81d1"
+    },
+    {
+      "family": "py_wrong_dict_key_run_verified",
+      "goal": "Bug ticket for transitscan.py: apparent_magnitude_value() reads the \"adjusted\" entry instead of \"baseline\". Evidence: apparent_magnitude_value({'baseline': 88, 'adjusted': 301}) returns 301 instead of 88. Resolution: update the dict lookup in apparent_magnitude_value() in transitscan.py -- it reads \"baseline\". Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_dict_key_run_verified-0029/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_dict_key_run_verified-0029/workspace"
+        ]
+      },
+      "name": "py_wrong_dict_key_run_verified-0029",
+      "replace": "    return entry[\"baseline\"]",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_transitscan.py"
+      ],
+      "search": "    return entry[\"adjusted\"]",
+      "target": "transitscan.py",
+      "test_file": "test_transitscan.py",
+      "workspace": "tasks/py_wrong_dict_key_run_verified-0029/workspace",
+      "workspace_sha256": "ffb6938e61b94491bfe0499f482537845655509d4e1870e830a7745ab9d1f4c9"
+    },
+    {
+      "family": "py_wrong_fstring_field_run_verified",
+      "goal": "Bug ticket for tempotrack.py: describe_tempo_bpm() reports tempo_bpm where session_id should appear. Evidence: describe_tempo_bpm(279, 45) returns 'tempo_bpm=279, session_id=279' instead of 'tempo_bpm=279, session_id=45'. Resolution: update the f-string in describe_tempo_bpm() in tempotrack.py -- it reports session_id, not tempo_bpm. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_fstring_field_run_verified-0030/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_fstring_field_run_verified-0030/workspace"
+        ]
+      },
+      "name": "py_wrong_fstring_field_run_verified-0030",
+      "replace": "    return f\"tempo_bpm={tempo_bpm}, session_id={session_id}\"",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_tempotrack.py"
+      ],
+      "search": "    return f\"tempo_bpm={tempo_bpm}, session_id={tempo_bpm}\"",
+      "target": "tempotrack.py",
+      "test_file": "test_tempotrack.py",
+      "workspace": "tasks/py_wrong_fstring_field_run_verified-0030/workspace",
+      "workspace_sha256": "1d30063a84688e7112e2c81cf465f9d3f86e01d272107421c5242a930a873652"
+    },
+    {
+      "family": "py_wrong_variable_reference_run_verified",
+      "goal": "Bug ticket for growcheck.py: combined_sunlight_hours_soil_ph() adds the adjusted sunlight_hours in twice instead of combining sunlight_hours and soil_ph. Evidence: combined_sunlight_hours_soil_ph(104, 91) returns 416 instead of 390. Resolution: update the return in combined_sunlight_hours_soil_ph() in growcheck.py -- it adds adjusted_soil_ph instead of repeating adjusted_sunlight_hours. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_variable_reference_run_verified-0031/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_variable_reference_run_verified-0031/workspace"
+        ]
+      },
+      "name": "py_wrong_variable_reference_run_verified-0031",
+      "replace": "    return adjusted_sunlight_hours + adjusted_soil_ph",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_growcheck.py"
+      ],
+      "search": "    return adjusted_sunlight_hours + adjusted_sunlight_hours",
+      "target": "growcheck.py",
+      "test_file": "test_growcheck.py",
+      "workspace": "tasks/py_wrong_variable_reference_run_verified-0031/workspace",
+      "workspace_sha256": "6985a9bc09849f53255e44f102c6460d430824d531510a2a74750ca0917baaf6"
+    },
+    {
+      "family": "py_inverted_boolean_run_verified",
+      "goal": "Bug ticket for starfield.py: passes_check() requires both conditions instead of either one (or vice versa). Evidence: passes_check(44, True) returns False instead of True. Resolution: update the condition in passes_check() in starfield.py -- the connector is correct. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_inverted_boolean_run_verified-0032/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_inverted_boolean_run_verified-0032/workspace"
+        ]
+      },
+      "name": "py_inverted_boolean_run_verified-0032",
+      "replace": "    if apparent_magnitude >= 78 or observation_night_ready:",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_starfield.py"
+      ],
+      "search": "    if apparent_magnitude >= 78 and observation_night_ready:",
+      "target": "starfield.py",
+      "test_file": "test_starfield.py",
+      "workspace": "tasks/py_inverted_boolean_run_verified-0032/workspace",
+      "workspace_sha256": "4e5d0167ec2029eace1beb15d9025901b69632543388e18232d0d2b8b75ec042"
+    },
+    {
+      "family": "py_off_by_one_index_run_verified",
+      "goal": "forecastcalc.py's first_and_last_dew_point() returns the first dew_point reading twice instead of the first and last -- first_and_last_dew_point([327, 89, 225, 78]) returns (327, 327) instead of (327, 78). Fix the last assignment in first_and_last_dew_point() in forecastcalc.py so it takes the last dew_point reading. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_index_run_verified-0033/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_index_run_verified-0033/workspace"
+        ]
+      },
+      "name": "py_off_by_one_index_run_verified-0033",
+      "replace": "    last_leading_value = dew_point_values[-1]",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_forecastcalc.py"
+      ],
+      "search": "    last_leading_value = dew_point_values[0]",
+      "target": "forecastcalc.py",
+      "test_file": "test_forecastcalc.py",
+      "workspace": "tasks/py_off_by_one_index_run_verified-0033/workspace",
+      "workspace_sha256": "dda29ba12e44f70f4ac06c11fd8dc83fda7257214a42cb7d7bd6b2caaae2b4e5"
+    },
+    {
+      "family": "py_off_by_one_range_bound_run_verified",
+      "goal": "Please correct the loop bound in crossfade_ms_checkpoints() in loopcheck.py: crossfade_ms_checkpoints() currently stops one short of producing a marker for every cycle from 1 through count, and crossfade_ms_checkpoints(12) yields only 11 markers and cycle 12 never appears proves it. Once corrected, the final cycle is included. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_range_bound_run_verified-0034/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_range_bound_run_verified-0034/workspace"
+        ]
+      },
+      "name": "py_off_by_one_range_bound_run_verified-0034",
+      "replace": "    for pointer in range(1, crossfade_ms_count + 1):",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_loopcheck.py"
+      ],
+      "search": "    for pointer in range(1, crossfade_ms_count):",
+      "target": "loopcheck.py",
+      "test_file": "test_loopcheck.py",
+      "workspace": "tasks/py_off_by_one_range_bound_run_verified-0034/workspace",
+      "workspace_sha256": "7fa74882b6ffa2d9d38d3d9891710f5d6e5760ee5181954f6681e99b888d5eff"
+    },
+    {
+      "family": "py_wrong_comparison_operator_run_verified",
+      "goal": "Bug ticket for ridgewalk.py: lowest_switchback_count() keeps the highest switchback_count instead of the lowest one. Evidence: lowest_switchback_count([105, 164, 372, 101, 336]) returns 372 instead of 101. Resolution: update the comparison in lowest_switchback_count() in ridgewalk.py -- it keeps the lowest switchback_count. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_comparison_operator_run_verified-0035/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_comparison_operator_run_verified-0035/workspace"
+        ]
+      },
+      "name": "py_wrong_comparison_operator_run_verified-0035",
+      "replace": "        if x < standout_value:",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_ridgewalk.py"
+      ],
+      "search": "        if x > standout_value:",
+      "target": "ridgewalk.py",
+      "test_file": "test_ridgewalk.py",
+      "workspace": "tasks/py_wrong_comparison_operator_run_verified-0035/workspace",
+      "workspace_sha256": "d6807dc5e5cdc8109be09728fcccb65ca1f0ce63d6f7b2cb8d6727445ac4345d"
+    },
+    {
+      "family": "py_wrong_constant_multiplier_run_verified",
+      "goal": "Bug ticket for brinecheck.py: scaled_coral_count() scales by the wrong calibration factor. Evidence: scaled_coral_count(131) returns 262.0 instead of 163.75. Resolution: update scaled_coral_count() in brinecheck.py -- it multiplies by 1.25. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_constant_multiplier_run_verified-0036/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_constant_multiplier_run_verified-0036/workspace"
+        ]
+      },
+      "name": "py_wrong_constant_multiplier_run_verified-0036",
+      "replace": "    return value * 1.25",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_brinecheck.py"
+      ],
+      "search": "    return value * 2.0",
+      "target": "brinecheck.py",
+      "test_file": "test_brinecheck.py",
+      "workspace": "tasks/py_wrong_constant_multiplier_run_verified-0036/workspace",
+      "workspace_sha256": "6d7f5863633a3321136816751ee15d5f46e17ab52d44af26191436bb9528e407"
+    },
+    {
+      "family": "py_wrong_dict_key_run_verified",
+      "goal": "Please correct the dict lookup in redshift_value() in starfield.py: redshift_value() currently reads the \"secondary\" entry instead of \"candidate\", and redshift_value({'candidate': 246, 'secondary': 208}) returns 208 instead of 246 proves it. Once corrected, it reads \"candidate\". Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_dict_key_run_verified-0037/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_dict_key_run_verified-0037/workspace"
+        ]
+      },
+      "name": "py_wrong_dict_key_run_verified-0037",
+      "replace": "    return entry[\"candidate\"]",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_starfield.py"
+      ],
+      "search": "    return entry[\"secondary\"]",
+      "target": "starfield.py",
+      "test_file": "test_starfield.py",
+      "workspace": "tasks/py_wrong_dict_key_run_verified-0037/workspace",
+      "workspace_sha256": "7a83a74f466ea50931bc1eb7d0b5726126763cb5f82d47cd5e1a810aa3d7c65d"
+    },
+    {
+      "family": "py_wrong_fstring_field_run_verified",
+      "goal": "Bug ticket for loopcheck.py: describe_sample_rate() reports sample_rate where mixdown_level should appear. Evidence: describe_sample_rate(245, 150) returns 'sample_rate=245, mixdown_level=245' instead of 'sample_rate=245, mixdown_level=150'. Resolution: update the f-string in describe_sample_rate() in loopcheck.py -- it reports mixdown_level, not sample_rate. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_fstring_field_run_verified-0038/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_fstring_field_run_verified-0038/workspace"
+        ]
+      },
+      "name": "py_wrong_fstring_field_run_verified-0038",
+      "replace": "    return f\"sample_rate={sample_rate}, mixdown_level={mixdown_level}\"",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_loopcheck.py"
+      ],
+      "search": "    return f\"sample_rate={sample_rate}, mixdown_level={sample_rate}\"",
+      "target": "loopcheck.py",
+      "test_file": "test_loopcheck.py",
+      "workspace": "tasks/py_wrong_fstring_field_run_verified-0038/workspace",
+      "workspace_sha256": "c5fe2be53623bb21572c731f82d49715e86a5923a83b53388a7a6c16ccad9401"
+    },
+    {
+      "family": "py_wrong_variable_reference_run_verified",
+      "goal": "A reviewer flagged starfield.py because combined_observation_night_right_ascension() adds the adjusted observation_night in twice instead of combining observation_night and right_ascension, shown by combined_observation_night_right_ascension(163, 130) returns 652 instead of 586. Needed change: the return in combined_observation_night_right_ascension() in starfield.py -- it adds adjusted_right_ascension instead of repeating adjusted_observation_night. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_variable_reference_run_verified-0039/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_variable_reference_run_verified-0039/workspace"
+        ]
+      },
+      "name": "py_wrong_variable_reference_run_verified-0039",
+      "replace": "    return adjusted_observation_night + adjusted_right_ascension",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_starfield.py"
+      ],
+      "search": "    return adjusted_observation_night + adjusted_observation_night",
+      "target": "starfield.py",
+      "test_file": "test_starfield.py",
+      "workspace": "tasks/py_wrong_variable_reference_run_verified-0039/workspace",
+      "workspace_sha256": "7c8877a1b94508b4abbbd8690959477c12757f4c35c0810211b15b4a7b8f4caa"
+    },
+    {
+      "family": "py_inverted_boolean_run_verified",
+      "goal": "Please correct the condition in is_eligible() in harvestlog.py: is_eligible() currently requires both conditions instead of either one (or vice versa), and is_eligible(25, True) returns True instead of False proves it. Once corrected, the connector is correct. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_inverted_boolean_run_verified-0040/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_inverted_boolean_run_verified-0040/workspace"
+        ]
+      },
+      "name": "py_inverted_boolean_run_verified-0040",
+      "replace": "    if harvest_day >= 64 and greenhouse_temp_ready:",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_harvestlog.py"
+      ],
+      "search": "    if harvest_day >= 64 or greenhouse_temp_ready:",
+      "target": "harvestlog.py",
+      "test_file": "test_harvestlog.py",
+      "workspace": "tasks/py_inverted_boolean_run_verified-0040/workspace",
+      "workspace_sha256": "feb1a82975a773e542259ac7b2c44b5cb9dc080f6d6c02a67ec066ba19edb3ef"
+    },
+    {
+      "family": "py_off_by_one_index_run_verified",
+      "goal": "Please correct the last assignment in first_and_last_recovery_days() in intervalplan.py: first_and_last_recovery_days() currently returns the first recovery_days reading twice instead of the first and last, and first_and_last_recovery_days([185, 33, 229, 262]) returns (185, 185) instead of (185, 262) proves it. Once corrected, it takes the last recovery_days reading. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_index_run_verified-0041/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_index_run_verified-0041/workspace"
+        ]
+      },
+      "name": "py_off_by_one_index_run_verified-0041",
+      "replace": "    last_notable_reading = recovery_days_values[-1]",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_intervalplan.py"
+      ],
+      "search": "    last_notable_reading = recovery_days_values[0]",
+      "target": "intervalplan.py",
+      "test_file": "test_intervalplan.py",
+      "workspace": "tasks/py_off_by_one_index_run_verified-0041/workspace",
+      "workspace_sha256": "735801a80e5f41c924919e91d2534e65c91e627c0f93c16d52fb133ce0a5bc11"
+    },
+    {
+      "family": "py_off_by_one_range_bound_run_verified",
+      "goal": "Bug ticket for dockplan.py: bay_temperature_checkpoints() stops one short of producing a marker for every cycle from 1 through count. Evidence: bay_temperature_checkpoints(10) yields only 9 markers and cycle 10 never appears. Resolution: update the loop bound in bay_temperature_checkpoints() in dockplan.py -- the final cycle is included. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_range_bound_run_verified-0042/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_range_bound_run_verified-0042/workspace"
+        ]
+      },
+      "name": "py_off_by_one_range_bound_run_verified-0042",
+      "replace": "    for pointer in range(1, bay_temperature_count + 1):",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_dockplan.py"
+      ],
+      "search": "    for pointer in range(1, bay_temperature_count):",
+      "target": "dockplan.py",
+      "test_file": "test_dockplan.py",
+      "workspace": "tasks/py_off_by_one_range_bound_run_verified-0042/workspace",
+      "workspace_sha256": "783b4cc1e7caf8b299adadbcbb012d6b11c473a039459fa47d35a230458cf375"
+    },
+    {
+      "family": "py_wrong_comparison_operator_run_verified",
+      "goal": "bedtracker.py's highest_soil_ph() keeps the lowest soil_ph instead of the highest one -- highest_soil_ph([295, 365, 10, 313, 95]) returns 10 instead of 365. Fix the comparison in highest_soil_ph() in bedtracker.py so it keeps the highest soil_ph. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_comparison_operator_run_verified-0043/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_comparison_operator_run_verified-0043/workspace"
+        ]
+      },
+      "name": "py_wrong_comparison_operator_run_verified-0043",
+      "replace": "        if x > tracked_value:",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_bedtracker.py"
+      ],
+      "search": "        if x < tracked_value:",
+      "target": "bedtracker.py",
+      "test_file": "test_bedtracker.py",
+      "workspace": "tasks/py_wrong_comparison_operator_run_verified-0043/workspace",
+      "workspace_sha256": "10675523dc4a1dcfc210319a18c55c257ff29bc5af97686dbee0acdbe2021f82"
+    },
+    {
+      "family": "py_wrong_constant_multiplier_run_verified",
+      "goal": "Please correct scaled_water_temp() in reeflog.py: scaled_water_temp() currently scales by the wrong calibration factor, and scaled_water_temp(186) returns 232.5 instead of 372.0 proves it. Once corrected, it multiplies by 2.0. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_constant_multiplier_run_verified-0044/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_constant_multiplier_run_verified-0044/workspace"
+        ]
+      },
+      "name": "py_wrong_constant_multiplier_run_verified-0044",
+      "replace": "    return value * 2.0",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_reeflog.py"
+      ],
+      "search": "    return value * 1.25",
+      "target": "reeflog.py",
+      "test_file": "test_reeflog.py",
+      "workspace": "tasks/py_wrong_constant_multiplier_run_verified-0044/workspace",
+      "workspace_sha256": "fa1013bc1bfc05e3693b4517906d53c3a8f2aecefdf8dcf1c880d85f861545f4"
+    },
+    {
+      "family": "py_wrong_dict_key_run_verified",
+      "goal": "A reviewer flagged stationlog.py because temperature_value() reads the \"fallback\" entry instead of \"override\", shown by temperature_value({'override': 492, 'fallback': 290}) returns 290 instead of 492. Needed change: the dict lookup in temperature_value() in stationlog.py -- it reads \"override\". Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_dict_key_run_verified-0045/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_dict_key_run_verified-0045/workspace"
+        ]
+      },
+      "name": "py_wrong_dict_key_run_verified-0045",
+      "replace": "    return entry[\"override\"]",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_stationlog.py"
+      ],
+      "search": "    return entry[\"fallback\"]",
+      "target": "stationlog.py",
+      "test_file": "test_stationlog.py",
+      "workspace": "tasks/py_wrong_dict_key_run_verified-0045/workspace",
+      "workspace_sha256": "98988c0f59cf5c5164ded216517adf26ec448962e87636ccf399e0ffa795e823"
+    },
+    {
+      "family": "py_wrong_fstring_field_run_verified",
+      "goal": "Bug ticket for extractiontrack.py: describe_roast_level() reports roast_level where bloom_seconds should appear. Evidence: describe_roast_level(291, 258) returns 'roast_level=291, bloom_seconds=291' instead of 'roast_level=291, bloom_seconds=258'. Resolution: update the f-string in describe_roast_level() in extractiontrack.py -- it reports bloom_seconds, not roast_level. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_fstring_field_run_verified-0046/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_fstring_field_run_verified-0046/workspace"
+        ]
+      },
+      "name": "py_wrong_fstring_field_run_verified-0046",
+      "replace": "    return f\"roast_level={roast_level}, bloom_seconds={bloom_seconds}\"",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_extractiontrack.py"
+      ],
+      "search": "    return f\"roast_level={roast_level}, bloom_seconds={roast_level}\"",
+      "target": "extractiontrack.py",
+      "test_file": "test_extractiontrack.py",
+      "workspace": "tasks/py_wrong_fstring_field_run_verified-0046/workspace",
+      "workspace_sha256": "a04a79616f351ea27fee4148ac4ab135fc5743a9e05e5dc979f5a9ff475b2d9a"
+    },
+    {
+      "family": "py_wrong_variable_reference_run_verified",
+      "goal": "Bug ticket for transitscan.py: combined_right_ascension_angular_size() adds the adjusted right_ascension in twice instead of combining right_ascension and angular_size. Evidence: combined_right_ascension_angular_size(52, 182) returns 208 instead of 468. Resolution: update the return in combined_right_ascension_angular_size() in transitscan.py -- it adds adjusted_angular_size instead of repeating adjusted_right_ascension. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_variable_reference_run_verified-0047/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_wrong_variable_reference_run_verified-0047/workspace"
+        ]
+      },
+      "name": "py_wrong_variable_reference_run_verified-0047",
+      "replace": "    return adjusted_right_ascension + adjusted_angular_size",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_transitscan.py"
+      ],
+      "search": "    return adjusted_right_ascension + adjusted_right_ascension",
+      "target": "transitscan.py",
+      "test_file": "test_transitscan.py",
+      "workspace": "tasks/py_wrong_variable_reference_run_verified-0047/workspace",
+      "workspace_sha256": "282f65d60f24a8724f7cfa6baa1fa314d0b8358a931fba96d378a584fbe7e679"
+    },
+    {
+      "family": "py_inverted_boolean_run_verified",
+      "goal": "A reviewer flagged palletlog.py because is_acceptable() requires both conditions instead of either one (or vice versa), shown by is_acceptable(61, True) returns True instead of False. Needed change: the condition in is_acceptable() in palletlog.py -- the connector is correct. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_inverted_boolean_run_verified-0048/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_inverted_boolean_run_verified-0048/workspace"
+        ]
+      },
+      "name": "py_inverted_boolean_run_verified-0048",
+      "replace": "    if crate_capacity >= 78 and pick_sequence_ready:",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_palletlog.py"
+      ],
+      "search": "    if crate_capacity >= 78 or pick_sequence_ready:",
+      "target": "palletlog.py",
+      "test_file": "test_palletlog.py",
+      "workspace": "tasks/py_inverted_boolean_run_verified-0048/workspace",
+      "workspace_sha256": "de32d11920f26197617bee4d0ff289bad04b7dc477eddf6c68b220bc60366e2b"
+    },
+    {
+      "family": "py_off_by_one_index_run_verified",
+      "goal": "A reviewer flagged routeplan.py because first_and_last_occupancy_ratio() returns the first occupancy_ratio reading twice instead of the first and last, shown by first_and_last_occupancy_ratio([246, 243, 288, 470]) returns (246, 246) instead of (246, 470). Needed change: the last assignment in first_and_last_occupancy_ratio() in routeplan.py -- it takes the last occupancy_ratio reading. Patch the file, then emit done.",
+      "grant": {
+        "commands": [
+          [
+            "python3",
+            "-m",
+            "unittest"
+          ]
+        ],
+        "read_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_index_run_verified-0049/workspace"
+        ],
+        "write_roots": [
+          "/home/brice/workspace/bloomery/.worktrees/memory-battery/tools/memory_battery/corpus-v1/tasks/py_off_by_one_index_run_verified-0049/workspace"
+        ]
+      },
+      "name": "py_off_by_one_index_run_verified-0049",
+      "replace": "    last_running_peak = occupancy_ratio_values[-1]",
+      "run_argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "test_routeplan.py"
+      ],
+      "search": "    last_running_peak = occupancy_ratio_values[0]",
+      "target": "routeplan.py",
+      "test_file": "test_routeplan.py",
+      "workspace": "tasks/py_off_by_one_index_run_verified-0049/workspace",
+      "workspace_sha256": "b2ce87b1a0bc50686b114decf7872bb8fa21243739b7a752ffefae6bcfa8262c"
+    }
+  ]
+}

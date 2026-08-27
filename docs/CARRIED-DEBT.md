@@ -1498,3 +1498,11 @@ requested context window; still unaddressed, unchanged by this turn.
 - **State restore failures**: size-mismatch/corrupt/stale-digest are
   cold starts, never errors; transient failures re-insert the image
   for retry.
+
+## memory-battery-v1 (2026-08-27, branch memory-battery)
+
+**Settled:** the memory organ's first capability gate — PASS (repeat cost −10.0 tokens median vs 6.11 derived bar, findings 2026-08-27-memory-battery-findings.md); 100% exact-match injection on byte-reset repeats; the contradiction path exercised at scale (2 retired episodes, honest direction); five gate-corrupting defects caught pre-lock by review (MODEL stanza-key, Error-status cost scoring, completion_tokens zero-fill, missing arm-M p1 reset, treatment-identity).
+
+**Deferred, with rulings:** `tools/memory_battery/tests/test_recompute.py` at 1386 lines needs a split (over the 800 ceiling; deliberately not split mid-wave); `_task_step_duration_by_agent` zero-fills `duration_ms` (advisory wall only, never a gate number); `DAEMON_ERROR_STATUS` constant sits mid-import-block (linter cosmetic); ARM_LABEL literals are case-sensitive (`--arm C`/`--arm M` — recorded prereg §5.1/§7); wall-clock on injected repeats is SLOWER at this task size (advisory finding, echoes crucible B4) — a larger-task battery would re-balance prefill-vs-decode and needs its own prereg.
+
+**Process lessons:** a fake-server suite cannot falsify wire values only the live daemon checks (the MODEL stanza-key miss survived 32 green tests; the prereg cross-check caught it); "absent evidence reads as PASS" recurred twice in one module (C1 zero-fill, then the same class one level down at the row field — hunt the whole depth of a cost path, not its first join); a plan brief that paraphrases a spec list drops items (Error statuses fell out of H3's definition in transcription — cite, never restate).
