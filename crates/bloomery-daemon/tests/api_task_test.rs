@@ -117,7 +117,9 @@ fn a_task_runs_and_is_pollable_to_done() {
     assert_eq!(steps[1]["verb"], "done");
     assert_eq!(steps[1]["failed"], false);
     // Window-ladder spec §6: each step object exposes the ladder rung its
-    // prompt was actually sent at. 1 here — this task's prompts all fit.
+    // prompt was actually sent at. 1 here, and for both reasons at once:
+    // this request carries no `window_ladder` field (spec §5's absent →
+    // off), and this task's prompts all fit anyway.
     assert_eq!(steps[0]["rung"], 1, "{last_body}");
     assert_eq!(steps[1]["rung"], 1, "{last_body}");
     assert_eq!(v["summary"], "read the file");
@@ -926,6 +928,128 @@ fn a_non_preseeded_model_never_renders_the_preseed_literal_over_http() {
         "a non-preseeded model must never carry the literal, got: {history}"
     );
     drop(p);
+
+    handle.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// Window ladder (docs/superpowers/specs/2026-08-27-window-ladder-design.md
+// §5): the REQUEST half of the wire. The ladder's own behavior — which rung
+// a refused prompt lands on, what it elides, when it stays terminal — is
+// owned by `task_ladder_test.rs` against `run_task` directly; these two pin
+// only that `"window_ladder"` is a real, typed field of the create-task
+// request. The RESPONSE half (§6: every step object carries its `rung`) is
+// pinned above, inside `a_task_runs_and_is_pollable_to_done`, where the
+// ladder-off default it asserts is the same default that test's request
+// already exercised — a second create-and-poll would re-assert it verbatim.
+// ---------------------------------------------------------------------------
+
+/// Spec §5: a live task opts in over HTTP. The field parses, the request is
+/// accepted (`202`), and the task still runs to `Done` — an opt-in whose
+/// prompts all fit is byte-identical work at rung 1, which its step row then
+/// reports (spec §2: rung 1 IS today's rendering).
+#[test]
+fn create_task_accepts_window_ladder_true() {
+    let (port, handle, sandbox) =
+        bloomery_daemon::test_support::serve_fake_with_tasks(true, vec![done_reply("ladder on")]);
+    let sandbox = std::fs::canonicalize(&sandbox).unwrap();
+    let addr = format!("127.0.0.1:{port}");
+
+    let (st, body) = http(&addr, "POST", "/agents", r#"{"model":"qwen"}"#);
+    assert_eq!(st, 201, "{body}");
+    let agent_id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let task_req = serde_json::json!({
+        "goal": "say done",
+        "grants": {
+            "read_roots": [sandbox.to_string_lossy()],
+            "write_roots": [sandbox.to_string_lossy()],
+            "commands": [],
+        },
+        "window_ladder": true,
+    })
+    .to_string();
+
+    let (st, body) = http(
+        &addr,
+        "POST",
+        &format!("/agents/{agent_id}/task"),
+        &task_req,
+    );
+    assert_eq!(st, 202, "{body}");
+    let task_id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let last_body = wait_for_terminal(&addr, &agent_id, &task_id);
+    let v: serde_json::Value = serde_json::from_str(&last_body).unwrap();
+    assert_eq!(v["status"], "Done", "{last_body}");
+    assert_eq!(v["summary"], "ladder on", "{last_body}");
+    let steps = v["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 1, "{last_body}");
+    assert_eq!(steps[0]["verb"], "done");
+    assert_eq!(
+        steps[0]["rung"], 1,
+        "opting in must not degrade a prompt that already fits: {last_body}"
+    );
+
+    handle.shutdown();
+}
+
+/// The companion that keeps the test above from being vacuous: `CreateTaskReq`
+/// declares no `#[serde(deny_unknown_fields)]`, so a `202` alone would be
+/// just as green if `window_ladder` were never a field at all and serde
+/// silently dropped it. A non-boolean value is refused with this route's one
+/// `400 bad_request` shape — which only a really-declared `bool` field can
+/// produce, making this the assertion that fails if the request wiring is
+/// ever removed.
+#[test]
+fn a_non_boolean_window_ladder_is_400() {
+    let (port, handle, sandbox) =
+        bloomery_daemon::test_support::serve_fake_with_tasks(true, vec![]);
+    let sandbox = std::fs::canonicalize(&sandbox).unwrap();
+    let addr = format!("127.0.0.1:{port}");
+
+    // A real agent, so the refusal below can only be the field's type: an
+    // otherwise-identical body with `true` is the `202` above.
+    let (st, body) = http(&addr, "POST", "/agents", r#"{"model":"qwen"}"#);
+    assert_eq!(st, 201, "{body}");
+    let agent_id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let task_req = serde_json::json!({
+        "goal": "say done",
+        "grants": {
+            "read_roots": [sandbox.to_string_lossy()],
+            "write_roots": [sandbox.to_string_lossy()],
+            "commands": [],
+        },
+        "window_ladder": "yes",
+    })
+    .to_string();
+
+    let (st, body) = http(
+        &addr,
+        "POST",
+        &format!("/agents/{agent_id}/task"),
+        &task_req,
+    );
+    assert_eq!(st, 400, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"], "bad_request");
+    assert!(
+        v["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("boolean"),
+        "the parse must have failed on the bool field itself: {body}"
+    );
 
     handle.shutdown();
 }
