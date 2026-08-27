@@ -20,6 +20,17 @@ from pathlib import Path
 from typing import Any
 
 from tools.memory_battery.driver import DRIVER_INFRA_STATUS
+
+# Design spec §4, H3, quoted verbatim: "`Error` statuses, daemon faults,
+# driver-detected protocol breaks -- always counted separately from task
+# conduct, never scored as cost data; those tasks are `dropped` for E1."
+# `"Error"` is the daemon's own `TaskStatus::Error` serialization
+# (`crates/bloomery-daemon/src/task/task_loop.rs`, unrenamed serde),
+# recorded verbatim by `driver.py`'s terminal-state table. It is the ONLY
+# terminal status the spec puts on the infra side of that line: the other
+# four (`Done`, `BudgetExhausted`, `StepsExhausted`, `WindowExhausted`) are
+# task CONDUCT and pay their real cost under the ITT rule.
+DAEMON_ERROR_STATUS = "Error"
 from tools.memory_battery.recompute_journal import (
     _completion_tokens_by_agent,
     _done_agent_ids,
@@ -48,7 +59,18 @@ def _measure_arm(
     joinable for any reason becomes exactly one named ``dropped`` entry
     (none-vs-zero: never a silent zero).
 
-    **Review finding C2 fix.** ALL FIVE ``dropped`` reasons below are
+    **Branch-review finding C-1 fix.** A task-half whose LEDGER row
+    carries the daemon's own ``"Error"`` terminal status is dropped
+    (``infra: True``, named reason) BEFORE any journal row of its is
+    consulted -- design spec §4's H3 clause puts ``Error`` statuses on the
+    infra side of the line verbatim ("always counted separately from task
+    conduct, never scored as cost data; those tasks are ``dropped`` for
+    E1"), so a task that errored out cheaply must never be allowed to drag
+    a phase-2 median down as if it were a cheap SUCCESS. Only ``Error``
+    is treated this way: ``BudgetExhausted``/``StepsExhausted``/
+    ``WindowExhausted``/``Done`` are conduct and pay their real cost (ITT).
+
+    **Review finding C2 fix.** ALL SIX ``dropped`` reasons below are
     flagged ``infra: True`` -- including "no ledger row" and "carries no
     task_id", which an earlier revision excluded from H3's infra rate on
     the theory that they "cannot occur in a well-formed real run". A
@@ -62,7 +84,7 @@ def _measure_arm(
 
     **Review finding C1 fix.** A task-half that joins all the way to a
     real agent id but has ZERO `InferCompleted` rows for that id (the
-    fifth reason below) is ALSO dropped, never a silent `cost: 0` --
+    sixth reason below) is ALSO dropped, never a silent `cost: 0` --
     `completion_by_agent.get(agent_id, 0)`'s old fallback made a deleted
     or truncated boot journal read as "every task cost nothing", which
     the reviewer's probe turned into a manufactured PASS. Only an agent id
@@ -92,6 +114,20 @@ def _measure_arm(
                         "phase": phase,
                         "infra": True,
                         "reason": f"driver-infra status recorded for task {name!r} phase {phase}",
+                    }
+                )
+                continue
+            if ledger_row.get("status") == DAEMON_ERROR_STATUS:
+                dropped.append(
+                    {
+                        "task": name,
+                        "phase": phase,
+                        "infra": True,
+                        "reason": (
+                            f"daemon Error status recorded for task {name!r} phase {phase} -- "
+                            f"design spec §4 H3: Error statuses are infra, counted separately "
+                            f"from task conduct and never scored as cost data"
+                        ),
                     }
                 )
                 continue
@@ -178,8 +214,9 @@ def _load_arm(arm_dir: Path, ledger_path: Path, manifest_tasks: list[dict[str, A
     reshape into the per-phase view. Returns everything `recompute()`
     needs to assemble that arm's slice of the output (view, dropped list,
     raw row counts, identity digests, the task_id->phase map the H4
-    mint-rate advisory needs, and the raw ledger task-half count the C2
-    arm-completeness check needs).
+    mint-rate advisory needs, the raw ledger task-half count the C2
+    arm-completeness check needs, and the distinct ledger ``arm`` labels
+    the branch-review finding I-2 treatment-identity check needs).
 
     **Review finding C1 fix.** A boot-journal glob that matches NOTHING is
     a HARD failure, raised here, never a silent empty list: `_read_jsonl`
@@ -200,9 +237,16 @@ def _load_arm(arm_dir: Path, ledger_path: Path, manifest_tasks: list[dict[str, A
             f"journals has no possible source for any task's cost; this is a hard failure, "
             f"never a silent zero-fill (review finding C1)"
         )
-    boot_journal_rows: list[dict[str, Any]] = []
+    # Per-FILE cost accumulation (rather than one concatenated row list) so
+    # that a malformed `InferCompleted` row names the exact boot journal it
+    # came from in its own error message -- branch-review finding C-2's
+    # "legible error naming the journal/row" requirement. Sums still span
+    # files: an agent whose rows straddle a boot-journal rotation gets its
+    # per-file totals merged here, exactly as the re-ask rule requires.
+    completion_by_agent: dict[str, int] = {}
     for boot_path in boot_paths:
-        boot_journal_rows.extend(_read_jsonl(boot_path))
+        for agent_id, total in _completion_tokens_by_agent(_read_jsonl(boot_path), boot_path).items():
+            completion_by_agent[agent_id] = completion_by_agent.get(agent_id, 0) + total
 
     ledger_task_halves, ledger_identity_rows = _read_ledger(ledger_path)
     identity_by_phase = {row.get("phase"): row.get("digest") for row in ledger_identity_rows}
@@ -211,7 +255,6 @@ def _load_arm(arm_dir: Path, ledger_path: Path, manifest_tasks: list[dict[str, A
     done_agents = _done_agent_ids(tasks_journal_rows)
     step_counts = _task_step_count_by_agent(tasks_journal_rows)
     step_walls = _task_step_duration_by_agent(tasks_journal_rows)
-    completion_by_agent = _completion_tokens_by_agent(boot_journal_rows)
 
     measurements, dropped = _measure_arm(
         manifest_tasks,
@@ -235,4 +278,10 @@ def _load_arm(arm_dir: Path, ledger_path: Path, manifest_tasks: list[dict[str, A
         "tasks_journal_rows": tasks_journal_rows,
         "task_id_to_phase": task_id_to_phase,
         "ledger_task_half_count": len(ledger_task_halves),
+        # Branch-review finding I-2(b): the distinct `arm` labels this
+        # arm's task-half ledger rows actually carry, coerced to `str` so a
+        # missing/None label sorts and compares legibly instead of raising.
+        # A slot fed the wrong arm's ledger shows up here as the wrong
+        # label -- `_check_treatment_identity` turns that into INVALID.
+        "ledger_arm_labels": sorted({str(row.get("arm")) for row in ledger_task_halves.values()}),
     }

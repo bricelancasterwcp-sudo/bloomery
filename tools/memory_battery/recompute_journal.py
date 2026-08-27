@@ -103,16 +103,39 @@ def _task_step_duration_by_agent(tasks_journal_rows: list[dict[str, Any]]) -> di
     return totals
 
 
-def _completion_tokens_by_agent(boot_journal_rows: list[dict[str, Any]]) -> dict[str, int]:
+def _completion_tokens_by_agent(
+    boot_journal_rows: list[dict[str, Any]], source: Path | str
+) -> dict[str, int]:
     """cost(task) join (task-4 brief, verbatim): "sum(completion_tokens
     over the task's agent's InferCompleted rows)" -- summed here across
     EVERY ``InferCompleted`` row for a given agent id, which is what makes
     a re-ask (two ``InferCompleted`` rows for the same agent) pay its real,
-    summed cost rather than only its first reply's."""
+    summed cost rather than only its first reply's. ``source`` is the boot
+    journal these rows were read from, carried only so a malformed row can
+    name its own file.
+
+    **Branch-review finding C-2 fix.** The old ``row.get(
+    "completion_tokens", 0)`` priced a malformed ``InferCompleted`` row at
+    ZERO instead of failing -- the same manufactured-cost shape finding C1
+    already killed at the arm level, but one row deep and therefore
+    invisible in every ``dropped`` list: a uniform serialization drift
+    (every row losing the field) reads as "every task cost 0" in BOTH
+    arms, which is a verdict PASS at ``delta_min`` 0.0 (probe-proven), not
+    a named failure. This file's own contract for a corrupt journal is
+    fail-loud (see ``_read_jsonl``: "a corrupt journal must fail loudly
+    rather than silently skip events" -- project law 7), and a cost row
+    that cannot be read is exactly that."""
     totals: dict[str, int] = {}
-    for row in boot_journal_rows:
-        if row.get("event") == "InferCompleted":
-            totals[row["id"]] = totals.get(row["id"], 0) + row.get("completion_tokens", 0)
+    for row_number, row in enumerate(boot_journal_rows, start=1):
+        if row.get("event") != "InferCompleted":
+            continue
+        if "completion_tokens" not in row:
+            raise ValueError(
+                f"{source}: InferCompleted row {row_number} (agent id {row.get('id')!r}) "
+                f"carries no 'completion_tokens' field -- a cost row that cannot be read "
+                f"is a hard failure, never a silent 0 (review finding C-2). Row: {row!r}"
+            )
+        totals[row["id"]] = totals.get(row["id"], 0) + row["completion_tokens"]
     return totals
 
 

@@ -32,6 +32,24 @@ HYGIENE_SE_MULTIPLIER = 2
 # kill".
 INFRA_RATE_CEILING = 0.05
 
+# Branch-review finding I-2 (controller-ruled as code): the treatment
+# itself must be verifiable from the data, not assumed from the command
+# line. Design spec §4 pins each arm's configuration -- "Arm C: `[memory]
+# enabled = false`" / "Arm M: `[memory] enabled = true` ... Phase 1 mints;
+# phase 2 retrieves and injects" -- and the daemon stamps the realized
+# mode on EVERY spawned task (`registry.rs`'s `Event::MemoryStamp`, written
+# "including tasks that ran with the organ off"). So a memory-off arm can
+# only ever produce `mode: "off"` stamps, and a memory-on arm only
+# `"silent"` (nothing retrieved) or `"injected"` (something was).
+#
+# ARM_LABEL_C/ARM_LABEL_M are the `arm` strings `driver.py` writes verbatim
+# onto every ledger row from its `--arm` argument (`run_arm`'s `arm_name`);
+# Tasks 6/7 must therefore invoke the driver as `--arm C` and `--arm M`.
+ARM_LABEL_C = "C"
+ARM_LABEL_M = "M"
+ARM_C_ALLOWED_MODES = ("off",)
+ARM_M_ALLOWED_MODES = ("silent", "injected")
+
 
 def _median_or_none(values: Sequence[float]) -> float | None:
     return statistics.median(values) if values else None
@@ -147,6 +165,67 @@ def _check_arm_completeness(arm_label: str, actual_task_halves: int, n: int) -> 
         "actual_task_halves": actual_task_halves,
         "violated": violated,
         "reason": reason,
+    }
+
+
+def _check_treatment_identity(
+    expected_arm_label: str,
+    allowed_modes: tuple[str, ...],
+    view: dict[str, Any],
+    ledger_arm_labels: list[str],
+) -> dict[str, Any]:
+    """Branch-review finding I-2 (controller-ruled as code), NOT named in
+    design spec §4: does the data in this slot actually come from the arm
+    the slot claims? Two independent facts, either of which alone makes
+    the run INVALID:
+
+    (a) **Realized treatment mode.** Every JOINED ``MemoryStamp`` in the C
+    slot must carry ``mode == "off"``; every one in the M slot must carry
+    ``"silent"`` or ``"injected"``. Nothing else in the hygiene chain can
+    see a C/M transposition or a mis-configured arm C (an arm C booted
+    with ``[memory] enabled = true`` still produces perfectly well-formed
+    journals, passes identity, H1, H2, H3 -- and silently INVERTS E1,
+    since the "control" would then be the treated arm). A cheap
+    configuration slip therefore has to be a named INVALID, not a number.
+
+    (b) **Ledger arm label.** Every task-half ledger row in this slot must
+    carry exactly ``expected_arm_label`` (``driver.py`` writes ``--arm``
+    verbatim on every row). Ledgers passed in the wrong slots are the
+    other half of the same transposition, and are otherwise indetectable
+    because the join itself succeeds.
+
+    Consumes NO RNG -- deliberately, so slotting this check into the fixed
+    hygiene order (arm-completeness -> identity -> THIS -> H1 -> H2 -> H3)
+    cannot disturb the bootstrap's pinned draw order."""
+    offending_stamps = [
+        {"task": name, "phase": phase, "mode": mode}
+        for phase in (1, 2)
+        for name, mode in sorted(view["modes"][phase].items())
+        if mode not in allowed_modes
+    ]
+    observed_arm_labels = list(ledger_arm_labels)
+    label_violated = observed_arm_labels != [expected_arm_label]
+
+    parts = []
+    if label_violated:
+        parts.append(
+            f"{expected_arm_label}: task-half ledger rows carry arm label(s) "
+            f"{observed_arm_labels} -- expected exactly ['{expected_arm_label}'] "
+            f"(arm slots transposed, or the driver was invoked with the wrong --arm)"
+        )
+    if offending_stamps:
+        parts.append(
+            f"{expected_arm_label}: {len(offending_stamps)} joined MemoryStamp row(s) carry a "
+            f"mode outside {list(allowed_modes)} -- first {offending_stamps[0]} "
+            f"(treatment identity: arm C must be memory-off, arm M memory-on -- design spec §4)"
+        )
+    return {
+        "expected_arm_label": expected_arm_label,
+        "observed_arm_labels": observed_arm_labels,
+        "allowed_modes": list(allowed_modes),
+        "offending_stamps": offending_stamps,
+        "violated": bool(label_violated or offending_stamps),
+        "reason": "; ".join(parts) if parts else None,
     }
 
 

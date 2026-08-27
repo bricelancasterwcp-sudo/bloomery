@@ -74,7 +74,7 @@
 
 **Interfaces:**
 - Consumes: the manifest; the daemon HTTP surface exactly as the slice-1 acceptance used it — `POST /agents` `{"model", "window_cap": 16384}` → `{id}`; `POST /agents/{id}/task` `{goal, grants}` → 202 `{task_id}`; `GET /agents/{id}/task/{task_id}` → `{status, steps, summary}`; `POST /agents/{id}/suspend`; `GET /status` (served-identity: `models[0].digest`).
-- Produces: `run_arm(manifest, base_url, arm_name, expected_digest, ledger_path) -> None` executing: identity assert → phase 1 (manifest order: create agent → submit → poll 5 s cadence, 600 s per-task deadline → suspend) → reset every workspace from pristine (byte-copy + `__pycache__` purge — the pyc rule) → identity assert → phase 2 (same order, fresh agents). Ledger: one JSONL row per task-half `{arm, phase, task, agent_id, task_id, status, wall_s, ts}` — observational only; a doc comment states journals are the only quotable source.
+- Produces: `run_arm(manifest, base_url, arm_name, expected_digest, ledger_path) -> None` executing: reset every workspace from pristine → identity assert → phase 1 (manifest order: create agent → submit → poll 5 s cadence, 600 s per-task deadline → suspend) → reset every workspace from pristine again (byte-copy + `__pycache__` purge — the pyc rule) → identity assert → phase 2 (same order, fresh agents). The reset runs before EVERY phase, phase 1 included (branch-review finding I-1: an arm must not inherit the previous arm's patched workspaces); it is idempotent, so on a clean tree it is a byte-identical no-op. Ledger: one JSONL row per task-half `{arm, phase, task, agent_id, task_id, status, wall_s, ts}` — observational only; a doc comment states journals are the only quotable source.
 - Terminal-state table (pinned): poll ends on any non-`Running` status; a poll deadline or HTTP failure records `status: "driver-infra"` and CONTINUES to the next task (H3 counts it); the driver never retries a task and never reorders.
 - `run_battery.sh`: `setsid nohup python3 -m tools.memory_battery.driver ... & `-style detach writing `<out>/driver.pid` and, on any exit, `<out>/driver.DONE` containing the exit code (trap-based — cover every terminal state). `watch_battery.sh`: poll marker-or-pid-death; silence must be distinguishable from success.
 - INVARIANTS (tests drive `run_arm` against a stdlib `http.server` fake scripted per-request; no GPU): manifest order preserved both phases; suspend called after every task incl. failed ones; identity mismatch aborts the arm BEFORE any task (asserting no task requests were made); a scripted non-Running status ends that task's polling; a scripted 500 records `driver-infra` and the next task still runs; resets restore pristine bytes and remove `__pycache__`.
@@ -127,7 +127,7 @@
 
 ### Task 7: HUMAN GATE — arm M (memory-on) run
 
-- [ ] Same preflight; fresh scratch data_dir (empty store); boot with the arm-M config; run; archive; shutdown. Workspaces are regenerated from pristine before the arm starts (the driver does it; verify one `workspace_sha256` by hand).
+- [ ] Same preflight; fresh scratch data_dir (empty store); boot with the arm-M config; run; archive; shutdown. Workspaces are regenerated from pristine before the arm starts — the driver does it, resetting before phase 1 as well as between phases (branch-review finding I-1; without the pre-phase-1 reset, arm M's phase 1 would have inherited arm C's phase-2 patched workspaces). Verify one `workspace_sha256` by hand anyway, as an independent check.
 
 ### Task 8: The gate and the findings doc
 

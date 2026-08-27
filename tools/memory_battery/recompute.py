@@ -80,6 +80,10 @@ from typing import Any, Sequence
 
 from tools.memory_battery.driver import WINDOW_CAP
 from tools.memory_battery.recompute_bootstrap import (
+    ARM_C_ALLOWED_MODES,
+    ARM_LABEL_C,
+    ARM_LABEL_M,
+    ARM_M_ALLOWED_MODES,
     BOOTSTRAP_B,
     BOOTSTRAP_SEED,
     _bootstrap_diff_paired,
@@ -89,6 +93,7 @@ from tools.memory_battery.recompute_bootstrap import (
     _check_h2,
     _check_h3,
     _check_identity,
+    _check_treatment_identity,
     _median_or_none,
 )
 from tools.memory_battery.recompute_join import _load_arm
@@ -234,10 +239,24 @@ def recompute(
     ``ledger_m``) -- ``expected_digest`` is an ADDITIVE, optional
     keyword-only parameter (see this module's docstring judgment call).
 
-    Evaluates identity (R-PF-B1), H1, H2, H3 -- design spec §4's order --
-    UNCONDITIONALLY (never skipped; every hygiene finding is reported even
-    when an earlier one already failed, since that is strictly more
-    informative for a findings doc than stopping at the first violation).
+    **The fixed hygiene evaluation order** (design spec §4's own H1 -> H2
+    -> H3 sequence, with three guards the spec does not name slotted ahead
+    of it -- each one is a question about whether the numbers are even
+    ABOUT what they claim, which is logically prior to comparing medians):
+
+        1. arm completeness   (review finding C2 -- did the arm finish?)
+        2. identity           (R-PF-B1 -- was it the pinned model?)
+        3. treatment identity (finding I-2 -- was it the pinned ARM?)
+        4. H1 control stability
+        5. H2 first-exposure equivalence
+        6. H3 infra rate
+
+    Only steps 4 and 5 consume the seeded RNG; 1-3 are pure comparisons,
+    which is what lets them be inserted without disturbing the bootstrap's
+    pinned draw order. All six are evaluated UNCONDITIONALLY (never
+    skipped; every hygiene finding is reported even when an earlier one
+    already failed, since that is strictly more informative for a findings
+    doc than stopping at the first violation).
     E1's bootstrap and PASS/FAIL/UNMEASURABLE decision is the only thing
     short-circuited to INVALID when any hygiene check is violated (design
     spec §4: "any INVALID short-circuits E1's verdict to INVALID"; §6:
@@ -273,16 +292,33 @@ def recompute(
     completeness_m = _check_arm_completeness("M", arm_m["ledger_task_half_count"], n)
     completeness_violated = completeness_c["violated"] or completeness_m["violated"]
 
-    identity_c = _check_identity("C", arm_c["identity_by_phase"], expected_digest)
-    identity_m = _check_identity("M", arm_m["identity_by_phase"], expected_digest)
+    identity_c = _check_identity(ARM_LABEL_C, arm_c["identity_by_phase"], expected_digest)
+    identity_m = _check_identity(ARM_LABEL_M, arm_m["identity_by_phase"], expected_digest)
     identity_violated = identity_c["violated"] or identity_m["violated"]
+
+    # Branch-review finding I-2: treatment identity slots THIRD -- after
+    # arm-completeness and served-model identity, BEFORE H1 (see this
+    # function's docstring for the full fixed order). It consumes no RNG,
+    # so H1/H2/E1's pinned bootstrap draw order is untouched.
+    treatment_c = _check_treatment_identity(
+        ARM_LABEL_C, ARM_C_ALLOWED_MODES, arm_c["view"], arm_c["ledger_arm_labels"]
+    )
+    treatment_m = _check_treatment_identity(
+        ARM_LABEL_M, ARM_M_ALLOWED_MODES, arm_m["view"], arm_m["ledger_arm_labels"]
+    )
+    treatment_violated = treatment_c["violated"] or treatment_m["violated"]
 
     h1 = _check_h1(rng, arm_c["view"], manifest_tasks)
     h2 = _check_h2(rng, arm_c["view"], arm_m["view"], manifest_tasks)
     h3 = _check_h3(arm_c["dropped"], arm_m["dropped"], n)
 
     hygiene_violated = (
-        completeness_violated or identity_violated or h1["violated"] or h2["violated"] or h3["violated"]
+        completeness_violated
+        or identity_violated
+        or treatment_violated
+        or h1["violated"]
+        or h2["violated"]
+        or h3["violated"]
     )
     hygiene_reasons = [
         reason
@@ -291,6 +327,8 @@ def recompute(
             completeness_m["reason"],
             identity_c["reason"],
             identity_m["reason"],
+            treatment_c["reason"],
+            treatment_m["reason"],
             h1["reason"],
             h2["reason"],
             h3["reason"],
@@ -388,6 +426,7 @@ def recompute(
         "reasons": hygiene_reasons,
         "arm_completeness": {"c": completeness_c, "m": completeness_m, "violated": completeness_violated},
         "identity": {"c": identity_c, "m": identity_m, "violated": identity_violated},
+        "treatment_identity": {"c": treatment_c, "m": treatment_m, "violated": treatment_violated},
         "h1_control_stability": h1,
         "h2_first_exposure_equivalence": h2,
         "h3_infra_rate": h3,

@@ -61,15 +61,24 @@ detected infra breaks the journal alone cannot distinguish from a genuine
 task failure, and (c) corroborate the served identity via the rows above.
 No number in this file is ever the number a findings doc cites.
 
-**Reset between phases.** Before phase 2's first request, every task's
-workspace is restored to its frozen `pristine/` byte-snapshot -- a full
-wipe-and-recopy (`_reset_workspace`), so it is trivially byte-identical to
-`pristine/` and cannot retain a stray `__pycache__` a phase-1 `unittest`
-run may have left (`_purge_pycache`, belt-and-suspenders on top of the
-wipe: the pyc rule -- stale bytecode surviving a byte-only source reset is
-a documented hazard, see
+**Reset before EVERY phase.** Before phase 1's first request AND before
+phase 2's first request, every task's workspace is restored to its frozen
+`pristine/` byte-snapshot -- a full wipe-and-recopy (`_reset_workspace`),
+so it is trivially byte-identical to `pristine/` and cannot retain a stray
+`__pycache__` a previous `unittest` run may have left (`_purge_pycache`,
+belt-and-suspenders on top of the wipe: the pyc rule -- stale bytecode
+surviving a byte-only source reset is a documented hazard, see
 `docs/superpowers/evidence/2026-08-26-memory-organ-acceptance.md` §2's own
 reset recipe).
+
+The PRE-PHASE-1 reset (branch-review finding I-1) is what makes an arm
+independent of whatever ran before it: with resets only BETWEEN phases,
+arm M's phase 1 would have started on the workspaces arm C's phase 2 left
+patched -- silently turning M's "first exposure" into a second exposure on
+already-fixed code and inverting H2's whole meaning. The loop is
+idempotent by construction (wipe-and-recopy from `pristine/` is a
+byte-identical no-op on an already-clean tree), so it costs nothing on the
+first arm ever run and is the only thing that makes the second arm honest.
 
 Python 3 stdlib only (`urllib.request`, `shutil`, `time`, `json`); no
 network library beyond the standard library, no GPU access from this
@@ -377,10 +386,12 @@ def run_arm(
     task_deadline_s: float = DEFAULT_TASK_DEADLINE_S,
 ) -> None:
     """Runs one arm's full two-phase protocol (design spec §4/§5) against
-    the daemon at `base_url`: phase 1 in manifest order, a full workspace
-    reset, phase 2 in the same order with fresh agents. See this module's
-    docstring for the terminal-state table, the ledger's two row shapes,
-    and the identity-assert/abort rule (R-PF-B1).
+    the daemon at `base_url`: a full workspace reset, phase 1 in manifest
+    order, another full reset, phase 2 in the same order with fresh
+    agents. See this module's docstring for the terminal-state table, the
+    ledger's two row shapes, the identity-assert/abort rule (R-PF-B1), and
+    why the PRE-PHASE-1 reset exists (branch-review finding I-1: without
+    it, arm M's phase 1 inherits arm C's phase-2 patched workspaces).
 
     Raises `IdentityMismatchError` if either phase's served digest does
     not match `expected_digest` -- always BEFORE that phase's first task
@@ -391,6 +402,14 @@ def run_arm(
     tasks = manifest["tasks"]
     ledger = Ledger(ledger_path)
     try:
+        # Pre-phase-1 reset (finding I-1). Idempotent: a wipe-and-recopy
+        # from `pristine/` is a byte-identical no-op on an already-clean
+        # tree, so this is free on the first arm and load-bearing on the
+        # second. It runs BEFORE the phase-1 identity assert so that no
+        # request of any kind is issued against a stale workspace.
+        for task_entry in tasks:
+            _reset_workspace(Path(task_entry["grant"]["write_roots"][0]))
+
         _assert_identity(base_url, arm_name, 1, expected_digest, ledger)
         for task_entry in tasks:
             _process_task(base_url, arm_name, 1, task_entry, poll_interval_s, task_deadline_s, ledger)

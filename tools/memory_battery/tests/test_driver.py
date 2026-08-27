@@ -506,35 +506,53 @@ class DriverInvariantsTest(unittest.TestCase):
             self.assertEqual(call[2]["goal"], "goal for t0")
             self.assertEqual(call[2]["grants"], manifest["tasks"][0]["grant"])
 
-    def test_reset_completes_before_phase2_identity_check(self) -> None:
-        """Task-3 review finding: the previous reset test only checked the
-        FINAL on-disk state, which stays correct even if the reset loop is
-        moved to after phase 2 entirely (phase 2 never re-mutates the
-        workspace in these fakes, so the end state looks identical either
-        way). This test captures the workspace's bytes at the exact moment
-        the SECOND (phase-2) `/status` request arrives -- via a callable
-        `Script` response -- so a misplaced or dropped reset is caught
-        directly, not by a coincidental end-state match."""
+    @staticmethod
+    def _snapshot_workspace(workspace: Path) -> dict[str, Any]:
+        """The state a `Script` callable response records at the exact
+        instant a request arrives (see `Response`'s own comment)."""
+        return {
+            "x_txt": (workspace / "x.txt").read_text(encoding="utf-8")
+            if (workspace / "x.txt").exists()
+            else None,
+            "pycache_exists": (workspace / "__pycache__").exists(),
+        }
+
+    @staticmethod
+    def _dirty_workspace(workspace: Path, text: str) -> None:
+        """The shape a real daemon task run leaves behind: a patched source
+        file plus leftover `unittest` bytecode (memory-organ acceptance
+        §2's own reset note)."""
+        (workspace / "x.txt").write_text(text, encoding="utf-8")
+        pycache = workspace / "__pycache__"
+        pycache.mkdir(exist_ok=True)
+        (pycache / "x.cpython-312.pyc").write_bytes(b"stale bytecode")
+
+    def test_reset_completes_before_phase1_identity_check(self) -> None:
+        """Branch-review finding I-1: `run_arm` reset workspaces only
+        BETWEEN its own two phases, so arm M's phase 1 would have started
+        on whatever arm C's phase 2 left behind -- turning M's "first
+        exposure" into a second exposure on already-patched code and
+        inverting H2's meaning. A workspace dirtied BEFORE `run_arm` is
+        called must be pristine by the time the PHASE-1 identity request
+        arrives, and the reset must be a byte-identical no-op on a clean
+        tree (idempotence)."""
         names = ["t0"]
         manifest = _build_manifest(self.tmp_path, names)
         workspace = Path(manifest["tasks"][0]["grant"]["write_roots"][0])
 
-        (workspace / "x.txt").write_text("MUTATED\n", encoding="utf-8")
-        pycache = workspace / "__pycache__"
-        pycache.mkdir()
-        (pycache / "x.cpython-312.pyc").write_bytes(b"stale bytecode")
+        # Simulate a PREVIOUS arm having left this workspace patched.
+        self._dirty_workspace(workspace, "LEFT-OVER-FROM-A-PREVIOUS-ARM\n")
+
+        # The snapshot reader is honest: read now, before `run_arm`, and it
+        # reports the dirt (not a mechanism that always says "pristine").
+        pre_run = self._snapshot_workspace(workspace)
+        self.assertEqual(pre_run["x_txt"], "LEFT-OVER-FROM-A-PREVIOUS-ARM\n")
+        self.assertTrue(pre_run["pycache_exists"])
 
         snapshots: list[dict[str, Any]] = []
 
         def identity_responder() -> tuple[int, Any]:
-            snapshots.append(
-                {
-                    "x_txt": (workspace / "x.txt").read_text(encoding="utf-8")
-                    if (workspace / "x.txt").exists()
-                    else None,
-                    "pycache_exists": (workspace / "__pycache__").exists(),
-                }
-            )
+            snapshots.append(self._snapshot_workspace(workspace))
             return 200, {"models": [{"digest": "d1"}]}
 
         script = Script()
@@ -550,11 +568,68 @@ class DriverInvariantsTest(unittest.TestCase):
         run_arm(manifest, server.base_url, "C", "d1", ledger_path, poll_interval_s=0.0, task_deadline_s=5.0)
 
         self.assertEqual(len(snapshots), 2)
-        # Phase 1's identity check fires before any reset -- the workspace
-        # still shows the simulated pre-run mutation, proving the snapshot
-        # mechanism itself is honest (not just always reporting pristine).
-        self.assertEqual(snapshots[0]["x_txt"], "MUTATED\n")
-        self.assertTrue(snapshots[0]["pycache_exists"])
+        # PHASE 1's identity request must already see a pristine workspace.
+        self.assertEqual(snapshots[0]["x_txt"], "pristine-bytes\n")
+        self.assertFalse(snapshots[0]["pycache_exists"])
+        # Idempotence: the (already-clean) tree at phase 2 is unchanged too.
+        self.assertEqual(snapshots[1]["x_txt"], "pristine-bytes\n")
+        self.assertFalse(snapshots[1]["pycache_exists"])
+
+    def test_reset_completes_before_phase2_identity_check(self) -> None:
+        """Task-3 review finding: the previous reset test only checked the
+        FINAL on-disk state, which stays correct even if the reset loop is
+        moved to after phase 2 entirely (phase 2 never re-mutates the
+        workspace in these fakes, so the end state looks identical either
+        way). This test captures the workspace's bytes at the exact moment
+        the SECOND (phase-2) `/status` request arrives -- via a callable
+        `Script` response -- so a misplaced or dropped reset is caught
+        directly, not by a coincidental end-state match.
+
+        The workspace is dirtied DURING phase 1 (by the phase-1 suspend
+        response, standing in for a task that patched its files), not
+        before `run_arm` -- since finding I-1 added a pre-phase-1 reset, a
+        pre-run mutation would be wiped before phase 1 even starts and
+        this test would no longer distinguish a between-phase reset from
+        no reset at all."""
+        names = ["t0"]
+        manifest = _build_manifest(self.tmp_path, names)
+        workspace = Path(manifest["tasks"][0]["grant"]["write_roots"][0])
+
+        snapshots: list[dict[str, Any]] = []
+        mid_phase1: list[dict[str, Any]] = []
+
+        def identity_responder() -> tuple[int, Any]:
+            snapshots.append(self._snapshot_workspace(workspace))
+            return 200, {"models": [{"digest": "d1"}]}
+
+        def dirtying_suspend() -> tuple[int, Any]:
+            # Phase 1's task "lands a patch" and leaves bytecode behind.
+            self._dirty_workspace(workspace, "MUTATED-BY-PHASE-1\n")
+            mid_phase1.append(self._snapshot_workspace(workspace))
+            return 204, None
+
+        script = Script()
+        script.add("GET", "/status", identity_responder)
+        _add_create(script, "a1")
+        _add_submit(script, "a1", "tk1")
+        _add_poll(script, "a1", "tk1", "Done")
+        script.add("POST", "/agents/a1/suspend", dirtying_suspend)
+        script.add("GET", "/status", identity_responder)
+        _add_ok_task(script, "a2", "tk2")
+
+        server = ScriptedServer(script)
+        self.addCleanup(server.close)
+        ledger_path = self.tmp_path / "ledger.jsonl"
+
+        run_arm(manifest, server.base_url, "C", "d1", ledger_path, poll_interval_s=0.0, task_deadline_s=5.0)
+
+        # The phase-1 dirtying really landed -- so the phase-2 assertion
+        # below is about a reset, not about a mutation that never happened.
+        self.assertEqual(len(mid_phase1), 1)
+        self.assertEqual(mid_phase1[0]["x_txt"], "MUTATED-BY-PHASE-1\n")
+        self.assertTrue(mid_phase1[0]["pycache_exists"])
+
+        self.assertEqual(len(snapshots), 2)
         # Phase 2's identity check must observe the ALREADY-RESET workspace.
         self.assertEqual(snapshots[1]["x_txt"], "pristine-bytes\n")
         self.assertFalse(snapshots[1]["pycache_exists"])
