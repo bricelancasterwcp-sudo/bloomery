@@ -36,7 +36,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 from tools.memory_battery.corpus import generate_corpus
-from tools.memory_battery.corpus_check import check_corpus, main
+from tools.memory_battery.corpus_check import check_corpus, format_report, main
 
 SEED = 1
 N = 3
@@ -205,6 +205,132 @@ class CliExitCodeTest(unittest.TestCase):
             doctored = _read_manifest(out_dir)
             some_family = next(iter(doctored["families"]))
             doctored["families"][some_family] += 1
+            _write_manifest(out_dir, doctored)
+
+            self.assertNotEqual(main([str(out_dir)]), 0)
+
+
+# --- Controller review finding (task-2 review): corpus-level exception
+# safety was unguarded, unlike the per-task path. Three verified crash
+# shapes -- missing manifest.json, a task entry missing "family", and a
+# manifest missing top-level "families" -- each used to raise an uncaught
+# exception through `check_corpus`/`main`, discarding any per-task results
+# already computed. Each class below reproduces one shape and asserts the
+# fixed behavior: a named corpus-level (or families) failure, a nonzero
+# CLI exit -- and, for the two manifest-mutation shapes, that the
+# per-task results already computed are RETAINED, not discarded.
+
+
+class MissingManifestFailsWithNamedCorpusFailureTest(unittest.TestCase):
+    """A directory with no `manifest.json` at all must yield a named
+    `corpus_failures` entry and a legible (zero-task) report -- never an
+    uncaught `FileNotFoundError` out of `check_corpus`."""
+
+    def test_missing_manifest_yields_named_corpus_failure(self) -> None:
+        with TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)  # never populated -- no manifest.json at all
+
+            report = check_corpus(out_dir)
+
+            self.assertFalse(report.ok)
+            self.assertTrue(report.corpus_failures, "expected a named corpus-level failure")
+            self.assertEqual(report.task_results, [])
+            # format_report must render a legible table, never raise.
+            rendered = format_report(report)
+            self.assertIn("CORPUS: FAIL", rendered)
+            self.assertIn("OVERALL: FAIL", rendered)
+
+    def test_missing_manifest_cli_exits_nonzero_without_raising(self) -> None:
+        with TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+
+            # If main() let the exception propagate, this call itself would
+            # error out (an ERROR, not a FAIL) rather than returning a value.
+            self.assertNotEqual(main([str(out_dir)]), 0)
+
+
+class TaskMissingFamilyRetainsTaskResultsTest(unittest.TestCase):
+    """A task entry missing `family` used to raise `KeyError` inside
+    `_check_families`, uncaught, discarding the whole `CheckReport`
+    including per-task results already computed. It must instead fail
+    only `families_ok`, retaining every task's own verdict."""
+
+    def test_missing_family_field_retains_task_results(self) -> None:
+        with TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            manifest = _corpus(out_dir)
+
+            doctored = _read_manifest(out_dir)
+            del doctored["tasks"][0]["family"]
+            _write_manifest(out_dir, doctored)
+
+            report = check_corpus(out_dir)
+
+            self.assertFalse(report.ok)
+            self.assertEqual(report.corpus_failures, [])
+            self.assertFalse(report.families_ok)
+            self.assertTrue(report.families_detail)
+            # Every per-task result is still present and still correct --
+            # removing "family" doesn't touch checks 1-3 at all.
+            self.assertEqual(len(report.task_results), N)
+            self.assertEqual(
+                sorted(r.name for r in report.task_results),
+                sorted(t["name"] for t in manifest["tasks"]),
+            )
+            for result in report.task_results:
+                self.assertTrue(
+                    result.ok,
+                    f"{result.name} unexpectedly failed: fails_before={result.fails_before_detail!r} "
+                    f"passes_after={result.passes_after_detail!r} sha256={result.sha256_detail!r}",
+                )
+
+    def test_missing_family_field_cli_exits_nonzero(self) -> None:
+        with TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            _corpus(out_dir)
+
+            doctored = _read_manifest(out_dir)
+            del doctored["tasks"][0]["family"]
+            _write_manifest(out_dir, doctored)
+
+            self.assertNotEqual(main([str(out_dir)]), 0)
+
+
+class ManifestMissingFamiliesRetainsTaskResultsTest(unittest.TestCase):
+    """A manifest missing the top-level `families` key used to raise
+    `KeyError` inside `_check_families`, uncaught, for the same reason as
+    the missing-per-task-`family` case above."""
+
+    def test_missing_families_key_retains_task_results(self) -> None:
+        with TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            _corpus(out_dir)
+
+            doctored = _read_manifest(out_dir)
+            del doctored["families"]
+            _write_manifest(out_dir, doctored)
+
+            report = check_corpus(out_dir)
+
+            self.assertFalse(report.ok)
+            self.assertEqual(report.corpus_failures, [])
+            self.assertFalse(report.families_ok)
+            self.assertTrue(report.families_detail)
+            self.assertEqual(len(report.task_results), N)
+            for result in report.task_results:
+                self.assertTrue(
+                    result.ok,
+                    f"{result.name} unexpectedly failed: fails_before={result.fails_before_detail!r} "
+                    f"passes_after={result.passes_after_detail!r} sha256={result.sha256_detail!r}",
+                )
+
+    def test_missing_families_key_cli_exits_nonzero(self) -> None:
+        with TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            _corpus(out_dir)
+
+            doctored = _read_manifest(out_dir)
+            del doctored["families"]
             _write_manifest(out_dir, doctored)
 
             self.assertNotEqual(main([str(out_dir)]), 0)

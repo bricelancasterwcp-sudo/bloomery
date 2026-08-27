@@ -44,6 +44,16 @@ returned `CheckReport`, even when a task cannot be run at all (missing
 directory, unreadable file, a KeyError against a malformed entry): that
 task is recorded as a named failure across all three per-task checks,
 never dropped from the report and never silently skipped (task-2 brief).
+
+**Corpus-level exception safety** (task-2 review finding, fixed here): the
+per-task guard above has a corpus-level counterpart. A missing or
+unparseable `manifest.json`, a manifest with no `tasks` list, or check 4
+raising (a task entry missing `family`, or the manifest missing
+`families`) must never raise out of `check_corpus` and discard whatever
+per-task results were already computed -- each becomes a named entry in
+`CheckReport.corpus_failures` instead, and `main()` additionally catches
+any residual exception as a last-resort guard so the CLI always prints a
+legible verdict (never a raw traceback) and exits nonzero on any failure.
 """
 
 from __future__ import annotations
@@ -82,16 +92,30 @@ class CheckReport:
     """The structural checker's full result: one `TaskCheckResult` per
     manifest task entry (check 1-3) plus the corpus-level family-count
     check (check 4). `ok` is the AND of everything -- the CLI's exit code
-    is `0 if report.ok else 1`."""
+    is `0 if report.ok else 1`.
+
+    `corpus_failures` holds named, corpus-level problems that are not any
+    one task's fault -- a missing/unparseable `manifest.json`, a manifest
+    with no `tasks` list -- as opposed to `families_detail`, which
+    already carries check 4's own failure (including one caused by a
+    malformed entry, via `_safe_check`). Either being non-empty fails
+    `ok`; `task_results` still reflects whatever could actually be
+    checked, so a corpus-level problem never discards per-task work
+    already done (task-2 review finding)."""
 
     corpus_dir: Path
     task_results: list[TaskCheckResult]
     families_ok: bool
     families_detail: str
+    corpus_failures: list[str]
 
     @property
     def ok(self) -> bool:
-        return self.families_ok and all(result.ok for result in self.task_results)
+        return (
+            not self.corpus_failures
+            and self.families_ok
+            and all(result.ok for result in self.task_results)
+        )
 
 
 def _load_files(directory: Path) -> dict[str, str]:
@@ -193,7 +217,14 @@ def _check_families(manifest: dict[str, Any]) -> tuple[bool, str]:
     """Check 4: the manifest's declared `families` counts must equal the
     per-task `family` values counted directly from `manifest["tasks"]` --
     catches a manifest doctored after the fact, independently of its own
-    task list."""
+    task list.
+
+    Deliberately un-guarded here (a task entry missing `family`, or the
+    manifest missing `families` altogether, raises `KeyError` straight
+    out of this function): the call site wraps it in `_safe_check`, the
+    same guard `_check_task` applies to checks 1-3, so this function's
+    own logic stays a plain readable formula rather than repeating the
+    try/except at every check (task-2 review finding)."""
     observed: dict[str, int] = {}
     for entry in manifest["tasks"]:
         family = entry["family"]
@@ -206,10 +237,11 @@ def _check_families(manifest: dict[str, Any]) -> tuple[bool, str]:
 
 
 def _safe_check(fn: Callable[..., tuple[bool, str]], *args: Any) -> tuple[bool, str]:
-    """Runs one per-task check function, turning any exception it raises
-    into a failed verdict rather than letting it propagate -- an
-    unrunnable task is a named failure, never a crash that silently drops
-    every task after it from the report (task-2 brief)."""
+    """Runs one check function, turning any exception it raises into a
+    failed verdict rather than letting it propagate -- an unrunnable
+    check is a named failure, never a crash that silently drops the rest
+    of the report (task-2 brief; extended to check 4 by the task-2 review
+    finding)."""
     try:
         return fn(*args)
     except Exception as exc:  # noqa: BLE001 -- deliberately broad, see docstring
@@ -254,23 +286,69 @@ def _check_task(corpus_dir: Path, entry: dict[str, Any]) -> TaskCheckResult:
     )
 
 
+def _load_manifest(corpus_dir: Path) -> tuple[dict[str, Any] | None, str]:
+    """Loads and parses `manifest.json`, turning a missing file,
+    unreadable file, malformed JSON, or a non-object JSON root into a
+    named corpus-level failure string (empty string means clean) rather
+    than letting the exception propagate out of `check_corpus` -- the
+    corpus-level counterpart to `_check_task`'s per-task guard (task-2
+    review finding: this load was previously unguarded)."""
+    manifest_path = corpus_dir / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 -- deliberately broad, see docstring
+        return None, f"could not load {manifest_path}: {exc!r}"
+    if not isinstance(manifest, dict):
+        return None, f"{manifest_path} does not contain a JSON object at its root"
+    return manifest, ""
+
+
 def check_corpus(corpus_dir: Path) -> CheckReport:
     """Runs all four checks against the corpus at `corpus_dir` (which
     must hold `manifest.json` and `tasks/<name>/{workspace,pristine}/`,
     Task 1's `generate_corpus` shape) and returns the full report. Every
     entry in `manifest["tasks"]` produces exactly one `TaskCheckResult` --
-    iteration never skips or drops one, per this module's docstring."""
-    corpus_dir = Path(corpus_dir)
-    manifest = json.loads((corpus_dir / "manifest.json").read_text(encoding="utf-8"))
+    iteration never skips or drops one, per this module's docstring.
 
-    task_results = [_check_task(corpus_dir, entry) for entry in manifest["tasks"]]
-    families_ok, families_detail = _check_families(manifest)
+    Never raises: a missing/unparseable manifest, a manifest with no
+    `tasks` list, or check 4 raising all become named entries in the
+    returned report's `corpus_failures` / `families_detail` instead
+    (task-2 review finding) -- whatever per-task results WERE computed
+    before a corpus-level problem surfaced are still returned, never
+    discarded."""
+    corpus_dir = Path(corpus_dir)
+    corpus_failures: list[str] = []
+
+    manifest, load_error = _load_manifest(corpus_dir)
+    if load_error:
+        corpus_failures.append(load_error)
+        return CheckReport(
+            corpus_dir=corpus_dir,
+            task_results=[],
+            families_ok=False,
+            families_detail="",
+            corpus_failures=corpus_failures,
+        )
+    assert manifest is not None  # guaranteed by _load_manifest's contract when load_error is empty
+
+    tasks = manifest.get("tasks")
+    if isinstance(tasks, list):
+        task_results = [_check_task(corpus_dir, entry) for entry in tasks]
+    else:
+        corpus_failures.append(
+            f"manifest.json has no 'tasks' list (found {type(tasks).__name__ if tasks is not None else 'nothing'}) "
+            f"-- no per-task checks could run"
+        )
+        task_results = []
+
+    families_ok, families_detail = _safe_check(_check_families, manifest)
 
     return CheckReport(
         corpus_dir=corpus_dir,
         task_results=task_results,
         families_ok=families_ok,
         families_detail=families_detail,
+        corpus_failures=corpus_failures,
     )
 
 
@@ -279,15 +357,25 @@ def _verdict(ok: bool) -> str:
 
 
 def format_report(report: CheckReport) -> str:
-    """Renders `report` as the per-task verdict table the CLI prints:
-    one row per task across the three per-task checks, a families row,
-    failure detail beneath (only for what actually failed), and an
-    OVERALL line."""
+    """Renders `report` as the per-task verdict table the CLI prints: a
+    leading CORPUS section for any corpus-level failure (task-2 review
+    finding -- e.g. a missing manifest), one row per task across the
+    three per-task checks, a families row, failure detail beneath (only
+    for what actually failed), and an OVERALL line. Always produces a
+    legible table -- even with zero tasks -- never a raw traceback."""
+    lines: list[str] = []
+    if report.corpus_failures:
+        lines.append("CORPUS: FAIL")
+        for failure in report.corpus_failures:
+            lines.append(f"  {failure}")
+        lines.append("")
+
     name_width = max([len("task")] + [len(result.name) for result in report.task_results])
     header = f"{'task':<{name_width}}  {'fails_before':<12}  {'passes_after':<12}  {'sha256':<6}"
     rule = "-" * len(header)
 
-    lines = [header, rule]
+    lines.append(header)
+    lines.append(rule)
     for result in report.task_results:
         lines.append(
             f"{result.name:<{name_width}}  {_verdict(result.fails_before_ok):<12}  "
@@ -330,8 +418,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    report = check_corpus(args.corpus_dir)
-    print(format_report(report))
+    # `check_corpus` already guards every failure mode this module knows
+    # about (per-task via `_check_task`, corpus-level via `_load_manifest`
+    # / `_safe_check`). This is a last-resort net for anything else --
+    # the CLI must always print one legible, named line and exit nonzero,
+    # never a raw traceback (task-2 review finding).
+    try:
+        report = check_corpus(args.corpus_dir)
+        print(format_report(report))
+    except Exception as exc:  # noqa: BLE001 -- deliberately broad, see comment above
+        print(f"corpus_check: FATAL: {exc!r}")
+        return 1
+
     return 0 if report.ok else 1
 
 
