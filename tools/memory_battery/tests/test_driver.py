@@ -22,13 +22,24 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, Callable, Union
 
+from tools.memory_battery import driver
 from tools.memory_battery.driver import IdentityMismatchError, run_arm
+
+# A `Script` response is either a fixed `(status, payload)` pair or a
+# zero-arg callable that computes one at RESOLUTION time -- the callable
+# form exists so a test can observe/perturb the world (read workspace
+# bytes off disk, sleep to simulate daemon latency) at the exact instant
+# the driver's request for that path arrives, not when the script was
+# built. See `test_reset_completes_before_phase2_identity_check` and
+# `test_wall_s_excludes_suspend_latency`.
+Response = Union[tuple[int, Any], Callable[[], tuple[int, Any]]]
 
 # ---------------------------------------------------------------------------
 # Scripted fake daemon
@@ -42,14 +53,14 @@ class Script:
     own path's queue is empty."""
 
     def __init__(self) -> None:
-        self._queues: dict[str, list[tuple[str, Any]]] = {}
-        self._sticky: dict[str, tuple[str, Any]] = {}
+        self._queues: dict[str, list[tuple[str, Response]]] = {}
+        self._sticky: dict[str, tuple[str, Response]] = {}
 
-    def add(self, method: str, path: str, response: tuple[int, Any]) -> "Script":
+    def add(self, method: str, path: str, response: Response) -> "Script":
         self._queues.setdefault(path, []).append((method, response))
         return self
 
-    def add_sticky(self, method: str, path: str, response: tuple[int, Any]) -> "Script":
+    def add_sticky(self, method: str, path: str, response: Response) -> "Script":
         self._sticky[path] = (method, response)
         return self
 
@@ -68,7 +79,7 @@ class Script:
                 "expected": expected_method,
                 "got": method,
             }
-        return response
+        return response() if callable(response) else response
 
 
 class ScriptedServer:
@@ -449,6 +460,166 @@ class DriverInvariantsTest(unittest.TestCase):
         self.assertEqual((workspace / "x.txt").read_text(encoding="utf-8"), "pristine-bytes\n")
         self.assertFalse((workspace / "extra_generated.txt").exists())
         self.assertFalse((workspace / "__pycache__").exists())
+
+    def test_module_constants_are_the_pinned_defaults(self) -> None:
+        """Task-3 review finding: nothing previously pinned MODEL /
+        WINDOW_CAP / the poll-and-deadline defaults to a literal value --
+        a mutation to any of them left the suite green. Hardcoded literals
+        here (never `driver.<CONST>` compared to itself)."""
+        self.assertEqual(driver.MODEL, "qwen36-reap48-flywheel5-Q4_K_M.gguf")
+        self.assertEqual(driver.WINDOW_CAP, 16384)
+        self.assertEqual(driver.DEFAULT_POLL_INTERVAL_S, 5.0)
+        self.assertEqual(driver.DEFAULT_TASK_DEADLINE_S, 600.0)
+
+    def test_create_and_submit_request_bodies_match_the_wire_contract(self) -> None:
+        """Task-3 review finding: the only body previously guarded was
+        submit's `goal`. This pins the create-agent body EXACTLY (catches
+        a dropped `window_cap`, a changed `MODEL`, an extra/missing key)
+        and the submit body's key set EXACTLY (catches `"grants"` silently
+        renamed to `"grant"`, which the real daemon's `CreateTaskReq`
+        would then 400 on -- `crates/bloomery-daemon/src/api_task.rs`)."""
+        names = ["t0"]
+        manifest = _build_manifest(self.tmp_path, names)
+        script = Script()
+        _add_identity(script, "d1")
+        _add_ok_task(script, "a1", "tk1")
+        _add_identity(script, "d1")
+        _add_ok_task(script, "a2", "tk2")
+
+        server = ScriptedServer(script)
+        self.addCleanup(server.close)
+        ledger_path = self.tmp_path / "ledger.jsonl"
+
+        run_arm(manifest, server.base_url, "C", "d1", ledger_path, poll_interval_s=0.0, task_deadline_s=5.0)
+
+        create_calls = [c for c in server.calls if c[0] == "POST" and c[1] == "/agents"]
+        self.assertEqual(len(create_calls), 2, "one create-agent call per phase")
+        for call in create_calls:
+            self.assertEqual(
+                call[2], {"model": "qwen36-reap48-flywheel5-Q4_K_M.gguf", "window_cap": 16384}
+            )
+
+        submit_calls = [c for c in server.calls if c[0] == "POST" and c[1].endswith("/task")]
+        self.assertEqual(len(submit_calls), 2, "one submit call per phase")
+        for call in submit_calls:
+            self.assertEqual(set(call[2].keys()), {"goal", "grants"})
+            self.assertEqual(call[2]["goal"], "goal for t0")
+            self.assertEqual(call[2]["grants"], manifest["tasks"][0]["grant"])
+
+    def test_reset_completes_before_phase2_identity_check(self) -> None:
+        """Task-3 review finding: the previous reset test only checked the
+        FINAL on-disk state, which stays correct even if the reset loop is
+        moved to after phase 2 entirely (phase 2 never re-mutates the
+        workspace in these fakes, so the end state looks identical either
+        way). This test captures the workspace's bytes at the exact moment
+        the SECOND (phase-2) `/status` request arrives -- via a callable
+        `Script` response -- so a misplaced or dropped reset is caught
+        directly, not by a coincidental end-state match."""
+        names = ["t0"]
+        manifest = _build_manifest(self.tmp_path, names)
+        workspace = Path(manifest["tasks"][0]["grant"]["write_roots"][0])
+
+        (workspace / "x.txt").write_text("MUTATED\n", encoding="utf-8")
+        pycache = workspace / "__pycache__"
+        pycache.mkdir()
+        (pycache / "x.cpython-312.pyc").write_bytes(b"stale bytecode")
+
+        snapshots: list[dict[str, Any]] = []
+
+        def identity_responder() -> tuple[int, Any]:
+            snapshots.append(
+                {
+                    "x_txt": (workspace / "x.txt").read_text(encoding="utf-8")
+                    if (workspace / "x.txt").exists()
+                    else None,
+                    "pycache_exists": (workspace / "__pycache__").exists(),
+                }
+            )
+            return 200, {"models": [{"digest": "d1"}]}
+
+        script = Script()
+        script.add("GET", "/status", identity_responder)
+        _add_ok_task(script, "a1", "tk1")
+        script.add("GET", "/status", identity_responder)
+        _add_ok_task(script, "a2", "tk2")
+
+        server = ScriptedServer(script)
+        self.addCleanup(server.close)
+        ledger_path = self.tmp_path / "ledger.jsonl"
+
+        run_arm(manifest, server.base_url, "C", "d1", ledger_path, poll_interval_s=0.0, task_deadline_s=5.0)
+
+        self.assertEqual(len(snapshots), 2)
+        # Phase 1's identity check fires before any reset -- the workspace
+        # still shows the simulated pre-run mutation, proving the snapshot
+        # mechanism itself is honest (not just always reporting pristine).
+        self.assertEqual(snapshots[0]["x_txt"], "MUTATED\n")
+        self.assertTrue(snapshots[0]["pycache_exists"])
+        # Phase 2's identity check must observe the ALREADY-RESET workspace.
+        self.assertEqual(snapshots[1]["x_txt"], "pristine-bytes\n")
+        self.assertFalse(snapshots[1]["pycache_exists"])
+
+    def test_wall_s_excludes_suspend_latency(self) -> None:
+        """Task-3 review finding: the docstring said `wall_s` excludes the
+        suspend call's latency, but the code measured it after `_suspend`
+        ran. A slow, scripted suspend (0.2s) makes the contradiction
+        directly observable: `wall_s` must stay far below that delay."""
+        names = ["t0"]
+        manifest = _build_manifest(self.tmp_path, names)
+
+        def slow_suspend() -> tuple[int, Any]:
+            time.sleep(0.2)
+            return 204, None
+
+        script = Script()
+        _add_identity(script, "d1")
+        _add_create(script, "a1")
+        _add_submit(script, "a1", "tk1")
+        _add_poll(script, "a1", "tk1", "Done")
+        script.add("POST", "/agents/a1/suspend", slow_suspend)
+        _add_identity(script, "d1")
+        _add_ok_task(script, "a2", "tk2", terminal="Done")
+
+        server = ScriptedServer(script)
+        self.addCleanup(server.close)
+        ledger_path = self.tmp_path / "ledger.jsonl"
+
+        run_arm(manifest, server.base_url, "C", "d1", ledger_path, poll_interval_s=0.0, task_deadline_s=5.0)
+
+        rows = _read_ledger(ledger_path)
+        row = next(r for r in rows if r.get("event") != "identity" and r["task"] == "t0" and r["phase"] == 1)
+        self.assertLess(row["wall_s"], 0.15, "wall_s must exclude the suspend call's own latency")
+
+    def test_suspend_failure_is_recorded_without_changing_task_status(self) -> None:
+        """Task-3 review finding: `_suspend` swallowed every HTTP-level
+        failure, making a 404/409/500 suspend indistinguishable from a
+        clean 204 in the ledger. Asserts `suspend_ok` reflects each, and
+        that a failed suspend never changes the task's own `status`."""
+        names = ["t0", "ok_task"]
+        manifest = _build_manifest(self.tmp_path, names)
+        script = Script()
+        _add_identity(script, "d1")
+        _add_create(script, "a1")
+        _add_submit(script, "a1", "tk1")
+        _add_poll(script, "a1", "tk1", "Done")
+        script.add("POST", "/agents/a1/suspend", (500, {"error": "boom"}))
+        _add_ok_task(script, "a2", "tk2", terminal="Done")
+        _add_identity(script, "d1")
+        _add_ok_task(script, "a3", "tk3", terminal="Done")
+        _add_ok_task(script, "a4", "tk4", terminal="Done")
+
+        server = ScriptedServer(script)
+        self.addCleanup(server.close)
+        ledger_path = self.tmp_path / "ledger.jsonl"
+
+        run_arm(manifest, server.base_url, "C", "d1", ledger_path, poll_interval_s=0.0, task_deadline_s=5.0)
+
+        rows = _read_ledger(ledger_path)
+        phase1 = {r["task"]: r for r in rows if r.get("event") != "identity" and r["phase"] == 1}
+        self.assertEqual(phase1["t0"]["status"], "Done", "a failed suspend must not change the task status")
+        self.assertFalse(phase1["t0"]["suspend_ok"])
+        self.assertEqual(phase1["ok_task"]["status"], "Done")
+        self.assertTrue(phase1["ok_task"]["suspend_ok"])
 
 
 if __name__ == "__main__":

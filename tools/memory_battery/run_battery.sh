@@ -6,12 +6,18 @@
 # setsid+nohup so the run survives this shell exiting and its controlling
 # terminal closing; a pid file so watch_battery.sh can find the real
 # process; a trap-guaranteed `driver.DONE` marker so silence is never
-# mistaken for success -- every termination path a shell trap CAN observe
-# (a normal exit, an uncaught Python exception, any signal bash itself
-# traps by default) writes the exit code before the detached shell exits.
-# SIGKILL is the one death mode no trap anywhere can observe; that is
-# exactly what watch_battery.sh's pid-death-without-marker branch exists
-# to catch.
+# mistaken for success. On a normal exit or an uncaught Python exception,
+# `driver.DONE` gets the real numeric exit code. On a signal that kills the
+# WRAPPER shell itself before it can capture that code -- verified live on
+# this box via a process-group SIGTERM, the documented OOMPolicy=stop death
+# mode, which can reach the wrapper and the driver at the same instant --
+# `driver.DONE` instead gets the literal sentinel `killed-by-signal`
+# (`${rc:-killed-by-signal}` below), never a fabricated/empty code.
+# watch_battery.sh's numeric-only (`^[0-9]+$`) acceptance already treats
+# that sentinel as failure, same as any other unreadable content. SIGKILL
+# is the one death mode no trap anywhere can observe at all (no DONE marker
+# gets written, not even the sentinel); that is exactly what
+# watch_battery.sh's pid-death-without-marker branch exists to catch.
 #
 # The pid file is written by the Python driver itself (`--pid-file`), not
 # captured here via `$!`: `setsid` double-forks when the invoking process
@@ -44,7 +50,15 @@ rm -f "$out_dir/driver.DONE" "$out_dir/driver.pid"
 setsid nohup bash -c '
     out_dir="$1"
     shift
-    trap "echo \$rc > \"$out_dir/driver.DONE\"" EXIT
+    # `rc=` (empty, not unset) before the trap, and `${rc:-killed-by-signal}`
+    # (never the bare `${rc-$?}` form) when the trap fires: `${rc-$?}` only
+    # falls back when rc is UNSET, so if this shell dies mid-python-run with
+    # rc still unset, it substitutes the TRAPs own `$?` at that moment --
+    # which is very often 0 (a preceding no-op/successful step), writing a
+    # fake success. `${rc:-killed-by-signal}` falls back on unset OR empty
+    # and writes an unmistakable sentinel instead, in both cases.
+    rc=
+    trap "echo \"\${rc:-killed-by-signal}\" > \"$out_dir/driver.DONE\"" EXIT
     python3 -m tools.memory_battery.driver --pid-file "$out_dir/driver.pid" "$@"
     rc=$?
 ' _ "$out_dir" "$@" >"$out_dir/driver.out" 2>&1 &

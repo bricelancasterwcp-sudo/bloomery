@@ -40,7 +40,12 @@ every row). Two row shapes, distinguished by the presence of `"event"`:
 - task-half rows (one per task, per phase -- "half" because a task
   appears once in phase 1 and again in phase 2, and each appearance gets
   its own row): ``{"arm", "phase", "task", "agent_id", "task_id",
-  "status", "wall_s", "ts"}``.
+  "status", "wall_s", "suspend_ok", "ts"}``. ``suspend_ok`` is `True`/
+  `False` when a suspend was attempted (HTTP 204 with no connection-level
+  exception, vs. anything else -- a 404/409/500 suspend is fail-open by
+  design, but is no longer silently indistinguishable from a clean one),
+  or `None` when no agent was ever created for this task-half to begin
+  with (task-3 review finding).
 - identity rows (R-PF-B1, one per phase -- two per `run_arm` call):
   ``{"arm", "phase", "event": "identity", "digest", "ts"}``.
 
@@ -237,15 +242,20 @@ def _poll_task(base_url: str, agent_id: str, task_id: str, poll_interval_s: floa
         time.sleep(poll_interval_s)
 
 
-def _suspend(base_url: str, agent_id: str) -> None:
+def _suspend(base_url: str, agent_id: str) -> bool:
     """Best-effort: the driver never retries, and a suspend failure does
     not change the task's already-recorded status (that status reflects
     the task's own poll outcome, unaffected by whether cleanup succeeded --
-    see this module's docstring on the ledger being observational)."""
+    see this module's docstring on the ledger being observational).
+    Returns whether it actually landed (HTTP 204, no connection-level
+    exception) -- fed into the ledger row's `suspend_ok` field so a
+    silently-swallowed 404/409/500 here stays legible instead of being
+    indistinguishable from a clean suspend (task-3 review finding)."""
     try:
-        _http_json("POST", f"{base_url}/agents/{agent_id}/suspend")
+        status, _payload = _http_json("POST", f"{base_url}/agents/{agent_id}/suspend")
     except (urllib.error.URLError, OSError):
-        pass
+        return False
+    return status == 204
 
 
 def _reset_workspace(workspace_dir: Path) -> None:
@@ -307,7 +317,12 @@ def _process_task(
     for a poll-deadline / HTTP-failure task-half too, not only a clean
     one), then append exactly one ledger row. Only `_DriverInfra` is
     caught (see this module's docstring); anything else propagates out of
-    `run_arm` uncaught."""
+    `run_arm` uncaught.
+
+    `wall_s` is measured up to the terminal status only -- BEFORE the
+    `suspend` call below, deliberately, so a slow or failing suspend never
+    inflates a task's own recorded wall time (see this module's docstring:
+    a cleanup call's latency is not part of the task's cost)."""
     start = time.monotonic()
     ts = _now_iso()
     agent_id: str | None = None
@@ -318,9 +333,14 @@ def _process_task(
         status = _poll_task(base_url, agent_id, task_id, poll_interval_s, task_deadline_s)
     except _DriverInfra:
         status = DRIVER_INFRA_STATUS
+    wall_s = time.monotonic() - start
 
+    # `suspend_ok` is `None` when no agent was ever created (nothing to
+    # suspend -- distinct from `False`, which means suspend was attempted
+    # and the daemon refused/errored it).
+    suspend_ok: bool | None = None
     if agent_id is not None:
-        _suspend(base_url, agent_id)
+        suspend_ok = _suspend(base_url, agent_id)
 
     ledger.append(
         {
@@ -330,7 +350,8 @@ def _process_task(
             "agent_id": agent_id,
             "task_id": task_id,
             "status": status,
-            "wall_s": time.monotonic() - start,
+            "wall_s": wall_s,
+            "suspend_ok": suspend_ok,
             "ts": ts,
         }
     )
