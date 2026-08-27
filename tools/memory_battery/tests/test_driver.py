@@ -466,7 +466,7 @@ class DriverInvariantsTest(unittest.TestCase):
         WINDOW_CAP / the poll-and-deadline defaults to a literal value --
         a mutation to any of them left the suite green. Hardcoded literals
         here (never `driver.<CONST>` compared to itself)."""
-        self.assertEqual(driver.MODEL, "qwen36-reap48-flywheel5-Q4_K_M.gguf")
+        self.assertEqual(driver.MODEL, "qwen36-reap48-flywheel5")
         self.assertEqual(driver.WINDOW_CAP, 16384)
         self.assertEqual(driver.DEFAULT_POLL_INTERVAL_S, 5.0)
         self.assertEqual(driver.DEFAULT_TASK_DEADLINE_S, 600.0)
@@ -496,7 +496,7 @@ class DriverInvariantsTest(unittest.TestCase):
         self.assertEqual(len(create_calls), 2, "one create-agent call per phase")
         for call in create_calls:
             self.assertEqual(
-                call[2], {"model": "qwen36-reap48-flywheel5-Q4_K_M.gguf", "window_cap": 16384}
+                call[2], {"model": "qwen36-reap48-flywheel5", "window_cap": 16384}
             )
 
         submit_calls = [c for c in server.calls if c[0] == "POST" and c[1].endswith("/task")]

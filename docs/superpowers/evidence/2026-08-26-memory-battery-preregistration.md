@@ -3,11 +3,13 @@
 **Date:** 2026-08-26/27 (past-midnight continuation of the same working
 session that shipped the spec and Tasks 1–4; corpus generation and this
 lock both happen under the 2026-08-26 date prefix used throughout this
-project's files). **Branch:** `memory-battery` @ `99bc54b` (worktree
-`.worktrees/memory-battery`), the tip after Task 4's review-clean commit —
-**no code changes ride with this commit**; `git diff --stat` against
-`99bc54b` for this lock touches only `tools/memory_battery/corpus-v1/`
-(new, committed) and this document. **Spec:**
+project's files). **Branch:** `memory-battery`, worktree
+`.worktrees/memory-battery`, base `99bc54b` (Task 4's review-clean tip).
+The initial lock commit at this base rode no code changes; a task-5 review
+fix round then authorized exactly ONE 2-line code change on top of it
+(`driver.py`'s `MODEL` constant, task-5 review finding C1, §2/§5/§7 below)
+— every other file this document touches is still the frozen corpus tree
+and this document itself. **Spec:**
 `docs/superpowers/specs/2026-08-26-memory-battery-design.md` — binding;
 §4's formulas are cited below, never restated with different words (the
 plan's own rule, `docs/superpowers/plans/2026-08-26-memory-battery.md`).
@@ -42,8 +44,8 @@ a decision, not an oversight.
 
 | pin | value | source |
 |---|---|---|
-| model | `qwen36-reap48-flywheel5-Q4_K_M.gguf` | `driver.py` `MODEL` constant |
-| model digest (`expected_digest`) | `7020b925c07c5a3808e1155700ca707598cb4f6d6089bb6daff4147b4d6b00bd` | pinned here; matches the GGUF sha256 measured at training (`2026-08-23-flywheel5-training.md`) and the served digest measured at the memory-organ slice-1 acceptance (`2026-08-26-memory-organ-acceptance.md`) |
+| **daemon API model name** (posted in every `POST /agents` body) | `qwen36-reap48-flywheel5` — the boot config's model-table STANZA KEY (`[models."qwen36-reap48-flywheel5"]`), resolved by the daemon via exact-key lookup against `BootConfig.models: BTreeMap<String, ModelSpec>` (`crates/bloomery-daemon/src/config.rs`), no alias/fallback; a miss returns `PagerError::UnknownModel` → 404 (`crates/bloomery-daemon/src/api_native.rs`/`api_v1.rs`) | `driver.py` `MODEL` constant (task-5 review finding C1 — the original constant posted the GGUF filename below and would have 404'd every task on both boots; fixed) |
+| **GGUF artifact** (named by the boot config's `path`, never posted over the wire) | `qwen36-reap48-flywheel5-Q4_K_M.gguf`, digest `7020b925c07c5a3808e1155700ca707598cb4f6d6089bb6daff4147b4d6b00bd` | pinned here; matches the GGUF sha256 measured at training (`2026-08-23-flywheel5-training.md`) and the served digest measured at the memory-organ slice-1 acceptance (`2026-08-26-memory-organ-acceptance.md`); this is `expected_digest`, checked against `/status`'s served identity, never against the API model name above |
 | envelope | `v4` | `recompute.py` `ENVELOPE` constant |
 | `window_cap` | `16384` (every battery agent) | `driver.py` `WINDOW_CAP` constant |
 | poll cadence | `5.0` s | `driver.py` `DEFAULT_POLL_INTERVAL_S` |
@@ -54,7 +56,7 @@ a decision, not an oversight.
 | bootstrap B | `10,000` | `recompute_bootstrap.py` `BOOTSTRAP_B` |
 | hygiene/E1 SE multiplier | `2` (`2 × SE_boot`) | `recompute_bootstrap.py` `HYGIENE_SE_MULTIPLIER` |
 | H3 infra-rate ceiling | `0.05` (5%) | `recompute_bootstrap.py` `INFRA_RATE_CEILING` |
-| daemon commit | the **merged master tip's featured build** at run time — no sha exists yet; recorded in the findings doc at boot (spec §2: "daemon: the merged master tip's featured build (commit recorded)"). This branch may merge into master before Tasks 6/7 run, so the commit is necessarily read at boot time, not pinned here. |
+| daemon commit | the **merged master tip's featured build** at run time — no sha exists yet; recorded in the findings doc at boot (spec §2: "daemon: the merged master tip's featured build (commit recorded)"). The battery runs PRE-MERGE, from this worktree, against master's already-current featured build (master already carries the memory organ); this branch merges into master only AFTER Tasks 6/7 and the gate (Task 8) complete — see §7. |
 
 ### Boot configs, VERBATIM (adapted from the memory-organ slice-1 acceptance pattern)
 
@@ -245,6 +247,13 @@ def freeze_sha256(corpus_dir: Path) -> str:
 print(freeze_sha256(Path("tools/memory_battery/corpus-v1")))
 ```
 
+`corpus_dir.glob("tasks/*/workspace/*")` is deliberately **non-recursive**
+(a single `*` per path segment, no subdirectory descent) — this relies on
+the flat-workspace shape §3.1's checker table already verified for all 50
+tasks (`corpus.py`'s `_write_workspace`: "every file sits at the
+directory's own root, never nested," matching the flywheel factory's own
+workspace shape), so a recursive walk would find nothing more to hash.
+
 **`freeze_sha256 = d9df82e2f7ae95130fc8fa765b5b1faff7b15e93832f8adfd1980b07d797c9d5`**
 (100 workspace files hashed = 50 tasks × 2 files each — the planted-defect
 module and its `unittest`; run twice, byte-identical both times). **After
@@ -336,7 +345,7 @@ practical consequence: a very large true effect (`median_M,p2` sitting
 below `min_C,p2`, i.e. beating every phase-2 control task's cost outright)
 still reports **UNMEASURABLE**, never PASS, whenever the control
 distribution is floor-saturated. This is the conservative, declared-in-
-advance reading of spec §4's headroom clause (crucession E3b's own lesson,
+advance reading of spec §4's headroom clause (crucible E3b's own lesson,
 named in the spec's lineage) — the gate never reports a PASS it cannot
 distinguish from floor-saturation, no matter how large the raw gap looks.
 
@@ -347,10 +356,14 @@ Task 4's review). Spec §4 states H3 as "infra rate ≤ 5% per arm
 once) or one task-half (counted once per phase). `recompute_bootstrap.py`'s
 `_check_h3` fixes the denominator at `n * 2` — 100 task-halves per arm at
 `n=50` — the reading that gives infra the most room before a 5% kill
-fires: at `n=50`, `n`-only would allow 2 infra tasks before a kill (5% of
-50 = 2.5); `n×2` allows 5 (5% of 100 = 5) — **≈5 halves of slack at
-N=50**, all of it in the direction of NOT killing a run over infra noise
-that the ITT/none-vs-zero rule already prices out of the cost endpoint.
+fires: at `n=50`, the `n`-only reading tolerates at most **2** infra events
+before violating (`3/50 = 0.06 > 0.05` kills; `2/50 = 0.04` does not), while
+the adopted `n×2` reading tolerates at most **5** (`6/100 = 0.06 > 0.05`
+kills; `5/100 = 0.05` does not) — **5 is the absolute allowance per arm at
+N=50; the slack the `n×2` reading ADDS over the `n`-only reading is 3
+task-halves (5 − 2)**, all of it in the direction of NOT killing a run over
+infra noise that the ITT/none-vs-zero rule already prices out of the cost
+endpoint.
 
 ## 5. Machinery — file shas at lock (`git hash-object`, `tools/memory_battery/`)
 
@@ -363,16 +376,21 @@ $ for f in tools/memory_battery/*.py; do echo "$(git hash-object "$f")  $f"; don
 | `__init__.py` | `e69de29bb2d1d6434b8b29ae775ad8c2e48c5391` |
 | `corpus.py` | `070b070cb93f1b2af6de70a5441c1a5133507f02` |
 | `corpus_check.py` | `59da8583af39f8a61fd4a524548f5b3ca1bbd9d2` |
-| `driver.py` | `3ba696eb38c1a7d4903a59f9530115f207df8d2e` |
+| `driver.py` | `dbb6be0db749f3fcc22ee05589133002b7bef3bd` |
 | `recompute.py` | `e5c9b7e64e590138368728444d878ad068246246` |
 | `recompute_bootstrap.py` | `ad848336fcf4ebd7f27ac655753348885a8d81ab` |
 | `recompute_join.py` | `781f77adfa7508a9e092c83fb3dee50867a953e3` |
 | `recompute_journal.py` | `9c10a9f67fca4ae2bbe68b3d84ecc22e240fd10e` |
 
-All eight files are unmodified at branch tip `99bc54b` (`git status
---short` clean against them at lock time); 64/64 package tests green
-(`python3 -m unittest discover -s tools/memory_battery/tests`, run
-immediately before this lock, `PYTHONDONTWRITEBYTECODE=1`).
+Seven of the eight files are unmodified since branch tip `99bc54b`.
+`driver.py`'s sha above is **post-fix** (task-5 review finding C1: `MODEL`
+corrected from the GGUF filename to the daemon API model name — the boot
+config's model-table stanza key, §2 above); its wire-contract test
+(`tests/test_driver.py`) was updated in lockstep. 64/64 package tests green
+(`python3 -m unittest discover -s tools/memory_battery/tests -t .`, run
+after the fix, `PYTHONDONTWRITEBYTECODE=1`); the flywheel suite (272 tests,
+27 skipped) is unaffected — no `tools/flywheel/` file imports
+`tools.memory_battery`.
 
 ## 6. The recompute CLI's `--expected-digest` requirement (carry-note, dated 2026-08-26)
 
@@ -425,6 +443,19 @@ with this pin; either arm's mismatch makes the whole run's verdict
   Task 8's `recompute` call — not a human reading the tail of a log — is
   what decides whether an ambiguous-looking death was actually a complete
   run.
+- **The corpus grants are worktree-absolute — this is intentional, ruled.**
+  The frozen manifest's `grant.read_roots`/`write_roots` are absolute paths
+  under this worktree (`corpus.py`'s `_task_manifest_entry`: `workspace_abs
+  = str(workspace_dir.resolve())`). Controller ruling (task-5 review
+  finding I2): the paths stay exactly as frozen — Tasks 6/7 run from the
+  worktree at `/home/brice/workspace/bloomery/.worktrees/memory-battery`;
+  **do not delete this worktree before the battery and findings complete**;
+  the daemon binary is **master's** featured build (master already carries
+  the memory organ) — the corpus grants point into the worktree and the
+  daemon accepts any granted absolute path regardless of which checkout
+  built the binary. The battery therefore runs PRE-MERGE, against this
+  exact worktree's files, under master's daemon; this branch merges into
+  master only after the battery and Task 8's gate complete (§2 above).
 
 ## Amendment rule
 
@@ -443,7 +474,10 @@ bytes after this commit (§3.2 above); nothing in
 - `tools/memory_battery/corpus-v1/` — `manifest.json` + 50 ×
   `tasks/<name>/{workspace,pristine}/` — the frozen instrument, freeze sha
   `d9df82e2f7ae95130fc8fa765b5b1faff7b15e93832f8adfd1980b07d797c9d5` (§3.2).
-- `tools/memory_battery/{corpus.py, corpus_check.py, driver.py,
-  recompute.py, recompute_bootstrap.py, recompute_join.py,
-  recompute_journal.py, __init__.py}` — already committed at `99bc54b`
-  (Tasks 1–4), file shas pinned in §5, untouched by this commit.
+- `tools/memory_battery/{corpus.py, corpus_check.py, recompute.py,
+  recompute_bootstrap.py, recompute_join.py, recompute_journal.py,
+  __init__.py}` — committed at `99bc54b` (Tasks 1–4), file shas pinned in
+  §5, untouched by the fix round below.
+- `tools/memory_battery/driver.py` — committed at `99bc54b`, then amended
+  by the task-5 review fix round (finding C1: `MODEL` corrected to the
+  daemon API model name) — current sha pinned in §5.

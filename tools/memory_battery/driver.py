@@ -90,16 +90,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
-# Design spec §2's pinned lens: "model: qwen36-reap48-flywheel5-Q4_K_M.gguf
-# ... window_cap: 16384 on every battery agent". `run_arm`'s signature is
-# pinned by the task-3 brief to its exact five positional parameters
-# (manifest, base_url, arm_name, expected_digest, ledger_path) -- the model
-# name and window cap are therefore instrument-wide module constants here
-# (the same role corpus.py's INSTRUMENT / PYTHON_LENS play), not per-call
-# arguments, since every task in every arm uses the identical one. Flagged
-# as a judgment call in the task-3 report for the controller to override if
-# a different plumbing was intended.
-MODEL = "qwen36-reap48-flywheel5-Q4_K_M.gguf"
+# Design spec §2's pinned lens names the GGUF artifact:
+# "model: qwen36-reap48-flywheel5-Q4_K_M.gguf ... window_cap: 16384 on
+# every battery agent". `POST /agents`'s `model` field, however, is resolved
+# by the daemon against its config's model TABLE -- an exact-key lookup
+# against `BootConfig.models: BTreeMap<String, ModelSpec>`
+# (`crates/bloomery-daemon/src/config.rs`), keyed by the boot TOML's stanza
+# name (`[models."qwen36-reap48-flywheel5"]`), never the GGUF filename and
+# with no alias/fallback -- a miss returns `PagerError::UnknownModel` -> 404
+# (`crates/bloomery-daemon/src/api_native.rs`/`api_v1.rs`). MODEL is
+# therefore the daemon API model NAME (the stanza key), not the artifact
+# filename the spec's lens line names -- task-5 review finding C1, fixed
+# here after the original judgment call posted the GGUF filename and would
+# have 404'd every task on both boots. `run_arm`'s signature is pinned by
+# the task-3 brief to its exact five positional parameters (manifest,
+# base_url, arm_name, expected_digest, ledger_path) -- the model name and
+# window cap are therefore instrument-wide module constants here (the same
+# role corpus.py's INSTRUMENT / PYTHON_LENS play), not per-call arguments,
+# since every task in every arm uses the identical one.
+MODEL = "qwen36-reap48-flywheel5"
 WINDOW_CAP = 16384
 
 # Design spec §5 / task-3 brief: 5s poll cadence, 600s per-task deadline --
