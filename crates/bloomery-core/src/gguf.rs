@@ -15,10 +15,15 @@ use std::path::Path;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GgufMeta {
     pub arch: String,
+    /// Blocks that actually serve tokens: `{arch}.block_count` minus
+    /// `{arch}.nextn_predict_layers` (gguf-geometry v1 R6). `block_count` is
+    /// the raw declared count and includes MTP layers, which are not serving
+    /// layers; `attention_layers` and the recurrent-layer count below are both
+    /// derived from this serving count, never from the raw one.
     pub layers: u32,
-    /// Layers that own a KV cache. `block_count / {arch}.full_attention_interval`
+    /// Layers that own a KV cache. `layers / {arch}.full_attention_interval`
     /// when that key is present (llama.cpp: layer i is full attention iff
-    /// (i+1) % interval == 0), else `block_count`. Spec 2026-08-22 turn-5 §2.
+    /// (i+1) % interval == 0), else `layers`. Spec 2026-08-22 turn-5 §2.
     pub attention_layers: u32,
     pub kv_heads: u32,
     pub head_dim: u32,
@@ -266,6 +271,47 @@ fn lookup_u32_opt(kvs: &HashMap<String, GgufValue>, key: &str) -> Result<Option<
     }
 }
 
+/// gguf-geometry v1 R6: `serving_block_count = block_count -
+/// {arch}.nextn_predict_layers` when the MTP key is present and nonzero.
+///
+/// Multi-token-prediction layers are counted by `block_count` but never serve
+/// a token, so charging them is a per-context over-charge on every term
+/// derived from the block count. Origin: the REAP-48 prune left
+/// `mtp_num_hidden_layers: 1` in the HF config, so `convert_hf_to_gguf` sized
+/// `block_count = 40 + 1 = 41` and emitted `qwen35moe.nextn_predict_layers = 1`
+/// while writing only 40 blocks of tensors (evidence
+/// `docs/superpowers/evidence/2026-08-22-reap48-ours-prune-and-acceptance.md`,
+/// BUG #3). `tools/flywheel/prune/prune.py` zeroes the key at conversion time,
+/// which covers only artifacts this repo produces; this is the reader-side
+/// defence, which covers a trapped GGUF from anywhere.
+///
+/// Absent or 0 means no MTP layers and the raw count stands, so on every model
+/// without the key the result is `block_count` unchanged.
+fn resolve_serving_block_count(
+    kvs: &HashMap<String, GgufValue>,
+    arch: &str,
+    block_count: u32,
+) -> Result<u32, GgufError> {
+    let key = format!("{arch}.nextn_predict_layers");
+    let mtp = lookup_u32_opt(kvs, &key)?.unwrap_or(0);
+    if mtp == 0 {
+        return Ok(block_count);
+    }
+    // `mtp > block_count` would wrap; `mtp == block_count` leaves zero serving
+    // layers, which is not a model and would route kv_bytes_per_token to
+    // geometry.rs's kv_per_token == 0 unbounded-window path — a silent "no
+    // context limit" for a corrupt file. Refuse both, and name the key.
+    block_count
+        .checked_sub(mtp)
+        .filter(|&serving| serving > 0)
+        .ok_or_else(|| {
+            GgufError::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{key} {mtp} leaves no serving layers of block_count {block_count}"),
+            ))
+        })
+}
+
 fn resolve_attention_layers(
     kvs: &HashMap<String, GgufValue>,
     arch: &str,
@@ -375,7 +421,9 @@ pub fn parse_gguf_meta(path: &Path) -> Result<GgufMeta, GgufError> {
     let kvs = read_kv_map(&mut reader, kv_count, file_len)?;
 
     let arch = lookup_string(&kvs, "general.architecture")?;
-    let layers = lookup_u32(&kvs, &format!("{arch}.block_count"))?;
+    let block_count = lookup_u32(&kvs, &format!("{arch}.block_count"))?;
+    // R6 first: every layer count below is derived from the serving count.
+    let layers = resolve_serving_block_count(&kvs, &arch, block_count)?;
     let kv_heads = lookup_u32(&kvs, &format!("{arch}.attention.head_count_kv"))?;
     let head_dim = resolve_head_dim(&kvs, &arch)?;
     let training_ctx = lookup_u32(&kvs, &format!("{arch}.context_length"))?;

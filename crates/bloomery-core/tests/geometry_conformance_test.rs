@@ -28,14 +28,17 @@
 //! R5 (expert fields) has no counterpart in `GgufMeta` at all — bloomery-core
 //! does not model MoE expert counts. See `r5_bloomery_core_models_no_expert_fields`.
 //!
-//! # Known divergence (2026-08-27)
+//! # Divergence found and resolved (2026-08-27)
 //!
-//! 9 of the 10 v1 vectors conform. The tenth, `qwen3.6-35b-a3b-reap48-mtp-trap`,
-//! is RED: bloomery-core does not implement **R6** — `parse_gguf_meta` reads
-//! `{arch}.block_count` raw and never subtracts `{arch}.nextn_predict_layers`.
-//! See `qwen3_6_35b_a3b_reap48_mtp_trap` (the contract assertion, `#[ignore]`d
-//! pending a ruling) and `qwen3_6_35b_a3b_reap48_mtp_trap_r6_divergence_is_pinned`
-//! (the actual behaviour, under CI).
+//! On first run 9 of the 10 v1 vectors conformed. The tenth,
+//! `qwen3.6-35b-a3b-reap48-mtp-trap`, was RED: bloomery-core did not implement
+//! **R6** — `parse_gguf_meta` read `{arch}.block_count` raw and never
+//! subtracted `{arch}.nextn_predict_layers`, over-charging one recurrent layer
+//! (2,195,456 B per context) on a trapped GGUF. `gguf.rs::resolve_serving_block_count`
+//! implements R6 as of this branch and all 10 vectors now conform; see
+//! `qwen3_6_35b_a3b_reap48_mtp_trap` and
+//! `qwen3_6_35b_a3b_reap48_mtp_trap_r6_conformance_is_pinned`, plus the unit
+//! tests for the key's present/zero/absent/nonsense cases in `gguf_test.rs`.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -563,65 +566,66 @@ fn qwen3_6_35b_a3b_reap48_ours_q4km() {
 }
 
 /// The MTP trap: `block_count 41` + `nextn_predict_layers 1` describing 40
-/// blocks of tensors. **This test is RED against bloomery-core as of
-/// d51e073** — `parse_gguf_meta` reads `{arch}.block_count` raw and never
-/// looks at `{arch}.nextn_predict_layers`, so R6 is unimplemented in the Rust
-/// reader (it is implemented in `tools/flywheel/prune/prune.py`, which zeroes
-/// the key at conversion time — a different layer, and one that only covers
-/// artifacts this repo produced).
+/// blocks of tensors.
 ///
-/// Measured 2026-08-27 in this worktree, first run:
-/// `serving_block_count` 41, contract 40; `recurrent_state_bytes` 68,059,136,
-/// contract 65,863,680 (a 2,195,456 B / 2.09 MiB per-context over-charge —
-/// one extra recurrent layer). `kv_bytes_per_token` 20,480 and
-/// `attention_layers` 10 both conform even in the trap state (41/4 == 10),
-/// so the divergence is confined to the block count and the term derived
-/// from it.
+/// This test was `#[ignore]`d and RED from 3f596ef to 3fbc7b1 — `parse_gguf_meta`
+/// read `{arch}.block_count` raw and never looked at
+/// `{arch}.nextn_predict_layers`, so R6 was unimplemented in the Rust reader
+/// (it was implemented only in `tools/flywheel/prune/prune.py`, which zeroes
+/// the key at conversion time — a different layer, and one that covers only
+/// artifacts this repo produced). Measured then: `serving_block_count` 41 vs
+/// the contract's 40, and `recurrent_state_bytes` 68,059,136 vs 65,863,680 (a
+/// 2,195,456 B / 2.09 MiB per-context over-charge — one extra recurrent
+/// layer). `kv_bytes_per_token` 20,480 and `attention_layers` 10 conformed
+/// even in the trap state (41/4 == 10), so the divergence was confined to the
+/// block count and the term derived from it.
 ///
-/// Kept verbatim and executable (`cargo test -p bloomery-core --test
-/// geometry_conformance_test -- --ignored`) rather than weakened or deleted;
-/// `qwen3_6_35b_a3b_reap48_mtp_trap_r6_divergence_is_pinned` keeps the actual
-/// behaviour under CI in the meantime. Remove the `#[ignore]` the moment
-/// `gguf.rs` subtracts `nextn_predict_layers`.
+/// `gguf.rs::resolve_serving_block_count` now implements R6, so the assertion
+/// runs in normal CI, unchanged from the form it was written in.
 #[test]
-#[ignore = "RED: bloomery-core does not implement R6 (nextn_predict_layers); \
-            reported 2026-08-27, awaiting a ruling on the gguf.rs fix"]
 fn qwen3_6_35b_a3b_reap48_mtp_trap() {
     check_vector("qwen3.6-35b-a3b-reap48-mtp-trap");
 }
 
-/// Pins bloomery-core's *actual* behaviour on the trap so the R6 gap stays
-/// visible in CI instead of only in a report, and so this test fails — loudly,
-/// demanding both it and the `#[ignore]` above be removed — the moment R6 is
-/// implemented. It asserts the divergence, never the contract.
+/// The inverse of the tripwire this test used to be. Until R6 landed it pinned
+/// bloomery's *divergence* (`serving_block_count` 41, `recurrent_state_bytes`
+/// 68,059,136) so the gap could not rot into silence, and was designed to fail
+/// the moment the fix arrived — it did. It now pins the *conforming* values on
+/// the same vector, spelled out as literals rather than read from the vector's
+/// `expected` block, so a regression in `parse_gguf_meta` is caught here even
+/// if the vendored vector ever moves. Git history from 3fbc7b1 carries the
+/// divergence form.
 #[test]
-fn qwen3_6_35b_a3b_reap48_mtp_trap_r6_divergence_is_pinned() {
+fn qwen3_6_35b_a3b_reap48_mtp_trap_r6_conformance_is_pinned() {
     let vector = load_vector("qwen3.6-35b-a3b-reap48-mtp-trap");
     let meta = parse_vector(&vector);
 
-    // The terms that DO conform, even in the trap state.
+    // The terms that conformed even in the trap state, and still do.
     assert_eq!(kv_bytes_per_token(&meta), 20_480, "R2/R3 hold on the trap");
-    assert_eq!(meta.attention_layers, 10, "R3 holds: 41 / interval 4 == 10");
+    assert_eq!(
+        meta.attention_layers, 10,
+        "R3: serving 40 / interval 4 == 10"
+    );
     assert_ne!(
         kv_bytes_per_token(&meta),
         81_920,
         "the all-blocks answer stays banned"
     );
 
-    // The divergence, stated as the contract states it.
+    // R6, and the term downstream of it — the two that used to diverge.
     assert_eq!(
         u64::from(meta.layers),
+        40,
+        "R6: the MTP layer is not a serving layer (41 - 1)"
+    );
+    assert_ne!(
+        u64::from(meta.layers),
         banned_u64(&vector, "serving_block_count")[0],
-        "expected the KNOWN R6 gap: bloomery still reports the raw block count"
+        "the raw block count stays banned"
     );
     assert_eq!(
-        expected_u64(&vector, "serving_block_count"),
-        Some(40),
-        "the contract value this diverges from"
-    );
-    assert_eq!(
-        meta.recurrent_state_bytes, 68_059_136,
-        "downstream of the same gap: 31 recurrent layers charged, not 30 \
-         (contract 65_863_680 — a 2_195_456 B per-context over-charge)"
+        meta.recurrent_state_bytes, 65_863_680,
+        "30 recurrent layers charged, not 31 — the 2_195_456 B per-context \
+         over-charge is gone"
     );
 }
