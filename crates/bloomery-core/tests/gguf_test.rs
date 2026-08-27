@@ -378,3 +378,152 @@ fn partial_ssm_keys_yield_zero_recurrent_state_bytes() {
     let m = parse_gguf_meta(&path).unwrap();
     assert_eq!((m.attention_layers, m.recurrent_state_bytes), (10, 0));
 }
+
+// ---------------------------------------------------------------------------
+// R6 — serving block count (gguf-geometry v1 SPEC.md)
+//
+// `serving_block_count = block_count - {arch}.nextn_predict_layers` when the
+// MTP key is present and nonzero. Origin: the REAP-48 prune left
+// `mtp_num_hidden_layers: 1` in the HF config, so `convert_hf_to_gguf` sized
+// `block_count = 40 + 1 = 41` and emitted `qwen35moe.nextn_predict_layers = 1`
+// while writing only 40 blocks of tensors (bloomery
+// docs/superpowers/evidence/2026-08-22-reap48-ours-prune-and-acceptance.md,
+// BUG #3). R3 and R4 both consume the serving count, so the subtraction has to
+// happen before either is derived.
+// ---------------------------------------------------------------------------
+
+/// A qwen35moe-like image in the MTP shape: `block_count` blocks of which
+/// `nextn` are multi-token-prediction layers (the key is omitted entirely when
+/// `nextn` is `None`), plus `full_attention_interval` and the four `ssm.*`
+/// keys — so `attention_layers` (R3) and `recurrent_state_bytes` (R4) are both
+/// derived from whatever serving count R6 produces, not asserted in isolation.
+fn write_mtp_gguf(path: &std::path::Path, block_count: u32, nextn: Option<u32>) {
+    let mut kvs = Vec::new();
+    let mut n = 0u64;
+    kv_string(&mut kvs, "general.architecture", "qwen35moe");
+    n += 1;
+    kv_u32(&mut kvs, "qwen35moe.block_count", block_count);
+    n += 1;
+    kv_u32(&mut kvs, "qwen35moe.attention.head_count_kv", 2);
+    n += 1;
+    kv_u32(&mut kvs, "qwen35moe.attention.key_length", 256);
+    n += 1;
+    kv_u32(&mut kvs, "qwen35moe.context_length", 262144);
+    n += 1;
+    kv_u32(&mut kvs, "qwen35moe.full_attention_interval", 4);
+    n += 1;
+    if let Some(v) = nextn {
+        kv_u32(&mut kvs, "qwen35moe.nextn_predict_layers", v);
+        n += 1;
+    }
+    for (k, v) in [
+        ("qwen35moe.ssm.conv_kernel", 4u32),
+        ("qwen35moe.ssm.state_size", 128),
+        ("qwen35moe.ssm.group_count", 16),
+        ("qwen35moe.ssm.inner_size", 4096),
+    ] {
+        kv_u32(&mut kvs, k, v);
+        n += 1;
+    }
+    write_gguf(path, n, &kvs);
+}
+
+fn mtp_fixture(name: &str, block_count: u32, nextn: Option<u32>) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join("bloomery-gguf-r6");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("{name}.gguf"));
+    write_mtp_gguf(&path, block_count, nextn);
+    path
+}
+
+/// The trap itself: 41 declared blocks, 1 of them MTP, 40 actually serving.
+/// Every downstream term follows the serving 40, not the declared 41 — 10
+/// attention layers (R3) and 30 recurrent layers' worth of state (R4).
+#[test]
+fn mtp_layers_are_subtracted_from_the_serving_block_count() {
+    let path = mtp_fixture("trap", 41, Some(1));
+    let m = parse_gguf_meta(&path).unwrap();
+    assert_eq!(m.layers, 40, "R6: 41 declared blocks - 1 MTP layer");
+    assert_eq!(
+        m.attention_layers, 10,
+        "R3 consumes the serving count: 40/4"
+    );
+    // 30 recurrent layers x [(4-1)*(4096 + 2*16*128) + 128*4096] x 4 bytes.
+    // Charging the MTP layer as recurrent too would give 31 layers = 68_059_136.
+    assert_eq!(
+        m.recurrent_state_bytes, 65_863_680,
+        "R4 consumes the serving count: 40 - 10 = 30 recurrent layers"
+    );
+}
+
+/// `nextn_predict_layers: 0` is the state the prune tool patches a trapped
+/// artifact into. Zero MTP layers means zero subtraction.
+#[test]
+fn zero_nextn_predict_layers_leaves_the_block_count_unchanged() {
+    let path = mtp_fixture("zero_nextn", 40, Some(0));
+    let m = parse_gguf_meta(&path).unwrap();
+    assert_eq!(m.layers, 40);
+    assert_eq!(m.attention_layers, 10);
+    assert_eq!(m.recurrent_state_bytes, 65_863_680);
+}
+
+/// The key absent entirely — every model on the box today. R6 must be a no-op
+/// here, so this pins that the fix cannot move a model currently in use.
+#[test]
+fn absent_nextn_predict_layers_leaves_the_block_count_unchanged() {
+    let absent = parse_gguf_meta(&mtp_fixture("absent_nextn", 40, None)).unwrap();
+    assert_eq!(absent.layers, 40);
+    assert_eq!(absent.attention_layers, 10);
+    assert_eq!(absent.recurrent_state_bytes, 65_863_680);
+
+    // Absent and 0 are the same geometry; only the file length differs.
+    let zero = parse_gguf_meta(&mtp_fixture("absent_nextn_cmp", 40, Some(0))).unwrap();
+    assert_eq!(
+        (
+            absent.layers,
+            absent.attention_layers,
+            absent.recurrent_state_bytes
+        ),
+        (
+            zero.layers,
+            zero.attention_layers,
+            zero.recurrent_state_bytes
+        ),
+    );
+}
+
+/// More MTP layers than blocks is not a geometry, it is a corrupt file. R8:
+/// refuse and name the key rather than wrapping the subtraction around.
+#[test]
+fn nextn_predict_layers_exceeding_block_count_is_invalid_data() {
+    let path = mtp_fixture("nextn_too_big", 40, Some(41));
+    match parse_gguf_meta(&path) {
+        Err(GgufError::Io(e)) => {
+            assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+            assert!(
+                e.to_string().contains("nextn_predict_layers"),
+                "the error must name the key it refused on, got {e}"
+            );
+        }
+        other => panic!("expected InvalidData, got {other:?}"),
+    }
+}
+
+/// All blocks MTP leaves zero serving layers. That is not a model, and zero
+/// would route `kv_bytes_per_token` to geometry.rs's unbounded-window path —
+/// the same silent "this model has no context limit" the
+/// `full_attention_interval` guard above exists to prevent. Refuse instead.
+#[test]
+fn nextn_predict_layers_equal_to_block_count_is_invalid_data() {
+    let path = mtp_fixture("nextn_all_blocks", 40, Some(40));
+    match parse_gguf_meta(&path) {
+        Err(GgufError::Io(e)) => {
+            assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+            assert!(
+                e.to_string().contains("nextn_predict_layers"),
+                "the error must name the key it refused on, got {e}"
+            );
+        }
+        other => panic!("expected InvalidData, got {other:?}"),
+    }
+}

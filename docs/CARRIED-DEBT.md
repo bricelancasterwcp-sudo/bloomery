@@ -1142,6 +1142,19 @@ requested context window; still unaddressed, unchanged by this turn.
   runbook must document `--no-mtp` as a required flag rather than a
   discovered one; the prune GGUF test must cover this converter path so the
   next MTP-free checkpoint does not rediscover the same assertion.
+  **Amended 2026-08-27 (branch r6-fix): still open, and now defended in
+  depth on the other side.** `crates/bloomery-core/src/gguf.rs` implements
+  gguf-geometry v1 R6 — `parse_gguf_meta` subtracts
+  `{arch}.nextn_predict_layers` from `{arch}.block_count` and derives every
+  layer count from the serving remainder. That is the *reader* side: it
+  makes bloomery correct on a trapped GGUF arriving from anywhere (someone
+  else's REAP prune, a future converter regression), which the prune tool's
+  producer-side patch cannot cover. It closes nothing recorded above — the
+  key-vs-delete question, the `--no-mtp` runbook gap and the missing prune
+  GGUF converter test are all untouched and still owed. The gap was found
+  by the gguf-geometry v1 conformance vectors, which had bloomery reporting
+  41 serving blocks against the contract's 40 and over-charging 2,195,456 B
+  of recurrent state per context.
 - **The S3 uploader's state-file has a tmp-name race under concurrent
   access, root-caused.** `~/flywheel5/s3_upload.py:58-61`'s `save_state()`
   writes one shared `path + ".tmp"` file and `os.replace()`s it into place;
