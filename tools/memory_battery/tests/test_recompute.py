@@ -5,7 +5,7 @@ per the task-4 brief: "tests synthesize small journal files by hand (5-8
 tasks) with known arithmetic ... assert exact medians, exact ITT inclusion,
 exact None handling."
 
-Two fixture families:
+Fixture families:
 
 - `_build_arithmetic_fixture`: 6 tasks (t0-t5), ONE re-ask (t1, arm C phase
   1: two `InferCompleted` rows for the same agent), ONE dropped task per
@@ -16,15 +16,25 @@ Two fixture families:
   and therefore overall hygiene -- is INTENTIONALLY violated here: this
   fixture exercises the dropped/ITT/none-vs-zero/H3-kill path, not a
   clean E1 gate read.
-- `_build_clean_fixture`: constructs arm C's phase-1 and phase-2 costs
-  from the SAME per-task dict (so H1's diff is exactly 0 regardless of
-  variance), and arm M's phase-1 costs from that identical dict too (H2's
-  diff exactly 0) -- guaranteeing hygiene-clean, deterministic E1 reads
-  driven purely by the phase-2 dicts callers supply.
+- `_build_clean_fixture`: each arm's phase-1 and phase-2 costs are
+  supplied as four INDEPENDENT dicts (`c_p1_costs`, `c_p2_costs`,
+  `m_p1_costs`, `m_p2_costs`, review finding I4) -- a caller wanting H1/H2
+  both trivially at 0 passes the SAME dict to the three phase-1/matching
+  slots (as every PASS/FAIL/UNMEASURABLE/determinism/golden test below
+  does); a caller wanting a HYGIENE violation makes exactly one dict
+  diverge. `digest_c`/`digest_m` (also new) let a caller build an arm
+  whose own two identity rows disagree with each other.
+
+Review-fix additions (2026-08-26 fix round, 2 Critical + 4 Important):
+`CostJournalFailureTests` (C1), `ArmCompletenessTests` (C2),
+`GoldenBootstrapTests` (I1 + I2, one hand-derived fixture covering both),
+`ExpectedDigestTests` (I3), `HygieneViolationTests` (I4).
 """
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import unittest
 from pathlib import Path
@@ -32,7 +42,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 from tools.memory_battery.driver import WINDOW_CAP
-from tools.memory_battery.recompute import recompute
+from tools.memory_battery.recompute import main, recompute
 
 TASKS = ["t0", "t1", "t2", "t3", "t4", "t5"]
 
@@ -345,6 +355,11 @@ class ArithmeticFixtureTests(unittest.TestCase):
         # sorted([-35,-23,-18,-8,1]) -> middle = -18
         self.assertEqual(paired["median_delta"], -18.0)
         self.assertEqual(paired["n_pairs"], 5)
+        # Review finding I2: paired_deltas_m now carries a paired-bootstrap
+        # SE alongside median_delta -- these 5 deltas have real spread, so
+        # se_boot must be a genuine positive float, never None/0 by default.
+        self.assertIsInstance(paired["se_boot"], float)
+        self.assertGreater(paired["se_boot"], 0.0)
 
     def test_lens_block(self) -> None:
         lens = self.result["lens"]
@@ -383,29 +398,50 @@ class ArithmeticFixtureTests(unittest.TestCase):
         self.assertTrue(identity["c"]["agree"])
         self.assertTrue(identity["m"]["agree"])
 
+    def test_arm_completeness_clean_both_arms_full(self) -> None:
+        # Every task-half in this fixture DOES get a ledger row (even the
+        # driver-infra / missing-stamp ones) -- 12 == 2*6 for both arms, so
+        # arm-completeness itself is clean; H3 is the check that fires here.
+        completeness = self.result["hygiene"]["arm_completeness"]
+        self.assertFalse(completeness["c"]["violated"])
+        self.assertFalse(completeness["m"]["violated"])
+        self.assertEqual(completeness["c"]["actual_task_halves"], 12)
+        self.assertEqual(completeness["c"]["expected_task_halves"], 12)
+
 
 # ---------------------------------------------------------------------------
-# Fixture 2: hygiene-clean (H1/H2 diff exactly 0 by construction), used for
-# E1 PASS/FAIL/UNMEASURABLE, determinism, round-trip, completeness, and the
-# ledger-independence invariant.
+# Fixture 2: hygiene-clean-by-default (H1/H2 diffs exactly 0 when a caller
+# passes matching dicts), used for E1 PASS/FAIL/UNMEASURABLE, determinism,
+# round-trip, completeness, the ledger-independence invariant, the golden
+# bootstrap value, expected-digest checks, and hygiene-violation tests.
 # ---------------------------------------------------------------------------
 
 
 def _build_clean_fixture(
     tmp: Path,
-    phase1_costs: dict[str, int],
+    c_p1_costs: dict[str, int],
     c_p2_costs: dict[str, int],
+    m_p1_costs: dict[str, int],
     m_p2_costs: dict[str, int],
     wall_s: float = 1.0,
+    digest_c: tuple[str | None, str | None] = ("digest-c", "digest-c"),
+    digest_m: tuple[str | None, str | None] = ("digest-m", "digest-m"),
 ) -> dict[str, Path]:
-    """Arm C's phase 1 AND phase 2 draw from `phase1_costs` and
-    `c_p2_costs` respectively; arm M's phase 1 ALSO draws from
-    `phase1_costs` (the identical dict) -- so H1 (`median_C,p2 -
-    median_C,p1`) and H2 (`median_M,p1 - median_C,p1`) are both exactly 0
-    by construction, regardless of `phase1_costs`'s own variance,
-    guaranteeing a hygiene-clean run whose E1 result is driven purely by
-    `c_p2_costs`/`m_p2_costs`. No task is ever dropped."""
-    names = list(phase1_costs.keys())
+    """Each arm's phase-1 and phase-2 costs are four INDEPENDENT dicts
+    (review finding I4: the earlier single shared `phase1_costs` parameter
+    could not drive H2 to a violation on its own, since it forced arm M's
+    phase-1 costs to always equal arm C's). A caller wanting H1
+    (`median_C,p2 - median_C,p1`) and H2 (`median_M,p1 - median_C,p1`)
+    both trivially at 0 passes the SAME dict for `c_p1_costs`/
+    `c_p2_costs`/`m_p1_costs` -- every PASS/FAIL/UNMEASURABLE/determinism/
+    golden/expected-digest test below does exactly this; a hygiene-
+    violation test instead makes exactly one of the four diverge.
+
+    `digest_c`/`digest_m` are `(phase1, phase2)` digest pairs -- default
+    is a single consistent digest per arm (every existing caller's prior
+    behavior); a caller can pass a differing pair to build an arm whose
+    own two ledger identity rows disagree with each other."""
+    names = list(c_p1_costs.keys())
     corpus_dir = tmp / "corpus"
     _write_manifest(corpus_dir, names)
 
@@ -415,12 +451,19 @@ def _build_clean_fixture(
     ledger_m = tmp / "ledger_m.jsonl"
 
     def _write_arm(
-        arm_dir: Path, ledger_path: Path, arm: str, digest: str, p1_mode: str, p2_mode: str
+        arm_dir: Path,
+        ledger_path: Path,
+        arm: str,
+        digest: tuple[str | None, str | None],
+        p1_costs: dict[str, int],
+        p2_costs: dict[str, int],
+        p1_mode: str,
+        p2_mode: str,
     ) -> None:
-        ledger_rows: list[dict[str, Any]] = list(_identity_rows(arm, digest, digest))
+        ledger_rows: list[dict[str, Any]] = list(_identity_rows(arm, digest[0], digest[1]))
         tasks_journal: list[dict[str, Any]] = []
         boot: list[dict[str, Any]] = []
-        for phase, costs in ((1, phase1_costs), (2, c_p2_costs if arm == "C" else m_p2_costs)):
+        for phase, costs in ((1, p1_costs), (2, p2_costs)):
             for name in names:
                 task_id = f"{arm}-{phase}-{name}-tid"
                 agent_id = f"{arm}-{phase}-{name}-agent"
@@ -434,8 +477,8 @@ def _build_clean_fixture(
         _write_jsonl(arm_dir / "journal" / "tasks.jsonl", tasks_journal)
         _write_jsonl(arm_dir / "journal" / "boot-0001.jsonl", boot)
 
-    _write_arm(arm_c_dir, ledger_c, "C", "digest-c", "off", "off")
-    _write_arm(arm_m_dir, ledger_m, "M", "digest-m", "silent", "silent")
+    _write_arm(arm_c_dir, ledger_c, "C", digest_c, c_p1_costs, c_p2_costs, "off", "off")
+    _write_arm(arm_m_dir, ledger_m, "M", digest_m, m_p1_costs, m_p2_costs, "silent", "silent")
 
     return {
         "corpus_dir": corpus_dir,
@@ -454,7 +497,9 @@ class CleanGateTests(unittest.TestCase):
     def test_pass_when_m_p2_constant_gap_below_c_p2(self) -> None:
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
-            paths = _build_clean_fixture(tmp, CONSTANT_50, CONSTANT_50, {n: 20 for n in TASKS})
+            paths = _build_clean_fixture(
+                tmp, CONSTANT_50, CONSTANT_50, CONSTANT_50, {n: 20 for n in TASKS}
+            )
             result = recompute(**{k: v for k, v in paths.items()})
 
             self.assertFalse(result["hygiene"]["violated"])
@@ -473,7 +518,9 @@ class CleanGateTests(unittest.TestCase):
     def test_fail_when_m_p2_constant_gap_above_c_p2(self) -> None:
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
-            paths = _build_clean_fixture(tmp, CONSTANT_50, CONSTANT_50, {n: 80 for n in TASKS})
+            paths = _build_clean_fixture(
+                tmp, CONSTANT_50, CONSTANT_50, CONSTANT_50, {n: 80 for n in TASKS}
+            )
             result = recompute(**{k: v for k, v in paths.items()})
 
             self.assertFalse(result["hygiene"]["violated"])
@@ -489,7 +536,7 @@ class CleanGateTests(unittest.TestCase):
             # C,p2 constant (headroom exactly 0); M,p2 has real spread, so
             # SE_boot(and thus delta_min) is strictly > 0 = headroom.
             m_p2 = {"t0": 10, "t1": 10, "t2": 10, "t3": 90, "t4": 90, "t5": 90}
-            paths = _build_clean_fixture(tmp, CONSTANT_50, CONSTANT_50, m_p2)
+            paths = _build_clean_fixture(tmp, CONSTANT_50, CONSTANT_50, CONSTANT_50, m_p2)
             result = recompute(**{k: v for k, v in paths.items()})
 
             self.assertFalse(result["hygiene"]["violated"])
@@ -508,7 +555,7 @@ class CleanGateTests(unittest.TestCase):
             tmp = Path(tmp_str)
             m_p2 = {"t0": 15, "t1": 22, "t2": 18, "t3": 25, "t4": 20, "t5": 30}
             c_p2 = {"t0": 48, "t1": 52, "t2": 50, "t3": 55, "t4": 49, "t5": 53}
-            paths = _build_clean_fixture(tmp, PHASE1, c_p2, m_p2)
+            paths = _build_clean_fixture(tmp, PHASE1, c_p2, PHASE1, m_p2)
             result = recompute(**{k: v for k, v in paths.items()})
             e1 = result["e1"]
             if e1["verdict"] == "UNMEASURABLE":
@@ -527,7 +574,7 @@ class CleanGateTests(unittest.TestCase):
             tmp = Path(tmp_str)
             m_p2 = {"t0": 15, "t1": 22, "t2": 18, "t3": 25, "t4": 20, "t5": 30}
             c_p2 = {"t0": 48, "t1": 52, "t2": 50, "t3": 55, "t4": 49, "t5": 53}
-            paths = _build_clean_fixture(tmp, PHASE1, c_p2, m_p2)
+            paths = _build_clean_fixture(tmp, PHASE1, c_p2, PHASE1, m_p2)
             kwargs = {k: v for k, v in paths.items()}
             result1 = recompute(**kwargs)
             result2 = recompute(**kwargs)
@@ -538,7 +585,9 @@ class CleanGateTests(unittest.TestCase):
     def test_completeness_pinned_top_level_schema(self) -> None:
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
-            paths = _build_clean_fixture(tmp, CONSTANT_50, CONSTANT_50, {n: 20 for n in TASKS})
+            paths = _build_clean_fixture(
+                tmp, CONSTANT_50, CONSTANT_50, CONSTANT_50, {n: 20 for n in TASKS}
+            )
             result = recompute(**{k: v for k, v in paths.items()})
 
             self.assertEqual(set(result.keys()), {"verdict", "e1", "hygiene", "advisory", "lens", "dropped"})
@@ -551,7 +600,17 @@ class CleanGateTests(unittest.TestCase):
             )
             self.assertEqual(
                 set(result["hygiene"].keys()),
-                {"violated", "reasons", "identity", "h1_control_stability", "h2_first_exposure_equivalence", "h3_infra_rate"},
+                {
+                    "violated", "reasons", "arm_completeness", "identity",
+                    "h1_control_stability", "h2_first_exposure_equivalence", "h3_infra_rate",
+                },
+            )
+            self.assertEqual(
+                set(result["hygiene"]["arm_completeness"].keys()), {"c", "m", "violated"}
+            )
+            self.assertEqual(
+                set(result["hygiene"]["arm_completeness"]["c"].keys()),
+                {"expected_task_halves", "actual_task_halves", "violated", "reason"},
             )
             self.assertEqual(
                 set(result["advisory"].keys()),
@@ -559,6 +618,10 @@ class CleanGateTests(unittest.TestCase):
                     "saturation_note", "h4", "success_rates", "steps_median", "wall_ms_median",
                     "paired_deltas_m", "row_counts", "costs", "modes_m", "successes",
                 },
+            )
+            self.assertEqual(
+                set(result["advisory"]["paired_deltas_m"].keys()),
+                {"per_task", "median_delta", "se_boot", "n_pairs"},
             )
             self.assertEqual(
                 set(result["lens"].keys()),
@@ -572,7 +635,9 @@ class CleanGateTests(unittest.TestCase):
     def test_serialization_round_trips(self) -> None:
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
-            paths = _build_clean_fixture(tmp, CONSTANT_50, CONSTANT_50, {n: 20 for n in TASKS})
+            paths = _build_clean_fixture(
+                tmp, CONSTANT_50, CONSTANT_50, CONSTANT_50, {n: 20 for n in TASKS}
+            )
             result = recompute(**{k: v for k, v in paths.items()})
             round_tripped = json.loads(json.dumps(result))
             self.assertEqual(result, round_tripped)
@@ -585,16 +650,430 @@ class CleanGateTests(unittest.TestCase):
         `wall_s` itself must never move any output number."""
         with TemporaryDirectory() as tmp_a:
             paths_a = _build_clean_fixture(
-                Path(tmp_a), PHASE1, {n: 50 for n in TASKS}, {n: 20 for n in TASKS}, wall_s=1.0
+                Path(tmp_a), PHASE1, {n: 50 for n in TASKS}, PHASE1, {n: 20 for n in TASKS}, wall_s=1.0
             )
             result_correct = recompute(**{k: v for k, v in paths_a.items()})
         with TemporaryDirectory() as tmp_b:
             paths_b = _build_clean_fixture(
-                Path(tmp_b), PHASE1, {n: 50 for n in TASKS}, {n: 20 for n in TASKS}, wall_s=99999.0
+                Path(tmp_b), PHASE1, {n: 50 for n in TASKS}, PHASE1, {n: 20 for n in TASKS}, wall_s=99999.0
             )
             result_wrong_wall = recompute(**{k: v for k, v in paths_b.items()})
 
         self.assertEqual(result_correct, result_wrong_wall)
+
+
+# ---------------------------------------------------------------------------
+# Review finding C1: missing/empty cost journals must never zero-fill.
+# ---------------------------------------------------------------------------
+
+
+class CostJournalFailureTests(unittest.TestCase):
+    """A deleted boot journal, or a task-half whose agent has zero
+    InferCompleted rows, must never read as "this task cost 0" -- the
+    reviewer's probe turned the old `completion_by_agent.get(agent_id, 0)`
+    fallback into a manufactured PASS (medians 0 vs 0, delta_min 0.0)."""
+
+    def test_deleted_boot_journal_raises_hard_error(self) -> None:
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            paths = _build_clean_fixture(
+                tmp, CONSTANT_50, CONSTANT_50, CONSTANT_50, {n: 20 for n in TASKS}
+            )
+            boot_path = paths["arm_c_dir"] / "journal" / "boot-0001.jsonl"
+            self.assertTrue(boot_path.exists())
+            boot_path.unlink()  # simulates a deleted/never-written boot journal
+
+            with self.assertRaises(ValueError) as ctx:
+                recompute(**{k: v for k, v in paths.items()})
+            self.assertIn("boot-*.jsonl", str(ctx.exception))
+
+    def test_agent_with_zero_infercompleted_rows_is_dropped_never_cost_zero(self) -> None:
+        """A task-half that got a real agent/MemoryStamp/TaskStep but NO
+        InferCompleted row at all (e.g. the daemon crashed before its
+        first inference reply landed) must be dropped, not silently cost
+        0 -- `agent_id not in completion_by_agent` is the exact signal."""
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            names = ["z0", "z1", "z2", "z3"]
+            corpus_dir = tmp / "corpus"
+            _write_manifest(corpus_dir, names)
+            arm_c_dir = tmp / "arm_c"
+            arm_m_dir = tmp / "arm_m"
+            ledger_c = tmp / "ledger_c.jsonl"
+            ledger_m = tmp / "ledger_m.jsonl"
+
+            def write_arm(arm_dir: Path, ledger_path: Path, arm: str, digest: str, cost: int) -> None:
+                ledger_rows = list(_identity_rows(arm, digest, digest))
+                tasks_journal: list[dict[str, Any]] = []
+                boot: list[dict[str, Any]] = []
+                for phase in (1, 2):
+                    for name in names:
+                        task_id = f"{arm}-{phase}-{name}-tid"
+                        agent_id = f"{arm}-{phase}-{name}-agent"
+                        ledger_rows.append(_ledger_row(arm, phase, name, task_id))
+                        tasks_journal.append(_memory_stamp(agent_id, task_id, "off"))
+                        tasks_journal.append(_task_step_done(agent_id))
+                        # z1/C/phase2's agent gets everything EXCEPT an
+                        # InferCompleted row -- the case under test.
+                        if not (arm == "C" and phase == 2 and name == "z1"):
+                            boot.append(_infer_completed(agent_id, cost, cost + 1))
+                _write_jsonl(ledger_path, ledger_rows)
+                _write_jsonl(arm_dir / "journal" / "tasks.jsonl", tasks_journal)
+                _write_jsonl(arm_dir / "journal" / "boot-0001.jsonl", boot)
+
+            write_arm(arm_c_dir, ledger_c, "C", "digest-c", 50)
+            write_arm(arm_m_dir, ledger_m, "M", "digest-m", 20)
+
+            result = recompute(corpus_dir, arm_c_dir, arm_m_dir, ledger_c, ledger_m)
+
+            self.assertNotIn("z1", result["advisory"]["costs"]["c"]["p2"])
+            dropped_c = result["dropped"]["C"]
+            matching = [e for e in dropped_c if e["task"] == "z1" and e["phase"] == 2]
+            self.assertEqual(len(matching), 1)
+            self.assertTrue(matching[0]["infra"])
+            self.assertIn("no InferCompleted rows", matching[0]["reason"])
+
+
+# ---------------------------------------------------------------------------
+# Review finding C2: H3 must not be blind to a truncated/dead-driver arm.
+# ---------------------------------------------------------------------------
+
+
+class ArmCompletenessTests(unittest.TestCase):
+    """A ledger that never got rows for part of an arm (driver died
+    mid-run, leaving no trace at all for the un-run task-halves) must be
+    caught by an explicit arm-completeness check -- H3's RATE alone is not
+    a sufficient substitute for "this arm never finished" as a named fact
+    -- and every missing-ledger-row drop must show up as infra:True."""
+
+    def test_truncated_arm_yields_invalid_with_named_completeness_reason(self) -> None:
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            names = ["u0", "u1", "u2", "u3", "u4"]
+            corpus_dir = tmp / "corpus"
+            _write_manifest(corpus_dir, names)
+
+            arm_c_dir = tmp / "arm_c"
+            arm_m_dir = tmp / "arm_m"
+            ledger_c = tmp / "ledger_c.jsonl"
+            ledger_m = tmp / "ledger_m.jsonl"
+
+            # Arm C: phase 1 complete (5/5); phase 2 only 2 of 5 task-halves
+            # ever got a ledger row -- the driver died after u0/u1 and never
+            # wrote rows for u2/u3/u4 at all (a real crash leaves NO trace,
+            # unlike an explicit driver-infra status row).
+            ledger_c_rows = list(_identity_rows("C", "digest-c", "digest-c"))
+            tasks_journal_c: list[dict[str, Any]] = []
+            boot_c: list[dict[str, Any]] = []
+            for name in names:
+                task_id = f"c-p1-{name}-tid"
+                agent_id = f"c-1-{name}-agent"
+                ledger_c_rows.append(_ledger_row("C", 1, name, task_id))
+                tasks_journal_c.append(_memory_stamp(agent_id, task_id, "off"))
+                tasks_journal_c.append(_task_step_done(agent_id))
+                boot_c.append(_infer_completed(agent_id, 50, 51))
+            for name in names[:2]:  # only u0, u1 have a phase-2 ledger row
+                task_id = f"c-p2-{name}-tid"
+                agent_id = f"c-2-{name}-agent"
+                ledger_c_rows.append(_ledger_row("C", 2, name, task_id))
+                tasks_journal_c.append(_memory_stamp(agent_id, task_id, "off"))
+                tasks_journal_c.append(_task_step_done(agent_id))
+                boot_c.append(_infer_completed(agent_id, 50, 51))
+            _write_jsonl(ledger_c, ledger_c_rows)
+            _write_jsonl(arm_c_dir / "journal" / "tasks.jsonl", tasks_journal_c)
+            _write_jsonl(arm_c_dir / "journal" / "boot-0001.jsonl", boot_c)
+
+            # Arm M: fully complete, both phases, all 5 tasks.
+            ledger_m_rows = list(_identity_rows("M", "digest-m", "digest-m"))
+            tasks_journal_m: list[dict[str, Any]] = []
+            boot_m: list[dict[str, Any]] = []
+            for phase in (1, 2):
+                for name in names:
+                    task_id = f"m-{phase}-{name}-tid"
+                    agent_id = f"m-{phase}-{name}-agent"
+                    ledger_m_rows.append(_ledger_row("M", phase, name, task_id))
+                    tasks_journal_m.append(_memory_stamp(agent_id, task_id, "silent"))
+                    tasks_journal_m.append(_task_step_done(agent_id))
+                    boot_m.append(_infer_completed(agent_id, 20, 21))
+            _write_jsonl(ledger_m, ledger_m_rows)
+            _write_jsonl(arm_m_dir / "journal" / "tasks.jsonl", tasks_journal_m)
+            _write_jsonl(arm_m_dir / "journal" / "boot-0001.jsonl", boot_m)
+
+            result = recompute(corpus_dir, arm_c_dir, arm_m_dir, ledger_c, ledger_m)
+
+            completeness = result["hygiene"]["arm_completeness"]
+            self.assertTrue(completeness["c"]["violated"])
+            self.assertEqual(completeness["c"]["expected_task_halves"], 10)
+            self.assertEqual(completeness["c"]["actual_task_halves"], 7)
+            self.assertIsNotNone(completeness["c"]["reason"])
+            self.assertFalse(completeness["m"]["violated"])
+            self.assertTrue(result["hygiene"]["violated"])
+            self.assertEqual(result["verdict"], "INVALID")
+            self.assertIsNone(result["e1"]["delta_min"])
+
+            # The 3 never-ledgered phase-2 tasks (u2,u3,u4) are dropped with
+            # infra:True -- "no ledger row" now counts toward H3 (C2's other
+            # half).
+            dropped_c = result["dropped"]["C"]
+            missing = {"u2", "u3", "u4"}
+            found = {entry["task"] for entry in dropped_c if entry["phase"] == 2 and entry["task"] in missing}
+            self.assertEqual(found, missing)
+            for entry in dropped_c:
+                if entry["task"] in missing and entry["phase"] == 2:
+                    self.assertTrue(entry["infra"])
+                    self.assertIn("no ledger row", entry["reason"])
+
+            h3 = result["hygiene"]["h3_infra_rate"]
+            self.assertEqual(h3["c_infra_count"], 3)
+            self.assertGreater(h3["c_infra_rate"], 0.05)
+            self.assertTrue(h3["violated"])
+
+
+# ---------------------------------------------------------------------------
+# Review finding I1 + I2: a golden, hand-derived bootstrap value covering
+# BOTH E1's delta_min (I1) and M's paired-deltas SE (I2) on one fixture.
+# ---------------------------------------------------------------------------
+
+
+class GoldenBootstrapTests(unittest.TestCase):
+    """Review finding I1: the resample-median calls INSIDE the bootstrap
+    loops (`recompute_bootstrap.py`'s `_bootstrap_diff_independent`/
+    `_bootstrap_diff_paired`) were not covered by any exact-value
+    assertion -- only `_median_or_none`'s own OUTER median call was pinned
+    (mutation check #2). `EXPECTED_DELTA_MIN`/`EXPECTED_SE_BOOT` (E1) and
+    `EXPECTED_M_PAIRED_SE_BOOT`/`EXPECTED_M_MEDIAN_DELTA` (review finding
+    I2, M's advisory paired-deltas SE) below were each computed ONCE via
+    an independent from-scratch reimplementation of the bootstrap
+    algorithm (seed 20260826, B=10,000, the SAME H1 -> H2 -> E1 -> M's
+    paired-deltas RNG consumption order `recompute()` uses) run in a
+    standalone script, then hard-coded here. Any drift in either bootstrap
+    loop's own median call (e.g. swapped for mean) changes these numbers
+    and fails this test, independent of the outer `_median_or_none`
+    mutation check.
+
+    Derivation (run once, independently, NOT importing
+    `recompute_bootstrap.py`):
+
+        import random, statistics
+
+        def bootstrap_paired(rng, pairs, b=10000):
+            diffs = []
+            n = len(pairs)
+            for _ in range(b):
+                drawn = [pairs[rng.randrange(n)] for _ in range(n)]
+                before = [p[0] for p in drawn]
+                after = [p[1] for p in drawn]
+                diffs.append(statistics.median(after) - statistics.median(before))
+            return diffs
+
+        def bootstrap_independent(rng, first, second, b=10000):
+            diffs = []
+            n1, n2 = len(first), len(second)
+            for _ in range(b):
+                r1 = [first[rng.randrange(n1)] for _ in range(n1)]
+                r2 = [second[rng.randrange(n2)] for _ in range(n2)]
+                diffs.append(statistics.median(r1) - statistics.median(r2))
+            return diffs
+
+        rng = random.Random(20260826)
+        c_p1 = c_p2 = m_p1 = [50, 52, 54, 56]
+        m_p2 = [10, 14, 18, 22]
+
+        bootstrap_paired(rng, list(zip(c_p1, c_p2)))        # H1, consumed 1st
+        bootstrap_independent(rng, m_p1, c_p1)              # H2, consumed 2nd
+        e1_diffs = bootstrap_independent(rng, m_p2, c_p2)   # E1, consumed 3rd
+        # EXPECTED_SE_BOOT   = statistics.pstdev(e1_diffs)
+        # EXPECTED_DELTA_MIN = 2 * EXPECTED_SE_BOOT
+
+        m_pairs = list(zip(m_p1, m_p2))
+        m_diffs = bootstrap_paired(rng, m_pairs)            # M paired-deltas, 4th/last
+        # EXPECTED_M_PAIRED_SE_BOOT = statistics.pstdev(m_diffs)
+        # EXPECTED_M_MEDIAN_DELTA   = statistics.median([p2 - p1 for p1, p2 in m_pairs])
+    """
+
+    GOLDEN_C_P1 = {"g0": 50, "g1": 52, "g2": 54, "g3": 56}
+    GOLDEN_C_P2 = {"g0": 50, "g1": 52, "g2": 54, "g3": 56}
+    GOLDEN_M_P1 = {"g0": 50, "g1": 52, "g2": 54, "g3": 56}
+    GOLDEN_M_P2 = {"g0": 10, "g1": 14, "g2": 18, "g3": 22}
+
+    EXPECTED_SE_BOOT = 3.3896804333152115
+    EXPECTED_DELTA_MIN = 6.779360866630423
+    EXPECTED_M_PAIRED_SE_BOOT = 1.4935798070407889
+    EXPECTED_M_MEDIAN_DELTA = -37.0
+
+    def test_delta_min_and_paired_delta_se_match_hand_derived_golden_values(self) -> None:
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            paths = _build_clean_fixture(
+                tmp, self.GOLDEN_C_P1, self.GOLDEN_C_P2, self.GOLDEN_M_P1, self.GOLDEN_M_P2
+            )
+            result = recompute(**{k: v for k, v in paths.items()})
+
+            self.assertFalse(result["hygiene"]["violated"])
+            e1 = result["e1"]
+            self.assertEqual(e1["median_c_p2"], 53.0)
+            self.assertEqual(e1["median_m_p2"], 16.0)
+            self.assertEqual(e1["min_c_p2"], 50)
+            self.assertEqual(e1["se_boot"], self.EXPECTED_SE_BOOT)
+            self.assertEqual(e1["delta_min"], self.EXPECTED_DELTA_MIN)
+
+            paired = result["advisory"]["paired_deltas_m"]
+            self.assertEqual(paired["median_delta"], self.EXPECTED_M_MEDIAN_DELTA)
+            self.assertEqual(paired["se_boot"], self.EXPECTED_M_PAIRED_SE_BOOT)
+
+
+# ---------------------------------------------------------------------------
+# Review finding I3: expected_digest must be live, not theoretical.
+# ---------------------------------------------------------------------------
+
+
+class ExpectedDigestTests(unittest.TestCase):
+    """The library kwarg stays optional (fixtures don't need it), but a
+    real mismatch must show up as a named INVALID, and the CLI must
+    REQUIRE --expected-digest so a real gate run can never silently skip
+    the check."""
+
+    def test_expected_digest_mismatch_yields_invalid_with_named_reason(self) -> None:
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            paths = _build_clean_fixture(
+                tmp, CONSTANT_50, CONSTANT_50, CONSTANT_50, {n: 20 for n in TASKS}
+            )
+            result = recompute(
+                **{k: v for k, v in paths.items()}, expected_digest="totally-different-digest"
+            )
+            self.assertEqual(result["verdict"], "INVALID")
+            identity = result["hygiene"]["identity"]
+            self.assertTrue(identity["c"]["violated"])
+            self.assertTrue(identity["m"]["violated"])
+            self.assertFalse(identity["c"]["matches_expected"])
+            self.assertIn("expected", identity["c"]["reason"])
+            self.assertIn("totally-different-digest", identity["c"]["reason"])
+            self.assertIsNone(result["e1"]["delta_min"])
+
+    def test_expected_digest_match_does_not_violate_identity(self) -> None:
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            paths = _build_clean_fixture(
+                tmp, CONSTANT_50, CONSTANT_50, CONSTANT_50, {n: 20 for n in TASKS}
+            )
+            # _build_clean_fixture's default digests are "digest-c"/"digest-m".
+            result = recompute(**{k: v for k, v in paths.items()}, expected_digest="digest-c")
+            self.assertFalse(result["hygiene"]["identity"]["c"]["violated"])
+            self.assertTrue(result["hygiene"]["identity"]["c"]["matches_expected"])
+
+    def test_cli_requires_expected_digest(self) -> None:
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            paths = _build_clean_fixture(
+                tmp, CONSTANT_50, CONSTANT_50, CONSTANT_50, {n: 20 for n in TASKS}
+            )
+            argv = [
+                "--corpus-dir", str(paths["corpus_dir"]),
+                "--arm-c-dir", str(paths["arm_c_dir"]),
+                "--arm-m-dir", str(paths["arm_m_dir"]),
+                "--ledger-c", str(paths["ledger_c"]),
+                "--ledger-m", str(paths["ledger_m"]),
+            ]
+            with self.assertRaises(SystemExit):
+                main(argv)
+
+    def test_cli_accepts_expected_digest_and_reports_mismatch(self) -> None:
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            paths = _build_clean_fixture(
+                tmp, CONSTANT_50, CONSTANT_50, CONSTANT_50, {n: 20 for n in TASKS}
+            )
+            argv = [
+                "--corpus-dir", str(paths["corpus_dir"]),
+                "--arm-c-dir", str(paths["arm_c_dir"]),
+                "--arm-m-dir", str(paths["arm_m_dir"]),
+                "--ledger-c", str(paths["ledger_c"]),
+                "--ledger-m", str(paths["ledger_m"]),
+                "--expected-digest", "totally-different-digest",
+            ]
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(argv)
+            self.assertEqual(exit_code, 0)  # a clean recompute run that just reports INVALID
+            printed = json.loads(stdout.getvalue())
+            self.assertEqual(printed["verdict"], "INVALID")
+
+
+# ---------------------------------------------------------------------------
+# Review finding I4: H1/H2/identity violations must each be independently
+# exercised.
+# ---------------------------------------------------------------------------
+
+
+class HygieneViolationTests(unittest.TestCase):
+    """Each of H1, H2, and identity self-disagreement is driven to
+    INVALID in isolation (the other checks stay clean by construction),
+    asserting verdict, the named hygiene reason, and null e1 fields."""
+
+    def test_h1_violation_yields_invalid(self) -> None:
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            huge_c_p2 = {n: 500 for n in TASKS}  # C jumps 50 -> 500 between phases
+            paths = _build_clean_fixture(
+                tmp, CONSTANT_50, huge_c_p2, CONSTANT_50, {n: 20 for n in TASKS}
+            )
+            result = recompute(**{k: v for k, v in paths.items()})
+
+            h1 = result["hygiene"]["h1_control_stability"]
+            self.assertTrue(h1["violated"])
+            self.assertEqual(h1["diff"], 450.0)
+            self.assertIsNotNone(h1["reason"])
+            self.assertIn("H1", h1["reason"])
+            self.assertTrue(result["hygiene"]["violated"])
+            self.assertEqual(result["verdict"], "INVALID")
+            self.assertIsNone(result["e1"]["delta_min"])
+            self.assertIsNone(result["e1"]["se_boot"])
+            self.assertIsNone(result["e1"]["headroom"])
+
+    def test_h2_violation_yields_invalid(self) -> None:
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            huge_m_p1 = {n: 500 for n in TASKS}  # M's phase 1 jumps far above C's
+            paths = _build_clean_fixture(
+                tmp, CONSTANT_50, CONSTANT_50, huge_m_p1, {n: 20 for n in TASKS}
+            )
+            result = recompute(**{k: v for k, v in paths.items()})
+
+            h2 = result["hygiene"]["h2_first_exposure_equivalence"]
+            self.assertTrue(h2["violated"])
+            self.assertEqual(h2["diff"], 450.0)
+            self.assertIsNotNone(h2["reason"])
+            self.assertIn("H2", h2["reason"])
+            self.assertTrue(result["hygiene"]["violated"])
+            self.assertEqual(result["verdict"], "INVALID")
+            self.assertIsNone(result["e1"]["delta_min"])
+            self.assertIsNone(result["e1"]["se_boot"])
+            self.assertIsNone(result["e1"]["headroom"])
+
+    def test_identity_self_disagreement_yields_invalid(self) -> None:
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            paths = _build_clean_fixture(
+                tmp,
+                CONSTANT_50,
+                CONSTANT_50,
+                CONSTANT_50,
+                {n: 20 for n in TASKS},
+                digest_c=("digest-c-phase1", "digest-c-phase2"),
+            )
+            result = recompute(**{k: v for k, v in paths.items()})
+
+            identity = result["hygiene"]["identity"]
+            self.assertTrue(identity["c"]["violated"])
+            self.assertFalse(identity["c"]["agree"])
+            self.assertIn("disagree", identity["c"]["reason"])
+            self.assertFalse(identity["m"]["violated"])  # unaffected
+            self.assertTrue(result["hygiene"]["violated"])
+            self.assertEqual(result["verdict"], "INVALID")
+            self.assertIsNone(result["e1"]["delta_min"])
+            self.assertIsNone(result["e1"]["se_boot"])
+            self.assertIsNone(result["e1"]["headroom"])
 
 
 if __name__ == "__main__":

@@ -117,6 +117,39 @@ def _check_identity(
     }
 
 
+def _check_arm_completeness(arm_label: str, actual_task_halves: int, n: int) -> dict[str, Any]:
+    """Review finding C2: an arm-level guard, NOT named in design spec §4,
+    added because H3's infra-rate ceiling alone is blind to a driver that
+    dies partway through an arm and simply never appends any more ledger
+    rows -- a 40%-complete arm has plenty of infra-flagged drops (good,
+    fixed by C2's other half) but a 5%-style RATE ceiling can still miss a
+    catastrophic but partial run in edge cases, and a reader of the gate's
+    output deserves an explicit, named "this arm never finished" fact
+    rather than inferring it from an infra-rate number alone. Every arm
+    must carry exactly ``2 * n`` task-half ledger rows (one per task, per
+    phase) -- anything else means the driver did not run to completion,
+    and the run is INVALID regardless of what the infra rate says.
+
+    Evaluated FIRST, before identity/H1/H2/H3 (`recompute.py`'s hygiene
+    order): whether the run is even complete enough to trust its other
+    numbers is logically prior to comparing digests or medians on it."""
+    expected = 2 * n
+    violated = actual_task_halves != expected
+    reason = None
+    if violated:
+        reason = (
+            f"{arm_label}: ledger carries {actual_task_halves} task-half row(s), expected "
+            f"{expected} (2 x n={n}) -- truncated/incomplete arm, verdict INVALID regardless "
+            f"of infra rate"
+        )
+    return {
+        "expected_task_halves": expected,
+        "actual_task_halves": actual_task_halves,
+        "violated": violated,
+        "reason": reason,
+    }
+
+
 def _check_h1(rng: random.Random, view_c: dict[str, Any], manifest_tasks: list[dict[str, Any]]) -> dict[str, Any]:
     """Design spec §4, H1 (control stability), quoted verbatim: "|median_C,
     p2 - median_C,p1| within 2 x SE_boot of that difference. A violation
@@ -217,12 +250,13 @@ def _check_h3(dropped_c: list[dict[str, Any]], dropped_m: list[dict[str, Any]], 
     breaks ...). Above 5% -> infrastructure kill." The denominator is the
     FIXED manifest-derived task-half count (``n`` tasks x 2 phases), not
     however many ledger/journal rows happened to exist -- a rate independent
-    of how badly a run degraded. Only entries flagged ``infra`` (task-4
-    brief's exact two-clause definition -- driver-infra status OR missing
-    MemoryStamp) count toward the numerator; the two other, pathological
-    ``dropped`` reasons (no ledger row / missing task_id -- defensive-only,
-    see ``recompute_join._measure_arm``) do not, since they are not what H3
-    names."""
+    of how badly a run degraded.
+
+    Every ``dropped`` entry flagged ``infra: True`` counts toward the
+    numerator (review finding C2: ``recompute_join._measure_arm`` flags
+    ALL FIVE of its drop reasons -- including "no ledger row" and "no
+    task_id", the exact shape a driver that dies mid-arm leaves behind --
+    as infra; a truncated arm must show up here, not read as clean)."""
     task_halves = n * 2
     c_infra_count = sum(1 for entry in dropped_c if entry["infra"])
     m_infra_count = sum(1 for entry in dropped_m if entry["infra"])

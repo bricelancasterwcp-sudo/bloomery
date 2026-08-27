@@ -73,6 +73,7 @@ import argparse
 import hashlib
 import json
 import random
+import statistics
 import sys
 from pathlib import Path
 from typing import Any, Sequence
@@ -81,6 +82,8 @@ from tools.memory_battery.driver import WINDOW_CAP
 from tools.memory_battery.recompute_bootstrap import (
     BOOTSTRAP_B,
     BOOTSTRAP_SEED,
+    _bootstrap_diff_paired,
+    _check_arm_completeness,
     _check_e1,
     _check_h1,
     _check_h2,
@@ -121,17 +124,48 @@ def _success_rate(successes_by_task: dict[str, bool]) -> dict[str, Any]:
     return {"rate": successes / n, "successes": successes, "n": n}
 
 
-def _paired_deltas_m(view_m: dict[str, Any], manifest_tasks: list[dict[str, Any]]) -> dict[str, Any]:
+def _paired_deltas_m(
+    rng: random.Random, view_m: dict[str, Any], manifest_tasks: list[dict[str, Any]]
+) -> dict[str, Any]:
     """Design spec §4 advisory: "per-task paired phase-2-phase-1 deltas
-    within M." Only tasks non-dropped in BOTH M phases can pair."""
+    within M." Only tasks non-dropped in BOTH M phases can pair.
+
+    **Review finding I2 fix.** Spec §4 names this endpoint as a
+    within-arm, PAIRED-bootstrap consumer in the same breath as H1
+    ("for the within-arm differences (H1, and M's advisory paired
+    deltas) tasks resample as p1/p2 PAIRS") -- an earlier revision
+    reported `median_delta` with no SE at all. `se_boot` here is exactly
+    H1's own bootstrap primitive (`_bootstrap_diff_paired`) applied to
+    THESE pairs (M's own phase-1/phase-2 values) instead of arm C's.
+    `None` only when there are zero pairs to resample (none-vs-zero:
+    never a fabricated 0).
+
+    **RNG consumption order (`recompute.py`'s `recompute()`, documented
+    once here since this is where the order's tail end lives):** identity
+    -> H1 -> H2 -> [E1, only if hygiene clean] -> this function, always,
+    last. Advisory, so it runs regardless of hygiene/gate outcome; it
+    runs AFTER E1's own bootstrap so a hygiene-clean run's `e1.delta_min`
+    is fully computed and returned before this call ever touches `rng`
+    again -- this function's own draws can never retroactively affect an
+    already-returned `e1` value."""
     names = [task["name"] for task in manifest_tasks]
-    per_task = [
-        {"task": name, "delta": view_m["costs"][2][name] - view_m["costs"][1][name]}
+    pairs_with_names = [
+        (name, view_m["costs"][1][name], view_m["costs"][2][name])
         for name in names
         if name in view_m["costs"][1] and name in view_m["costs"][2]
     ]
+    per_task = [{"task": name, "delta": p2 - p1} for name, p1, p2 in pairs_with_names]
     deltas = [entry["delta"] for entry in per_task]
-    return {"per_task": per_task, "median_delta": _median_or_none(deltas), "n_pairs": len(per_task)}
+    se_boot = None
+    if pairs_with_names:
+        pairs = [(p1, p2) for _, p1, p2 in pairs_with_names]
+        se_boot = statistics.pstdev(_bootstrap_diff_paired(rng, pairs))
+    return {
+        "per_task": per_task,
+        "median_delta": _median_or_none(deltas),
+        "se_boot": se_boot,
+        "n_pairs": len(per_task),
+    }
 
 
 def _mint_rate_p1(
@@ -225,11 +259,19 @@ def recompute(
     arm_m = _load_arm(Path(arm_m_dir), Path(ledger_m), manifest_tasks)
 
     # One seeded RNG instance, consumed in a FIXED program order (H1 -> H2 ->
-    # [E1 if hygiene clean]) regardless of the data -- see
+    # [E1 if hygiene clean] -> M's advisory paired-deltas SE, always last --
+    # see `_paired_deltas_m`'s docstring) regardless of the data -- see
     # `recompute_bootstrap.py`'s BOOTSTRAP_SEED comment: this is what makes
     # `delta_min` reproducible run-to-run for identical inputs (mutation
     # check #3).
     rng = random.Random(BOOTSTRAP_SEED)
+
+    # Review finding C2: arm completeness is checked FIRST, ahead of
+    # identity/H1/H2/H3 -- whether a run is even complete enough to trust
+    # is logically prior to comparing digests or medians on it.
+    completeness_c = _check_arm_completeness("C", arm_c["ledger_task_half_count"], n)
+    completeness_m = _check_arm_completeness("M", arm_m["ledger_task_half_count"], n)
+    completeness_violated = completeness_c["violated"] or completeness_m["violated"]
 
     identity_c = _check_identity("C", arm_c["identity_by_phase"], expected_digest)
     identity_m = _check_identity("M", arm_m["identity_by_phase"], expected_digest)
@@ -239,10 +281,20 @@ def recompute(
     h2 = _check_h2(rng, arm_c["view"], arm_m["view"], manifest_tasks)
     h3 = _check_h3(arm_c["dropped"], arm_m["dropped"], n)
 
-    hygiene_violated = identity_violated or h1["violated"] or h2["violated"] or h3["violated"]
+    hygiene_violated = (
+        completeness_violated or identity_violated or h1["violated"] or h2["violated"] or h3["violated"]
+    )
     hygiene_reasons = [
         reason
-        for reason in (identity_c["reason"], identity_m["reason"], h1["reason"], h2["reason"], h3["reason"])
+        for reason in (
+            completeness_c["reason"],
+            completeness_m["reason"],
+            identity_c["reason"],
+            identity_m["reason"],
+            h1["reason"],
+            h2["reason"],
+            h3["reason"],
+        )
         if reason
     ]
 
@@ -297,7 +349,7 @@ def recompute(
             "m_p1": _median_or_none(arm_m["view"]["wall_ms"][1]),
             "m_p2": _median_or_none(arm_m["view"]["wall_ms"][2]),
         },
-        "paired_deltas_m": _paired_deltas_m(arm_m["view"], manifest_tasks),
+        "paired_deltas_m": _paired_deltas_m(rng, arm_m["view"], manifest_tasks),
         "row_counts": {
             "c_stamp": arm_c["row_counts"]["stamp"],
             "c_mint": arm_c["row_counts"]["mint"],
@@ -334,6 +386,7 @@ def recompute(
     hygiene = {
         "violated": hygiene_violated,
         "reasons": hygiene_reasons,
+        "arm_completeness": {"c": completeness_c, "m": completeness_m, "violated": completeness_violated},
         "identity": {"c": identity_c, "m": identity_m, "violated": identity_violated},
         "h1_control_stability": h1,
         "h2_first_exposure_equivalence": h2,
@@ -367,8 +420,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--ledger-m", type=Path, required=True, help="Arm M's driver ledger JSONL path.")
     parser.add_argument(
         "--expected-digest",
-        default=None,
-        help="Optional prereg-pinned served-identity digest (design spec §2) to check ledger identity rows against.",
+        required=True,
+        help=(
+            "REQUIRED: the prereg-pinned served-identity digest (design spec §2). Checked "
+            "against both arms' ledger identity rows -- a mismatch is a named hygiene "
+            "violation, verdict INVALID (review finding I3: the CLI enforces this because a "
+            "real gate run must never silently skip it; the library `recompute()` kwarg "
+            "stays optional-None so fixtures/tests that don't care about identity can omit it)."
+        ),
     )
     args = parser.parse_args(argv)
 

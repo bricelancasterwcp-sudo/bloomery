@@ -46,13 +46,29 @@ def _measure_arm(
     driver-infra status OR a task_id with no MemoryStamp row". Every
     manifest task, both phases, is visited in manifest order -- a task not
     joinable for any reason becomes exactly one named ``dropped`` entry
-    (none-vs-zero: never a silent zero), and no OTHER reason ever appears
-    in ``dropped`` beyond the four named below, so the ``infra`` flag on
-    each entry reflects the brief's own two-clause infra definition exactly
-    (a missing ledger row / missing task_id are unjoinable but NOT "infra"
-    by that definition -- they cannot occur in a well-formed real run,
-    since the driver always writes exactly one ledger row per task-half,
-    but are handled here defensively rather than assumed away)."""
+    (none-vs-zero: never a silent zero).
+
+    **Review finding C2 fix.** ALL FIVE ``dropped`` reasons below are
+    flagged ``infra: True`` -- including "no ledger row" and "carries no
+    task_id", which an earlier revision excluded from H3's infra rate on
+    the theory that they "cannot occur in a well-formed real run". A
+    driver that dies mid-arm (crashes, gets killed, loses its process
+    group) leaves EXACTLY these two shapes behind -- task-halves the
+    ledger never got a row for at all -- and a truncated arm is the
+    textbook infra failure H3 exists to catch; excluding it made H3 blind
+    to the worst case instead of the best-covered one. `_check_h3`
+    (`recompute_bootstrap.py`) sums every ``infra: True`` entry
+    unconditionally, so this flip is the whole fix for that finding.
+
+    **Review finding C1 fix.** A task-half that joins all the way to a
+    real agent id but has ZERO `InferCompleted` rows for that id (the
+    fifth reason below) is ALSO dropped, never a silent `cost: 0` --
+    `completion_by_agent.get(agent_id, 0)`'s old fallback made a deleted
+    or truncated boot journal read as "every task cost nothing", which
+    the reviewer's probe turned into a manufactured PASS. Only an agent id
+    with at least one real `InferCompleted` row reaches `measurements`
+    now; `completion_by_agent[agent_id]` is used directly (not `.get`)
+    since membership is already confirmed by the guard above it."""
     measurements: dict[tuple[int, str], dict[str, Any]] = {}
     dropped: list[dict[str, Any]] = []
     for phase in (1, 2):
@@ -64,7 +80,7 @@ def _measure_arm(
                     {
                         "task": name,
                         "phase": phase,
-                        "infra": False,
+                        "infra": True,
                         "reason": f"no ledger row for task {name!r} phase {phase}",
                     }
                 )
@@ -85,7 +101,7 @@ def _measure_arm(
                     {
                         "task": name,
                         "phase": phase,
-                        "infra": False,
+                        "infra": True,
                         "reason": f"ledger row for task {name!r} phase {phase} carries no task_id",
                     }
                 )
@@ -105,8 +121,21 @@ def _measure_arm(
                 )
                 continue
             agent_id = stamp["id"]
+            if agent_id not in completion_by_agent:
+                dropped.append(
+                    {
+                        "task": name,
+                        "phase": phase,
+                        "infra": True,
+                        "reason": (
+                            f"no InferCompleted rows for agent_id {agent_id!r} "
+                            f"(task {name!r} phase {phase}) -- never a silent cost of 0"
+                        ),
+                    }
+                )
+                continue
             measurements[(phase, name)] = {
-                "cost": completion_by_agent.get(agent_id, 0),
+                "cost": completion_by_agent[agent_id],
                 "steps": step_counts.get(agent_id, 0),
                 "wall_ms": step_walls.get(agent_id, 0),
                 "success": agent_id in done_agents,
@@ -148,10 +177,29 @@ def _load_arm(arm_dir: Path, ledger_path: Path, manifest_tasks: list[dict[str, A
     """One arm's full pipeline: read both journals + the ledger, join,
     reshape into the per-phase view. Returns everything `recompute()`
     needs to assemble that arm's slice of the output (view, dropped list,
-    raw row counts, identity digests, and the task_id->phase map the H4
-    mint-rate advisory needs)."""
+    raw row counts, identity digests, the task_id->phase map the H4
+    mint-rate advisory needs, and the raw ledger task-half count the C2
+    arm-completeness check needs).
+
+    **Review finding C1 fix.** A boot-journal glob that matches NOTHING is
+    a HARD failure, raised here, never a silent empty list: `_read_jsonl`
+    treats one missing file as informative (a `tasks.jsonl` an arm never
+    wrote is itself evidence, handled by the join's own drop logic), but
+    zero `boot-*.jsonl` files for an entire arm means there is no possible
+    source for ANY task's cost in that arm at all -- the exact shape the
+    reviewer's probe reproduced (a deleted boot journal silently reading
+    as "every task cost 0", manufacturing a PASS). This is deliberately
+    NOT folded into `_read_jsonl` itself, since that function's
+    missing-file-is-empty contract is correct and load-bearing for
+    `tasks.jsonl` and the ledger."""
     tasks_journal_rows = _read_jsonl(arm_dir / "journal" / "tasks.jsonl")
     boot_paths = sorted((arm_dir / "journal").glob("boot-*.jsonl"))
+    if not boot_paths:
+        raise ValueError(
+            f"{arm_dir}: no boot-*.jsonl files found under journal/ -- an arm with zero boot "
+            f"journals has no possible source for any task's cost; this is a hard failure, "
+            f"never a silent zero-fill (review finding C1)"
+        )
     boot_journal_rows: list[dict[str, Any]] = []
     for boot_path in boot_paths:
         boot_journal_rows.extend(_read_jsonl(boot_path))
@@ -186,4 +234,5 @@ def _load_arm(arm_dir: Path, ledger_path: Path, manifest_tasks: list[dict[str, A
         "row_counts": _row_counts(tasks_journal_rows),
         "tasks_journal_rows": tasks_journal_rows,
         "task_id_to_phase": task_id_to_phase,
+        "ledger_task_half_count": len(ledger_task_halves),
     }
