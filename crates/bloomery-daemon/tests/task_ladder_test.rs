@@ -494,3 +494,66 @@ fn rung_4_refusal_is_terminal_window_exhausted() {
         "no step row for a turn that never sent"
     );
 }
+
+#[test]
+fn every_parse_re_ask_rewalks_from_rung_1() {
+    // Spec §4: "Each attempt (first ask and each parse re-ask alike) starts
+    // at rung 1." `every_attempt_rewalks_from_rung_1` spans two STEPS; this
+    // one spans two ATTEMPTS of ONE step — the case an intra-step ratchet (a
+    // rung hoisted out of the `for attempt` loop) breaks while every other
+    // test in this file, all of which parse on attempt 1, stays green.
+    let dir = fresh_dir("reask-rewalk");
+    let big_memory = "memory ".repeat(2000);
+    // Attempt 2's transcript carries attempt 1's parse diagnostic, whose
+    // exact text is the parser's business, not this test's. So the cap is
+    // sized against a padded stand-in entry comfortably longer than any
+    // diagnostic: rung 2 then fits at BOTH attempts, while rung 1 — which
+    // adds ~14k chars of memory block — fits at neither. A diagnostic that
+    // outgrew the pad would push attempt 2 to rung 3 and fail the rung
+    // assert below loudly, never silently.
+    let pad = "d".repeat(400);
+    let padded = full_entry(1, "?", &pad, &pad);
+    let rung2_roomy = render_task_prompt(
+        GOAL,
+        PatchCodec::SearchReplace,
+        EnvelopeLens::V1,
+        &[],
+        &padded,
+    );
+    let (mut pager, agent_id) = fixture(
+        &dir,
+        Some(cap_fitting(&rung2_roomy)),
+        vec![
+            scripted("not an action at all"),
+            scripted("<action verb=\"done\">\nok\n</action>"),
+        ],
+    );
+    let mut journal = Journal::open(&dir.join("task.jsonl")).unwrap();
+    let spec = TaskSpec {
+        memory_block: Some(big_memory),
+        ..ladder_spec(
+            sandbox_grant(&dir),
+            std::fs::canonicalize(&dir).unwrap(),
+            true,
+        )
+    };
+    let result = run_task(&mut pager, &agent_id, &spec, &mut journal);
+    assert_eq!(result.status, TaskStatus::Done);
+    assert_eq!(
+        refusals(&dir).len(),
+        2,
+        "one rung-1 refusal PER ATTEMPT — the parse re-ask re-walked from rung 1"
+    );
+    // Both rows belong to step 1: the failed parse attempt, then the `done`
+    // the re-ask produced. Each carries the rung ITS OWN attempt sent —
+    // spec §6's "parse-failure rows carry the rung their own failed attempt
+    // used".
+    let rungs: Vec<u32> = result.steps.iter().map(|s| s.rung).collect();
+    assert_eq!(rungs, vec![2, 2]);
+    assert!(result.steps[0].failed, "attempt 1 is the parse failure row");
+    assert_eq!(
+        infer_count(&pager),
+        2,
+        "both attempts reached the substrate"
+    );
+}
