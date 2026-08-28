@@ -62,6 +62,7 @@ fn meta(weights_bytes: u64) -> bloomery_core::gguf::GgufMeta {
         head_dim: 128,
         training_ctx: 4096,
         weights_bytes,
+        value_length: None,
         recurrent_state_bytes: 0,
     }
 }

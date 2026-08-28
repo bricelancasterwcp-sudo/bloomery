@@ -362,6 +362,7 @@ fn a_demoted_v4_task_renders_the_none_line_even_with_a_command_bearing_grant() {
                 head_dim: 32,
                 training_ctx: 65536,
                 weights_bytes: 1000,
+                value_length: None,
                 recurrent_state_bytes: 0,
             },
             None,

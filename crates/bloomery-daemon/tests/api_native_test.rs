@@ -247,6 +247,7 @@ fn serve_drift_blocked_qwen() -> (u16, bloomery_daemon::http::ServerHandle) {
         head_dim: 128,
         training_ctx: 4096,
         weights_bytes: 1000,
+        value_length: None,
         recurrent_state_bytes: 0,
     };
     pager.register_model("qwen", &gguf, meta, None).unwrap();
@@ -316,6 +317,7 @@ fn serve_drift_blocked_qwen_with_profiles() -> (u16, bloomery_daemon::http::Serv
         head_dim: 128,
         training_ctx: 4096,
         weights_bytes: 1000,
+        value_length: None,
         recurrent_state_bytes: 0,
     };
     pager.register_model("qwen", &gguf, meta, None).unwrap();
@@ -439,6 +441,7 @@ fn serve_with_missing_stats() -> (u16, bloomery_daemon::http::ServerHandle, Stri
         head_dim: 128,
         training_ctx: 4096,
         weights_bytes: 1000,
+        value_length: None,
         recurrent_state_bytes: 0,
     };
     pager.register_model("qwen", &gguf, meta, None).unwrap();
@@ -624,6 +627,7 @@ fn serve_panicking() -> (u16, bloomery_daemon::http::ServerHandle, String) {
         head_dim: 1,
         training_ctx: 4096,
         weights_bytes: 1,
+        value_length: None,
         recurrent_state_bytes: 0,
     };
     pager
@@ -760,6 +764,7 @@ fn serve_with_profiles(
         head_dim: 128,
         training_ctx: 4096,
         weights_bytes: 1000,
+        value_length: None,
         recurrent_state_bytes: 0,
     };
     pager.register_model("qwen", &gguf, meta, None).unwrap();

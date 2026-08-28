@@ -45,6 +45,7 @@ fn meta() -> GgufMeta {
         // `Budget`, checked before the window gate.
         training_ctx: 65536,
         weights_bytes: 1000,
+        value_length: None,
         recurrent_state_bytes: 0,
     }
 }

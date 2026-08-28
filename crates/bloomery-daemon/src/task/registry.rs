@@ -1091,6 +1091,7 @@ mod tests {
             head_dim: 32,
             training_ctx: 65536,
             weights_bytes: 1000,
+            value_length: None,
             recurrent_state_bytes: 0,
         }
     }

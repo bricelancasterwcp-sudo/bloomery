@@ -14,12 +14,37 @@ const F16_BYTES: u64 = 2;
 /// K and V are each stored, hence the leading factor of 2.
 const KV_TENSORS: u64 = 2;
 
-/// `2 (K and V) * attention_layers * kv_heads * head_dim * 2 (f16 bytes)`.
-/// Only layers that own a KV cache count — hybrid models' recurrent layers
-/// are charged by `GgufMeta::recurrent_state_bytes` instead (turn-5 spec §2).
+/// `2 (K and V) * attention_layers * kv_heads * head_dim * 2 (f16 bytes)` —
+/// the dense-model formula, which applies whenever K and V are stored at the
+/// same width. Only layers that own a KV cache count — hybrid models'
+/// recurrent layers are charged by `GgufMeta::recurrent_state_bytes` instead
+/// (turn-5 spec §2).
+///
+/// gguf-geometry R9 (SPEC.md), MLA/separate widths: when
+/// `GgufMeta.value_length` is stated and differs from `head_dim` (K's
+/// width), the leading factor-of-2 is replaced by the explicit K+V sum —
+/// `attention_layers * kv_heads * (head_dim + value_length) * 2`. K and V no
+/// longer share a width, so "2x head_dim" silently over- or under-charges;
+/// the sum is exact regardless of which side is wider. `value_length ==
+/// head_dim` stays on the dense formula by identity (the sum equals `2 *
+/// head_dim` exactly), and an unstated `value_length` (`None`) is read as
+/// the pre-R9 dense case — both fall through to the return below unchanged.
 ///
 /// All math is done in `u64` to avoid overflow on large models.
 pub fn kv_bytes_per_token(m: &GgufMeta) -> u64 {
+    if let Some(v) = m.value_length {
+        if v != m.head_dim {
+            // R9 (MLA, separate widths): K and V stated at different widths;
+            // the 2-for-K-and-V factor is replaced by the explicit sum.
+            // Measured: assay docs/superpowers/evidence/mla-kv-2026-08-27/
+            // (ollama 0.32.13, llama runner) — gguf-geometry SPEC.md R9.
+            return u64::from(m.attention_layers)
+                * u64::from(m.kv_heads)
+                * (u64::from(m.head_dim) + u64::from(v))
+                * F16_BYTES;
+        }
+    }
+
     KV_TENSORS
         * u64::from(m.attention_layers)
         * u64::from(m.kv_heads)

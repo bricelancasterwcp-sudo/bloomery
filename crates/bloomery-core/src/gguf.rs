@@ -16,8 +16,8 @@ use std::path::Path;
 pub struct GgufMeta {
     pub arch: String,
     /// Blocks that actually serve tokens: `{arch}.block_count` minus
-    /// `{arch}.nextn_predict_layers` (gguf-geometry v1 R6). `block_count` is
-    /// the raw declared count and includes MTP layers, which are not serving
+    /// `{arch}.nextn_predict_layers` (gguf-geometry R6 (SPEC.md)). `block_count`
+    /// is the raw declared count and includes MTP layers, which are not serving
     /// layers; `attention_layers` and the recurrent-layer count below are both
     /// derived from this serving count, never from the raw one.
     pub layers: u32,
@@ -29,6 +29,15 @@ pub struct GgufMeta {
     pub head_dim: u32,
     pub training_ctx: u32,
     pub weights_bytes: u64,
+    /// The STATED `{arch}.attention.value_length`, verbatim — `None` means
+    /// unstated (a pre-R9 file, or a file that simply doesn't state it),
+    /// which reads as the dense identity downstream (geometry.rs's pre-R9
+    /// formula), never 0. gguf-geometry R9 (SPEC.md): present when K and V
+    /// are stored at different widths (MLA), e.g. deepseek2's key_length 192
+    /// / value_length 128. Measured branch H-b (assay
+    /// docs/superpowers/evidence/mla-kv-2026-08-27/): bloomery reads this
+    /// value verbatim and does not derive it from any latent-space dims.
+    pub value_length: Option<u32>,
     /// Per-context constant for the recurrent (Gated-DeltaNet / SSM) layers:
     /// sum over `layers - attention_layers` of `[(conv_kernel-1) *
     /// (inner_size + 2*group_count*state_size) + state_size*inner_size] * 4`
@@ -271,7 +280,7 @@ fn lookup_u32_opt(kvs: &HashMap<String, GgufValue>, key: &str) -> Result<Option<
     }
 }
 
-/// gguf-geometry v1 R6: `serving_block_count = block_count -
+/// gguf-geometry R6 (SPEC.md): `serving_block_count = block_count -
 /// {arch}.nextn_predict_layers` when the MTP key is present and nonzero.
 ///
 /// Multi-token-prediction layers are counted by `block_count` but never serve
@@ -427,6 +436,9 @@ pub fn parse_gguf_meta(path: &Path) -> Result<GgufMeta, GgufError> {
     let kv_heads = lookup_u32(&kvs, &format!("{arch}.attention.head_count_kv"))?;
     let head_dim = resolve_head_dim(&kvs, &arch)?;
     let training_ctx = lookup_u32(&kvs, &format!("{arch}.context_length"))?;
+    // R9: the stated V width, verbatim. `None` when the key is absent — the
+    // dense identity downstream, never 0.
+    let value_length = lookup_u32_opt(&kvs, &format!("{arch}.attention.value_length"))?;
 
     let attention_layers = resolve_attention_layers(&kvs, &arch, layers)?;
     let recurrent_state_bytes =
@@ -440,6 +452,7 @@ pub fn parse_gguf_meta(path: &Path) -> Result<GgufMeta, GgufError> {
         head_dim,
         training_ctx,
         weights_bytes: file_len,
+        value_length,
         recurrent_state_bytes,
     })
 }

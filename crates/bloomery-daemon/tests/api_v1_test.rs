@@ -142,6 +142,7 @@ fn pager_with_drift_blocked_qwen(
         head_dim: 128,
         training_ctx: 4096,
         weights_bytes: 1000,
+        value_length: None,
         recurrent_state_bytes: 0,
     };
     pager.register_model("qwen", &gguf, meta, None).unwrap();
@@ -457,6 +458,7 @@ fn header_agent_model_mismatch_is_refused_matching_model_passes() {
             head_dim: 128,
             training_ctx: 4096,
             weights_bytes: 1000,
+            value_length: None,
             recurrent_state_bytes: 0,
         };
         p.register_model("other", &gguf, meta, None).unwrap();
@@ -562,6 +564,7 @@ fn pager_with_missing_stats_reply(
         head_dim: 128,
         training_ctx: 4096,
         weights_bytes: 1000,
+        value_length: None,
         recurrent_state_bytes: 0,
     };
     pager.register_model("qwen", &gguf, meta, None).unwrap();

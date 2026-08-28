@@ -374,6 +374,7 @@ fn serve_panicking_task() -> (
         head_dim: 1,
         training_ctx: 65536,
         weights_bytes: 1,
+        value_length: None,
         recurrent_state_bytes: 0,
     };
     pager
@@ -561,6 +562,7 @@ fn serve_codec_gate_fixture(
         head_dim: 32,
         training_ctx: 65536,
         weights_bytes: 1000,
+        value_length: None,
         recurrent_state_bytes: 0,
     };
     pager.register_model("qwen", &gguf, meta, None).unwrap();

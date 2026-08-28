@@ -528,3 +528,67 @@ fn nextn_predict_layers_equal_to_block_count_is_invalid_data() {
         other => panic!("expected InvalidData, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// R9 — MLA, separate K/V widths (gguf-geometry SPEC.md). Measured branch H-b:
+// bloomery reads the stated `{arch}.attention.value_length` verbatim; there
+// is no latent-dim refusal at this branch (that is H-c/c'-only, where the
+// price cannot be read off the stated widths alone).
+// ---------------------------------------------------------------------------
+
+/// A deepseek2-shaped image: `block_count` 27, `head_count_kv` 16,
+/// `key_length` 192, and — when `value_length` is `Some` — a stated V width
+/// distinct from K's. `value_length` is omitted entirely (not written as 0)
+/// when `None`, matching the MTP fixture's "key absent" convention above.
+fn write_deepseek2_like_gguf(path: &std::path::Path, value_length: Option<u32>) {
+    let mut kvs = Vec::new();
+    let mut n = 0u64;
+    kv_string(&mut kvs, "general.architecture", "deepseek2");
+    n += 1;
+    kv_u32(&mut kvs, "deepseek2.block_count", 27);
+    n += 1;
+    kv_u32(&mut kvs, "deepseek2.attention.head_count_kv", 16);
+    n += 1;
+    kv_u32(&mut kvs, "deepseek2.attention.key_length", 192);
+    n += 1;
+    kv_u32(&mut kvs, "deepseek2.context_length", 163840);
+    n += 1;
+    if let Some(v) = value_length {
+        kv_u32(&mut kvs, "deepseek2.attention.value_length", v);
+        n += 1;
+    }
+    write_gguf(path, n, &kvs);
+}
+
+fn r9_fixture(name: &str, value_length: Option<u32>) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join("bloomery-gguf-r9");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("{name}.gguf"));
+    write_deepseek2_like_gguf(&path, value_length);
+    path
+}
+
+/// The stated V width parses straight through onto `GgufMeta.value_length`.
+/// key_length (192) still becomes `head_dim`; value_length (128) is a
+/// distinct field the parser does not fold into head_dim in any way.
+#[test]
+fn deepseek2_shaped_metadata_parses_value_length() {
+    let m = parse_gguf_meta(&r9_fixture("deepseek2", Some(128))).unwrap();
+    assert_eq!(m.arch, "deepseek2");
+    assert_eq!(
+        (m.layers, m.kv_heads, m.head_dim, m.value_length),
+        (27, 16, 192, Some(128))
+    );
+}
+
+/// A pre-R9 file, or any file that simply never states V's width, must parse
+/// with `value_length: None` — never `Some(0)` and never defaulted to
+/// `head_dim`. `None` is what downstream (geometry.rs) reads as "dense
+/// identity, use the pre-R9 formula unchanged."
+#[test]
+fn absent_value_length_parses_as_none() {
+    let m = parse_gguf_meta(&r9_fixture("no_value_length", None)).unwrap();
+    assert_eq!(m.value_length, None);
+    // The rest of the dense-model reading is untouched by the new field.
+    assert_eq!((m.layers, m.kv_heads, m.head_dim), (27, 16, 192));
+}

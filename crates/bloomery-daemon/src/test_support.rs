@@ -53,6 +53,7 @@ fn qwen_like_meta() -> GgufMeta {
         head_dim: 128,
         training_ctx: 4096,
         weights_bytes: 1000,
+        value_length: None,
         recurrent_state_bytes: 0,
     }
 }

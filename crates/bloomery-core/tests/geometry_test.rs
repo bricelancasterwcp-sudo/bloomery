@@ -168,6 +168,7 @@ fn kv_arithmetic_matches_measured_qwen() {
         training_ctx: 32768,
         weights_bytes: 0,
         recurrent_state_bytes: 0,
+        value_length: None,
     };
     assert_eq!(kv_bytes_per_token(&m), 57344); // 56 KiB — robigo's measured row
 }
@@ -184,6 +185,7 @@ fn kv_bytes_per_token_counts_attention_layers_only() {
         training_ctx: 262_144,
         weights_bytes: 11_755_624_288,
         recurrent_state_bytes: 65_863_680,
+        value_length: None,
     };
     assert_eq!(kv_bytes_per_token(&hybrid), 20_480, "2 * 10 * 2 * 256 * 2");
     let dense = GgufMeta {
@@ -194,5 +196,85 @@ fn kv_bytes_per_token_counts_attention_layers_only() {
         kv_bytes_per_token(&dense),
         81_920,
         "the pre-fix over-count, for the record"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// R9 — MLA, separate K/V widths (gguf-geometry SPEC.md). Measured branch H-b:
+// ollama 0.32.13 allocates K at key_length width and V at value_length width
+// independently; assay docs/superpowers/evidence/mla-kv-2026-08-27/.
+// ---------------------------------------------------------------------------
+
+/// deepseek2-shaped: 27 attention_layers * 16 kv_heads * (192 K + 128 V) * 2
+/// f16 bytes = 276,480 B/token — the exact figure Phase 1 measured on ollama
+/// 0.32.13, K and V independently reproduced (165,888 + 110,592).
+#[test]
+fn kv_bytes_per_token_mla_separate_widths_r9() {
+    use bloomery_core::gguf::GgufMeta;
+    let m = GgufMeta {
+        arch: "deepseek2".into(),
+        layers: 27,
+        attention_layers: 27,
+        kv_heads: 16,
+        head_dim: 192,
+        training_ctx: 163_840,
+        weights_bytes: 0,
+        recurrent_state_bytes: 0,
+        value_length: Some(128),
+    };
+    assert_eq!(
+        kv_bytes_per_token(&m),
+        276_480,
+        "R9: 27 * 16 * (192 + 128) * 2"
+    );
+}
+
+/// `value_length == head_dim` stays dense by identity: `head_dim + head_dim
+/// == 2 * head_dim`, so the R9 branch (were it to fire) would reproduce the
+/// pre-R9 figure exactly. This pins that the dense figure is unchanged
+/// whether or not the branch actually fires on an equal-widths meta.
+#[test]
+fn kv_bytes_per_token_equal_widths_stays_dense() {
+    use bloomery_core::gguf::GgufMeta;
+    let m = GgufMeta {
+        arch: "qwen2".into(),
+        layers: 28,
+        attention_layers: 28,
+        kv_heads: 4,
+        head_dim: 128,
+        training_ctx: 32768,
+        weights_bytes: 0,
+        recurrent_state_bytes: 0,
+        value_length: Some(128),
+    };
+    assert_eq!(
+        kv_bytes_per_token(&m),
+        57344,
+        "value_length == head_dim: unchanged from the dense figure"
+    );
+}
+
+/// `value_length: None` (unstated — a pre-R9 file, or a file that simply
+/// never states V's width) reads as the dense identity: the pre-R9 formula,
+/// byte for byte. `kv_arithmetic_matches_measured_qwen` above already pins
+/// this for the same fixture; this test names the requirement explicitly.
+#[test]
+fn kv_bytes_per_token_unstated_value_length_stays_dense() {
+    use bloomery_core::gguf::GgufMeta;
+    let m = GgufMeta {
+        arch: "qwen2".into(),
+        layers: 28,
+        attention_layers: 28,
+        kv_heads: 4,
+        head_dim: 128,
+        training_ctx: 32768,
+        weights_bytes: 0,
+        recurrent_state_bytes: 0,
+        value_length: None,
+    };
+    assert_eq!(
+        kv_bytes_per_token(&m),
+        57344,
+        "value_length: None must not change the pre-R9 dense figure"
     );
 }
