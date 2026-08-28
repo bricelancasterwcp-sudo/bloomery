@@ -100,6 +100,10 @@ and before rendering or stamping, with `[memory] refalsify = true`:
      stranger's prompt. Stamp `failed`. A command that fails on a
      workspace whose cited bytes are fingerprint-identical to the mint is
      real evidence, and the store's honesty story keeps it.
+     **(Amended 2026-08-28: true only for a verification that also
+     passes on the PRE-state — see the domain-of-validity erratum
+     appended to §6. For a patch-class episode this failure is entailed
+     by the exact match itself and refutes a true lesson.)**
    - **Timeout or spawn failure** → inject, stamp `inconclusive`. Not
      clean evidence the lesson is wrong — environmental, not semantic —
      and the organ's own law ("total failure must be indistinguishable
@@ -202,6 +206,41 @@ prove the absence of that file when nothing ran. The honest statement for
 a future battery to weigh alongside tokens and wall time: refalsify-on
 exercises the task's own grants one command early, and is not
 side-effect-free.
+
+**Amended 2026-08-28 — DOMAIN-OF-VALIDITY ERRATUM (probe refutes
+patch-class episodes by construction).** Three shipped clauses entail,
+together, that an exact-repeat retrieval of a patch-class episode is
+contradicted with zero drift anywhere: (1) the exact gate matches cited
+fingerprints taken **pre-first-touch** (organ spec — the defective start
+state); (2) `run_evidence` is the **verifying run**, which the mint bar
+requires to pass only after the landed patches (a post-condition); (3)
+§2.3 turns any clean nonzero exit into `mark_contradicted` + silence.
+Re-running a post-condition on the matched pre-state fails whenever the
+episode's own premise holds — the probe's failure carries no information
+and poisons a true lesson permanently. §2.3's "real evidence" sentence is
+true only for the invariant class: verifications that also passed (or
+would pass) on the pre-state, where a failure genuinely signals uncited
+drift. This arc's own fixtures are all invariant-class (state-independent
+scripts, or staleness planted in uncited files), which is why the suite
+never surfaced it.
+
+Demonstrated live 2026-08-28 through the real seam (throwaway test,
+reverted; run recorded in the session ledger): minting task patches
+`a.py` to `x = 2`, verifying run `sh -c "grep -q 'x = 2' a.py"` passes,
+fixture resets `a.py` to its cited BEFORE bytes, **nothing else changes**
+— probe exits nonzero, stamp `failed`, store row `contradicted`, zero
+injections. `test result: ok` on the entailment's three asserts, 0.08s.
+
+Consequences: `[memory] refalsify = true` must not be enabled for
+patch-class workloads (it ships default-off; no fleet exposure existed).
+The queued "refalsify-on battery slice" over the memory-battery-v1 corpus
+is CANCELLED as designed — its corpus is 100% patch-class with byte-reset
+repeats, so every number was decided by this entailment before any boot
+(the battery would have measured injection 50/50 → 0/50 and a poisoned
+store at one subprocess per retrieval). §6's open question ("whether
+earlier contradiction detection pays for its execution cost") remains
+open and now presupposes a v2 probe whose verdict is informative for both
+episode classes; the v2 design is a separate spec.
 
 ## 7. Error handling
 

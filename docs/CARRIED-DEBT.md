@@ -1527,3 +1527,14 @@ requested context window; still unaddressed, unchanged by this turn.
 **Amended 2026-08-27 (branch `v2-vendor`): vendored set is now v2, not v1.** `crates/bloomery-core/tests/data/gguf_geometry_v2/` holds a byte-exact copy of gguf-geometry `vectors/v2/` at master `7f858c8` (eleven vectors; manifest sha `06da801b…`), and `tests/data/gguf_geometry_v1/` was deleted — upstream's consumer model vendors one current set, and `vectors/v1/` stays frozen there. The paragraphs above are the historical record of the v1 arc and stand as written: the R6 gap *was* found by the v1 vectors, and R6's rule text did not change for v2. Nothing above is closed by the re-vendor. What it adds is `qwen3.8-27b`, the case v1 withheld — 65 blocks, `nextn_predict_layers` 1, `full_attention_interval` 4, full `ssm.*` — which exercises R6 → R3 → R2 and R6 → R4 in one hardware-verified model and passed through `parse_gguf_meta` unchanged on the first run. The two deferred items above are untouched by it: neither the `block_count: 0` unbounded-window path nor the `u64 → u32` truncation is reached by any v2 vector.
 
 **Amended 2026-08-28 (branch `mla-kv-rule`): vendored set is now v3, byte-exact from gguf-geometry master `84f042b` (public CI green, run `33163833319`); v2 dir deleted; deepseek re-pinned per R9 (331776 → 276480, measured).**
+
+**Amended 2026-08-28 (refalsify domain-of-validity erratum):** the
+refalsify probe refutes patch-class episodes by construction — exact
+match = pre-state bytes, `run_evidence` = post-condition, nonzero =
+contradiction — so a drift-free exact repeat poisons its own true lesson
+(demonstrated live through the registry seam, throwaway test, 0.08s; see
+the dated erratum in `2026-08-27-refalsify-on-exact-design.md` §6). The
+queued refalsify-on battery over the v1 corpus is cancelled as designed
+(100% patch-class: every endpoint entailed pre-boot). Open: refalsify-v2
+(class-aware / expectation-matched probe) needs its own spec; the §6 cost
+question transfers to it.
