@@ -1,9 +1,25 @@
-//! Refalsify-on-exact's probe, end to end (refalsify spec
-//! `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md` §2/§3,
-//! and §8's nine-test list). Every test drives the REAL worker pipeline
-//! through `TaskRegistry::spawn_task` — retrieve, PROBE, stamp, inject, run,
+//! Refalsify's probe, end to end (retrieval/probe pipeline shape from
+//! `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md` §2/§3
+//! and §8's nine-test list; verdict semantics from the v2 class-aware design
+//! `docs/superpowers/specs/2026-08-28-refalsify-v2-class-aware-design.md`,
+//! which closes the 2026-08-28 domain-of-validity erratum on the v1 design).
+//! Every test drives the REAL worker pipeline through
+//! `TaskRegistry::spawn_task` — retrieve, PROBE, stamp, inject, run,
 //! mint-or-contradict — against a scripted `FakeSubstrate`, a real store, a
 //! real journal, and a real `exec_run` spawning a real subprocess.
+//!
+//! **The v2 verdict model** (class-aware design §1/§2). Every mintable
+//! episode is patch-class — the mint bar itself requires a landed patch
+//! (`memory/mint.rs::verifying_run`) — so the stored verification is always
+//! a post-condition of the fix, and the state the exact gate just matched is
+//! the world BEFORE it. The probe's two clean outcomes therefore invert from
+//! v1: a clean nonzero exit CONFIRMS the premise ("the defect is present")
+//! and injects, stamped `premise_held`; a clean exit 0 means the premise is
+//! already gone — silent, no injection, no store mutation, stamped
+//! `premise_gone`. **No probe ever contradicts under v2** — only the
+//! pre-existing passive path (`organ_after_run`: a task that received an
+//! injection and then failed to re-verify it) still can, exactly as it could
+//! before refalsify existed.
 //!
 //! Mirrors `memory_task_test.rs`'s fixture (same `fresh_dir`/`build_pager`/
 //! `drive`/`memory_prompts` shapes, the same `a.py` + `python3` patch lens,
@@ -71,12 +87,22 @@ use bloomery_substrate::Reply;
 /// fingerprint every minted episode in this file cites.
 const BEFORE: &[u8] = b"x = 1\n";
 
-/// The closed set of verdict spellings (refalsify spec §4). Every stamp this
-/// file reads is checked against it in [`stamp_for`], so a verdict string
-/// that drifts to a synonym — `"skipped"`, `"pass"`, `"timeout"` — fails the
-/// test that observed it even when that test only asserted on some other
-/// field.
-const VERDICTS: [&str; 4] = ["passed", "failed", "skipped_ungranted", "inconclusive"];
+/// The closed set of verdict spellings reachable after v2 (refalsify v2 spec
+/// §2/§4). `"passed"`/`"failed"` retire from reachable probe verdicts — the
+/// journal still parses rows written by v1 builds, but nothing this file's
+/// own test runs can produce should ever stamp either spelling again, so
+/// they are deliberately absent here rather than merely unused: a stamp
+/// carrying one is the erratum's inversion regressing. Every stamp this file
+/// reads is checked against this set in [`stamp_for`], so a verdict string
+/// that drifts to a synonym — `"skipped"`, `"pass"`, `"timeout"` — or
+/// regresses to a v1 spelling fails the test that observed it even when that
+/// test only asserted on some other field.
+const VERDICTS: [&str; 4] = [
+    "skipped_ungranted",
+    "inconclusive",
+    "premise_held",
+    "premise_gone",
+];
 
 /// The granted `run` prefix every episode in this file is minted under.
 const SH: [&str; 2] = ["sh", "-c"];
@@ -520,7 +546,6 @@ fn canary_exists(sb: &Path) -> bool {
 /// What one probed task did, split into the observation that isolates the
 /// probe and the ordinary terminal result.
 struct Probed {
-    task_id: String,
     result: TaskResult,
     /// The stamp, from the replayed journal.
     stamp: Stamp,
@@ -573,7 +598,6 @@ fn probe(m: &Minted, dir: &Path, spec: TaskSpec, ctx: Arc<MemoryContext>) -> Pro
 
     let result = poll_to_terminal(&m.registry, &task_id);
     Probed {
-        task_id,
         result,
         stamp,
         stored,
@@ -631,28 +655,116 @@ fn flag_off_injects_without_probing_and_stamps_none() {
     assert!(p.contradicted.is_empty(), "{:?}", p.contradicted);
 }
 
-/// **Pass path (refalsify spec §2.3, first verdict).** A probe that exits 0
-/// injects and stamps `passed`, and the record is untouched — no re-append,
-/// no status change (the stamp is the durable evidence).
-///
-/// The canary reappearing is the positive half of the same observation the
-/// flag-off test uses negatively: the probe really ran a real subprocess.
-///
-/// Two further properties of "the record is untouched" are pinned here
-/// rather than in tests of their own, because this is the one path where a
-/// probe both executes and lets the injection through — the only place a
-/// stray write could hide:
-///
-/// - **No `TaskStep`.** The probe is not a model action (spec §2), so the
-///   receiving task journals exactly its own one `done` step and no more. A
-///   probe that ever rendered itself as a step would put an action in the
-///   transcript the model never chose.
-/// - **No re-append.** A pass is recorded by the stamp alone (spec §2.3):
-///   the store file gains no row, not even an identical re-mint, which
-///   [`store_rows`] can see and an `episodes()` count could not.
+/// **The erratum pin (refalsify v2 spec §4).** A drift-free exact repeat of a
+/// patch-class episode: the stored verification checks the CITED file's goal
+/// state, and nothing changes after mint besides the fixture's own reset to
+/// BEFORE — the match condition itself. v1 contradicted this true lesson
+/// (2026-08-28 domain-of-validity erratum, demonstrated live); v2 reads the
+/// failure as the premise holding and injects.
 #[test]
-fn a_passing_probe_injects_and_stamps_passed() {
-    let dir = fresh_dir("passed");
+fn a_drift_free_repeat_probes_premise_held_and_injects() {
+    let dir = fresh_dir("premise-held");
+    let m = mint(&dir, "grep -q 'x = 2' a.py", 1);
+    assert_eq!(std::fs::read(m.sb.join("a.py")).unwrap(), BEFORE);
+
+    let p = probe(
+        &m,
+        &dir,
+        spec_for(GOAL, &m.grant, &m.sb),
+        memory_ctx(&dir, true, true),
+    );
+    assert_eq!(p.result.status, TaskStatus::Done, "{:?}", p.result);
+    assert_eq!(
+        p.stamp,
+        (
+            "injected".to_string(),
+            Some(m.episode_id.clone()),
+            1,
+            Some("premise_held".to_string())
+        ),
+        "the failing probe confirms the matched premise and injects"
+    );
+    assert_eq!(memory_prompts(&dir), 1, "the lesson reached the prompt");
+    assert_eq!(p.stored, untouched(), "no probe ever contradicts under v2");
+}
+
+/// **premise_gone (v2 spec §2/§4).** The stored verification passes on the
+/// matched state: the premise is gone, the lesson is NOT false — silent, no
+/// injection, no store mutation, and the next identical retrieval re-probes
+/// (observed by the canary the command writes: deleted between tasks, it can
+/// only reappear if a probe ran).
+#[test]
+fn a_passing_probe_is_premise_gone_silent_unmutated_and_reprobes() {
+    let dir = fresh_dir("premise-gone");
+    let m = mint(&dir, CANARY_SCRIPT, 2);
+
+    let p = probe(
+        &m,
+        &dir,
+        spec_for(GOAL, &m.grant, &m.sb),
+        memory_ctx(&dir, true, true),
+    );
+    assert_eq!(p.result.status, TaskStatus::Done, "{:?}", p.result);
+    assert!(canary_exists(&m.sb), "the probe really executed");
+    assert_eq!(
+        p.stamp,
+        (
+            "silent".to_string(),
+            None,
+            1,
+            Some("premise_gone".to_string())
+        ),
+        "a satisfied premise is silence, not evidence against the lesson"
+    );
+    assert_eq!(
+        memory_prompts(&dir),
+        0,
+        "byte-identical to a stranger's prompt"
+    );
+    assert_eq!(
+        p.stored,
+        untouched(),
+        "premise_gone never touches the store"
+    );
+
+    // Third identical task: nothing was contradicted, so retrieval matches
+    // again and the probe runs again — no memoized skip.
+    let _ = std::fs::remove_file(m.sb.join(CANARY));
+    let (next_id, next) = drive(
+        &m.registry,
+        &m.pager,
+        &m.agent_id,
+        spec_for(GOAL, &m.grant, &m.sb),
+        &m.journal_path,
+        Some(memory_ctx(&dir, true, true)),
+    );
+    assert_eq!(next.status, TaskStatus::Done, "{next:?}");
+    assert!(canary_exists(&m.sb), "the second probe also ran");
+    let events = replay(&m.journal_path).unwrap();
+    assert_eq!(
+        stamp_for(&events, &next_id),
+        (
+            "silent".to_string(),
+            None,
+            1,
+            Some("premise_gone".to_string())
+        ),
+    );
+    assert_eq!(contradicted_ids(&events).len(), 0, "no accusation, ever");
+}
+
+/// **No re-append, no phantom step (v2 spec §2, "no store mutation").** Two
+/// properties of `premise_gone` the pin above does not observe, kept alive
+/// from the retired `a_passing_probe_injects_and_stamps_passed` because
+/// nothing else in this file pins them: the store FILE gains no row (not
+/// even an identical re-mint, which append-only last-writer-wins semantics
+/// could hide from an `episodes()` count — see [`store_rows`]'s own doc
+/// comment), and the probe itself journals no `TaskStep` — the probed task's
+/// steps are exactly its own one `done`, because the probe is not a model
+/// action and never renders into the transcript.
+#[test]
+fn a_premise_gone_probe_appends_no_store_row_and_journals_no_step() {
+    let dir = fresh_dir("premise-gone-untouched");
     let m = mint(&dir, CANARY_SCRIPT, 1);
 
     // The fixture's own baseline: one minting task, one minted row, its four
@@ -673,31 +785,14 @@ fn a_passing_probe_injects_and_stamps_passed() {
         memory_ctx(&dir, true, true),
     );
     assert_eq!(p.result.status, TaskStatus::Done, "{:?}", p.result);
-    assert_eq!(
-        p.stamp,
-        (
-            "injected".to_string(),
-            Some(m.episode_id.clone()),
-            1,
-            Some("passed".to_string())
-        ),
-    );
-    assert_eq!(
-        memory_prompts(&dir),
-        1,
-        "a passing probe injects — the ONE probed turn's prompt carries the \
-         block, and the minting task (which retrieved from an empty store) \
-         carries none"
-    );
     assert!(
         canary_exists(&m.sb),
         "the probe must have really executed the episode's stored command"
     );
-    assert_eq!(p.stored, untouched(), "a pass changes no record");
     assert_eq!(
         p.store_rows, rows_after_mint,
-        "a passing probe appends nothing to the store (spec §2.3): the stamp \
-         is the durable evidence"
+        "a premise_gone probe appends nothing to the store (v2 spec §2): the \
+         stamp is the durable evidence"
     );
     assert_eq!(
         task_step_verbs(&replay(&m.journal_path).unwrap()),
@@ -705,22 +800,24 @@ fn a_passing_probe_injects_and_stamps_passed() {
         "the probed task journals exactly one TaskStep — its own `done` — and \
          the probe, which ran a real subprocess, journals none"
     );
-    assert!(p.contradicted.is_empty(), "{:?}", p.contradicted);
 }
 
-/// **Fail path (refalsify spec §2.3, second verdict).** A probe that exits
-/// cleanly nonzero contradicts the episode citing THIS task, silences the
-/// injection, and stamps `failed`; a later identical task then retrieves
-/// silence, because a contradicted episode is never injected again.
-///
-/// The staleness is real and invisible to the fingerprint gate: `flag.txt`
-/// holds `0` when the episode is minted and `1` when it is retrieved, and
-/// the model never reads `flag.txt`, so it is not in `cited_files` and the
-/// exact gate is honestly satisfied. That is precisely the class of episode
-/// this slice exists to catch.
+/// **An uncited-drift failure reads premise_held (v2 spec §1's named
+/// limitation).** `flag.txt` holds `0` when the episode is minted and `1`
+/// when it is retrieved; the model never reads `flag.txt`, so it is not in
+/// `cited_files` and the exact gate is honestly satisfied. Under v1 this was
+/// the slice's whole point — early detection of stale-but-uncited state.
+/// Under v2 a verification that is state-independent of what the patches
+/// actually touched is indistinguishable from a genuinely held premise
+/// without recorded pre-state evidence (out of scope, not foreclosed): the
+/// stored command fails, so the probe reads `premise_held` and injects. The
+/// injection is noise, not damage — if the lesson really is stale, the
+/// pre-existing PASSIVE path (`organ_after_run`: this probed task received
+/// the injection and then landed no run of its own to re-verify it) owns
+/// the aftermath, exactly as it would have before refalsify existed.
 #[test]
-fn a_failing_probe_contradicts_silences_and_stamps_failed() {
-    let dir = fresh_dir("failed");
+fn an_uncited_drift_failure_reads_premise_held_and_injects() {
+    let dir = fresh_dir("uncited-drift");
     let m = {
         // `flag.txt` must hold "0" before the minting run, or the mint bar
         // (exit 0 after the last landed patch) is never cleared.
@@ -740,31 +837,26 @@ fn a_failing_probe_contradicts_silences_and_stamps_failed() {
         spec_for(GOAL, &m.grant, &m.sb),
         memory_ctx(&dir, true, true),
     );
-    let failed_id = p.task_id.clone();
     assert_eq!(p.result.status, TaskStatus::Done, "{:?}", p.result);
     assert_eq!(
         p.stamp,
-        ("silent".to_string(), None, 1, Some("failed".to_string())),
-        "a refuted episode is not injected — the stamp says silent, and why"
+        (
+            "injected".to_string(),
+            Some(m.episode_id.clone()),
+            1,
+            Some("premise_held".to_string())
+        ),
+        "an uncited-drift failure is indistinguishable from a held premise \
+         under v2 — it injects"
     );
-    assert_eq!(
-        memory_prompts(&dir),
-        0,
-        "the refuted task's prompt must be byte-identical to a stranger's"
-    );
-    assert_eq!(
-        p.contradicted,
-        vec![(failed_id.clone(), m.episode_id.clone())],
-        "the probe's accusation cites the task that ran it"
-    );
-    assert_eq!(
-        p.stored,
-        ("contradicted".to_string(), Some(failed_id.clone())),
-    );
+    assert_eq!(memory_prompts(&dir), 1, "the lesson reached the prompt");
+    assert_eq!(p.stored, untouched(), "no probe ever contradicts under v2");
 
-    // A third identical task: the bytes never drifted, so only the status
-    // gate can silence it — and it stamps no verdict, because nothing was
-    // retrieved to probe.
+    // A third identical task: the bytes never drifted again (still `1`), and
+    // the fingerprint gate never covered `flag.txt` in the first place, so
+    // whether retrieval still matches this third time depends only on
+    // whether anything contradicted the episode in between — and the
+    // PASSIVE path (not the probe) is exactly the mechanism that can.
     assert_eq!(std::fs::read(m.sb.join("a.py")).unwrap(), BEFORE);
     let (next_id, next) = drive(
         &m.registry,
@@ -779,12 +871,15 @@ fn a_failing_probe_contradicts_silences_and_stamps_failed() {
     assert_eq!(
         stamp_for(&events, &next_id),
         ("silent".to_string(), None, 1, None),
-        "a contradicted episode is never injected again, and never re-probed"
+        "the passive path contradicted the injected-but-unverified probe \
+         task, so this repeat retrieves silence — v2 never memoizes a \
+         probe's own verdict, but it never disarms the pre-existing passive \
+         path either"
     );
     assert_eq!(
         contradicted_ids(&events).len(),
         1,
-        "the accusation is made once, not once per repeat: {events:?}"
+        "one accusation — the passive path's, not the probe's: {events:?}"
     );
     assert_eq!(mint_ids(&events).len(), 1, "no follow-up task minted");
 }

@@ -83,6 +83,21 @@
 //! does is still read-outcomes-only. The probe never journals a `TaskStep`
 //! and never renders into a prompt, so it is invisible to the transcript;
 //! and with the flag off (the default) it does not exist at all.
+//!
+//! **What the probe's two clean outcomes MEAN was wrong, and is now v2**
+//! (refalsify v2 class-aware design
+//! `docs/superpowers/specs/2026-08-28-refalsify-v2-class-aware-design.md`
+//! §1/§2, closing the 2026-08-28 domain-of-validity erratum). Every
+//! mintable episode is patch-class — `memory/mint.rs::verifying_run`
+//! requires a landed patch, so a patchless task never mints — which means
+//! the stored verification is always a post-condition of the fix, and the
+//! state the exact gate just matched is the world BEFORE it. The two clean
+//! outcomes therefore invert: a clean nonzero exit CONFIRMS the premise
+//! ("the defect is present") and injects, stamped `premise_held`; a clean
+//! exit 0 means the premise is already gone — silent, no injection, no
+//! store mutation, stamped `premise_gone`. **No probe ever contradicts
+//! under v2**; only the pre-existing passive path in [`organ_after_run`]
+//! still can, exactly as it could before refalsify existed.
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -332,16 +347,21 @@ impl OrganDecision {
 /// spec `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md`
 /// §2.3).
 ///
-/// **Only a genuine nonzero exit contradicts.** A run that *completed*
-/// carries `failed: false` and `exec_run`'s pinned success-arm outcome
-/// `"ran {program} exit {code}"` — the same load-bearing constant
+/// **Only a genuine nonzero exit can hold the premise.** A run that
+/// *completed* carries `failed: false` and `exec_run`'s pinned success-arm
+/// outcome `"ran {program} exit {code}"` — the same load-bearing constant
 /// `memory::mint::verifying_run` reads the mint bar out of. A `code` of `-1`
 /// is that arm's "no exit code" sentinel for a child killed by a signal
 /// (`status.code()` was `None`), not a real exit, so it can never be read as
-/// evidence the lesson is wrong. Every `failed: true` arm — timeout, spawn
+/// evidence the premise holds. Every `failed: true` arm — timeout, spawn
 /// failure, wait failure — is environmental rather than semantic and
 /// classifies `inconclusive`, so the probe's own infrastructure can never
-/// cost a task its injection (spec §2.3; organ design §7).
+/// cost a task its injection (spec §2.3; organ design §7). This function
+/// stays the raw exit classifier only — its caller ([`organ_before_run`])
+/// remaps the two clean spellings (`"passed"`/`"failed"`) into the v2
+/// premise verdicts (refalsify v2 class-aware design
+/// `docs/superpowers/specs/2026-08-28-refalsify-v2-class-aware-design.md`
+/// §2).
 ///
 /// Grant refusals never reach here: [`organ_before_run`]'s pre-check runs
 /// BEFORE anything spawns, precisely because a refusal `Observation` is
@@ -368,22 +388,28 @@ fn classify_probe(obs: &Observation) -> &'static str {
 
 /// Steps 1-3 of the pipeline (design §3/§4), plus refalsification's probe
 /// (refalsify spec
-/// `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md` §2):
-/// retrieve, then decide whether to inject, silence, or stay off.
+/// `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md` §2 for
+/// the retrieve/probe mechanism; v2 class-aware design
+/// `docs/superpowers/specs/2026-08-28-refalsify-v2-class-aware-design.md`
+/// §2 for what the probe's outcome MEANS): retrieve, then decide whether to
+/// inject or stay silent — the probe can no longer take the third option,
+/// contradiction, that v1 gave it.
 ///
 /// Rendering happens here, before the caller writes the stamp, because the
 /// oversize rule can turn an otherwise-injected episode into a silent one —
 /// and a stamp claiming an injection the prompt never carried would be the
 /// one lie that row exists to prevent.
 ///
-/// `agent_id` is needed only by the probe's failing arm, which journals the
-/// ordinary `Event::MemoryContradicted` row — the same row and the same
-/// accusation shape passive contradiction uses in [`organ_after_run`].
+/// No `agent_id` parameter: under v2 (spec 2026-08-28 §2) the probe never
+/// contradicts, so nothing here journals a `MemoryContradicted` row — the
+/// only reason an earlier revision needed the agent identity at all.
+/// `organ_after_run`'s passive path is the only remaining caller of
+/// `MemoryStore::mark_contradicted`, and it already carries its own
+/// `agent_id` through `OrganOutcome`.
 fn organ_before_run(
     organ: Option<(&Mutex<MemoryStore>, usize, bool)>,
     spec: &TaskSpec,
     task_id: &str,
-    agent_id: &str,
     journal: &mut Journal,
 ) -> OrganDecision {
     // Step 1: retrieve, holding the store lock only for the read itself —
@@ -487,45 +513,23 @@ fn organ_before_run(
         None
     };
 
-    if verdict == Some("failed") {
-        // The same accusation mechanism passive contradiction uses (spec
-        // §2.3): mark the store, journal the ordinary `MemoryContradicted`
-        // row citing THIS task, and hand the task silence — byte-identical
-        // to a stranger's prompt.
-        //
-        // The three arms mirror `organ_after_run`'s exactly, including
-        // R-PF-2's `Ok(false)`: an operator's `DELETE /memory/{id}` can land
-        // between this task's retrieval and its probe, and journaling a
-        // contradiction for a row that never changed would fabricate store
-        // history. The lock is taken for the mark alone and released before
-        // the journal write.
-        //
-        // Whatever any of that reports, the silence stands (spec §7): the
-        // task must not receive guidance the probe just refuted, even if
-        // recording the refutation failed.
-        let marked = {
-            let mut store = lock_store(store, journal);
-            store.mark_contradicted(&episode.episode_id, task_id)
-        };
-        match marked {
-            Ok(true) => record(
-                journal,
-                &Event::MemoryContradicted {
-                    id: agent_id.to_string(),
-                    task_id: task_id.to_string(),
-                    episode_id: episode.episode_id.clone(),
-                },
-            ),
-            Ok(false) => {}
-            Err(e) => degrade(
-                journal,
-                format!(
-                    "memory organ: could not contradict episode {} refuted by task {task_id}'s \
-                     refalsification probe: {e}",
-                    episode.episode_id
-                ),
-            ),
-        }
+    // Refalsify v2 (spec 2026-08-28 §2): every mintable episode is
+    // patch-class — memory/mint.rs::verifying_run requires a landed
+    // patch — so the stored verification is a post-condition of the
+    // fix and the matched state is the world BEFORE it. The clean
+    // outcomes therefore invert: a failure CONFIRMS the premise
+    // ("the defect is present") and injects; a pass means the world
+    // no longer needs the lesson — silent, and never an accusation.
+    let verdict = match verdict {
+        Some("failed") => Some("premise_held"),
+        Some("passed") => Some("premise_gone"),
+        other => other,
+    };
+
+    if verdict == Some("premise_gone") {
+        // v2 spec §2: the lesson is not false — no injection, no store
+        // mutation, nothing journaled beyond the stamp; the next identical
+        // retrieval re-probes.
         return OrganDecision {
             mode: "silent",
             candidates_checked: retrieval.candidates_checked,
@@ -815,7 +819,7 @@ impl TaskRegistry {
             let decision = contained(
                 &mut journal,
                 &format!("retrieval for task {worker_task_id}"),
-                |journal| organ_before_run(organ, &spec, &worker_task_id, &agent_id, journal),
+                |journal| organ_before_run(organ, &spec, &worker_task_id, journal),
             )
             .unwrap_or_else(OrganDecision::off);
             // Step 3: injection is the caller's write, from a decision that
