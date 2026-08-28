@@ -374,21 +374,27 @@ pub enum Event {
         mode: String,
         episode_id: Option<String>,
         candidates_checked: u32,
-        /// Refalsify-on-exact's verdict for this retrieval (refalsify spec
+        /// This retrieval's premise verdict (refalsify v2 class-aware design
+        /// `docs/superpowers/specs/2026-08-28-refalsify-v2-class-aware-design.md`
+        /// §2): `None` when the flag is off, memory is off, or nothing was
+        /// retrieved; `Some("skipped_ungranted" | "inconclusive" |
+        /// "premise_held" | "premise_gone")` when a hit was probed or
+        /// skipped. Additive — absent-key rows replay as `None`, which is
+        /// the truth of every pre-refalsify stamp. This is the spelling
+        /// authority `task::registry::OrganDecision::refalsify` (bloomery-daemon)
+        /// commits to at every emit site.
+        ///
+        /// `"passed"` and `"failed"` are retired: no v2 writer emits either
+        /// spelling, but both still replay and parse, since v1-written
+        /// journals carry them. A `"failed"` stamp accompanied by an
+        /// ordinary [`Event::MemoryContradicted`] citing the same task is a
+        /// v1-written-journal fact only (v1 refalsify spec
         /// `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md`
-        /// §4): `None` when the flag is off, memory is off, or nothing was
-        /// retrieved; `Some("passed" | "failed" | "skipped_ungranted" |
-        /// "inconclusive")` when a hit was probed or skipped. Additive —
-        /// absent-key rows replay as `None`, which is the truth of every
-        /// pre-refalsify stamp. A `"failed"` stamp is always accompanied by
-        /// an ordinary [`Event::MemoryContradicted`] citing the same task,
-        /// with exactly one exception (spec §4, amended): an operator's
-        /// `DELETE /memory/{id}` landing between the retrieval and the mark
-        /// leaves `mark_contradicted` nothing to mark (`Ok(false)`), so the
-        /// `failed` stamp stands alone rather than journaling a status
-        /// transition that never happened. The task runs memory-silent
-        /// either way — the probe's evidence is not undone by the episode's
-        /// disappearance.
+        /// §4, amended) — under v2 the probe itself never contradicts: a
+        /// clean nonzero exit is `premise_held` and injects, a clean exit 0
+        /// is `premise_gone` and stays silent, and neither mutates the
+        /// store. Only the passive path (design §5, `organ_after_run`)
+        /// still writes `Event::MemoryContradicted`.
         #[serde(default)]
         refalsify: Option<String>,
     },

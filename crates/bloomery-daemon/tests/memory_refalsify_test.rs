@@ -316,9 +316,11 @@ type Stamp = (String, Option<String>, u32, Option<String>);
 /// journal round trip is one: the `refalsify` verdict has to survive the
 /// worker's emit site and serde, so an emit site that dropped the field
 /// (or a `None` hardcoded there) fails these tests rather than passing on
-/// in-process state. The closed set is the other: refalsify spec §4 fixes
-/// the four spellings, and a verdict outside them fails whichever test
-/// observed it — even a test asserting on some other field entirely.
+/// in-process state. The closed set is the other: refalsify v2 spec
+/// (`docs/superpowers/specs/2026-08-28-refalsify-v2-class-aware-design.md`)
+/// §2 fixes the four reachable spellings, and a verdict outside them fails
+/// whichever test observed it — even a test asserting on some other field
+/// entirely.
 ///
 /// Exactly one row per task, same as `memory_task_test.rs`: spec §4 stamps
 /// every spawned task once, so a duplicate is as much a bug as a miss.
@@ -352,7 +354,7 @@ fn stamp_for(events: &[Event], task_id: &str) -> Stamp {
         assert!(
             VERDICTS.contains(&verdict.as_str()),
             "stamp verdict {verdict:?} for {task_id} is outside the closed set {VERDICTS:?} \
-             (refalsify spec §4)"
+             (refalsify v2 spec §2)"
         );
     }
     stamp
@@ -1004,7 +1006,9 @@ fn a_demoted_task_skips_even_with_a_covering_grant() {
 /// that exceeds the task's own `run_timeout_secs` is environmental, not
 /// semantic: it injects and stamps `inconclusive`, and the episode STAYS
 /// verified. The organ's law forbids the probe's infrastructure costing a
-/// task its injection, and only a genuine nonzero exit ever contradicts.
+/// task its injection, and under v2 no probe outcome ever contradicts
+/// (design §5, `organ_after_run`): a genuine clean nonzero exit means
+/// `premise_held`, not a contradiction.
 ///
 /// `d.txt` is the uncited-file trick again: `0` at mint (an instant exit 0
 /// that clears the mint bar), `10` at retrieval, against a second task whose
@@ -1050,8 +1054,10 @@ fn a_timed_out_probe_is_inconclusive_and_injects() {
 /// **Inconclusive by signal death (refalsify spec §2.3).** `exec_run`
 /// reports a signal-killed child as `failed: false` with the pinned outcome
 /// `"ran sh exit -1"` — `-1` being its "no exit code" sentinel, not a real
-/// exit. Reading that as a clean nonzero exit would contradict a perfectly
-/// good episode over a `SIGKILL`, so it must classify `inconclusive`.
+/// exit. Reading that as a clean nonzero exit would wrongly stamp
+/// `premise_held` — claiming confirming evidence over a `SIGKILL` that
+/// isn't real — instead of the honest `inconclusive`, so it must classify
+/// `inconclusive`.
 ///
 /// Driven through the full fixture rather than by calling the classifier
 /// directly: the classifier is private to `task::registry`, and the property
@@ -1080,7 +1086,7 @@ fn classify_probe_calls_signal_death_inconclusive() {
             1,
             Some("inconclusive".to_string())
         ),
-        "a signal death is not a nonzero exit and must never contradict"
+        "a signal death is not a nonzero exit and must never be stamped premise_held"
     );
     assert_eq!(memory_prompts(&dir), 1);
     assert_eq!(

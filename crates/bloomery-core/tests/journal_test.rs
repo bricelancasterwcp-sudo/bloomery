@@ -611,6 +611,9 @@ fn a_pre_refalsify_memory_stamp_replays_with_refalsify_none() {
 /// New-writer round trip: a probed retrieval's verdict (refalsify spec §4)
 /// survives serialization and replay under its own key, and an un-probed
 /// stamp still writes `null` rather than inventing a verdict.
+///
+/// `"failed"` is retired under refalsify v2 — no current writer produces
+/// it — so this pins parseability of a v1-era row, not reachability.
 #[test]
 fn a_memory_stamp_round_trips_its_refalsify_verdict() {
     let probed = Event::MemoryStamp {

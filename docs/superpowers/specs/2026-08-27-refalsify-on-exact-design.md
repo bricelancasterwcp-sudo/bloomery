@@ -246,10 +246,14 @@ earlier contradiction detection pays for its execution cost") remains
 open and now presupposes a v2 probe whose verdict is informative for both
 episode classes; the v2 design is a separate spec.
 
-**Superseded 2026-08-28 by refalsify v2**
-(`docs/superpowers/specs/2026-08-28-refalsify-v2-class-aware-design.md`,
-commit `7a930d4`): the clean-outcome verdicts invert to
-premise_held/premise_gone and no probe contradicts.
+**Closed 2026-08-28 by refalsify v2**
+(`docs/superpowers/specs/2026-08-28-refalsify-v2-class-aware-design.md` §3,
+commit `7a930d4`): this erratum is v2's own stated justification — not
+superseded, since the diagnosis above (a drift-free exact repeat poisons
+its own true lesson) remains true. What closes it is that no probe
+contradicts under v2: the clean-outcome verdicts invert to
+premise_held/premise_gone, so the false contradiction this erratum
+describes can no longer happen.
 
 ## 7. Error handling
 

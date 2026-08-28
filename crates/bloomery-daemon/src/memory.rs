@@ -59,12 +59,17 @@ pub struct MemoryContext {
     /// The `[memory] max_episodes` retention cap on distinct ids (spec §6),
     /// passed to [`store::MemoryStore::mint`] at every mint.
     pub max_episodes: usize,
-    /// The `[memory] refalsify` opt-in (refalsify-on-exact spec
-    /// `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md` —
-    /// activation §5, mechanism §2; default `false`): whether the worker
-    /// probes a retrieved episode's stored run command under the incoming
-    /// task's grant, `cwd` and `ExecBounds` before injecting, and
-    /// contradicts the episode on a clean nonzero exit.
+    /// The `[memory] refalsify` opt-in (refalsify v2 class-aware design
+    /// `docs/superpowers/specs/2026-08-28-refalsify-v2-class-aware-design.md`
+    /// §2; activation carried over from the v1 spec
+    /// `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md` §5;
+    /// default `false`): whether the worker probes a retrieved episode's
+    /// stored run command under the incoming task's grant, `cwd` and
+    /// `ExecBounds` before injecting. The probe informs injection, it never
+    /// contradicts: a clean nonzero exit confirms the premise
+    /// (`premise_held`) and injects, a clean exit 0 means the premise is
+    /// gone (`premise_gone`) and the task runs silent — either way the
+    /// store is untouched.
     /// Meaningful only for an [`operational`](Self::operational) organ — the
     /// flag never turns an organ on, it only changes what an already-on
     /// organ does before it speaks.
