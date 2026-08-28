@@ -380,7 +380,8 @@ fn partial_ssm_keys_yield_zero_recurrent_state_bytes() {
 }
 
 // ---------------------------------------------------------------------------
-// R6 — serving block count (gguf-geometry v1 SPEC.md)
+// R6 — serving block count (gguf-geometry SPEC.md; the rule text is unchanged
+// across vector sets v1 and v2, and bloomery vendors v2)
 //
 // `serving_block_count = block_count - {arch}.nextn_predict_layers` when the
 // MTP key is present and nonzero. Origin: the REAP-48 prune left

@@ -1,10 +1,16 @@
-//! gguf-geometry contract (vector set v1) conformance for bloomery-core.
+//! gguf-geometry contract (vector set v2) conformance for bloomery-core.
 //!
-//! The vectors under `tests/data/gguf_geometry_v1/` are a byte-exact vendored
-//! copy of `gguf-geometry/vectors/v1/`. That repo holds no implementation: its
-//! expected values come from committed assay/bloomery evidence, never from
-//! code. The rules are R1-R8 in its `SPEC.md`; each assertion below names the
-//! rule it proves.
+//! The vectors under `tests/data/gguf_geometry_v2/` are a byte-exact vendored
+//! copy of `gguf-geometry/vectors/v2/`, vendored 2026-08-27 from gguf-geometry
+//! master `7f858c8` (verified with `cmp` file-by-file and by sha256 against the
+//! published `MANIFEST.json`). That repo holds no implementation: its expected
+//! values come from committed assay/bloomery evidence, never from code. The
+//! rules are R1-R8 in its `SPEC.md`; each assertion below names the rule it
+//! proves.
+//!
+//! Per that repo's consumer model, exactly one set is vendored at a time: v2
+//! replaced the previously vendored v1 here, and `tests/data/gguf_geometry_v1/`
+//! was deleted rather than kept alongside. `vectors/v1/` stays frozen upstream.
 //!
 //! # Honest scope
 //!
@@ -28,17 +34,45 @@
 //! R5 (expert fields) has no counterpart in `GgufMeta` at all — bloomery-core
 //! does not model MoE expert counts. See `r5_bloomery_core_models_no_expert_fields`.
 //!
-//! # Divergence found and resolved (2026-08-27)
+//! # Divergence found and resolved (2026-08-27, against set v1)
 //!
 //! On first run 9 of the 10 v1 vectors conformed. The tenth,
 //! `qwen3.6-35b-a3b-reap48-mtp-trap`, was RED: bloomery-core did not implement
 //! **R6** — `parse_gguf_meta` read `{arch}.block_count` raw and never
 //! subtracted `{arch}.nextn_predict_layers`, over-charging one recurrent layer
 //! (2,195,456 B per context) on a trapped GGUF. `gguf.rs::resolve_serving_block_count`
-//! implements R6 as of this branch and all 10 vectors now conform; see
+//! implements R6 as of that arc and all 10 vectors conformed; see
 //! `qwen3_6_35b_a3b_reap48_mtp_trap` and
 //! `qwen3_6_35b_a3b_reap48_mtp_trap_r6_conformance_is_pinned`, plus the unit
 //! tests for the key's present/zero/absent/nonsense cases in `gguf_test.rs`.
+//! R6's rule text is unchanged in v2, and that vector's bytes carried forward
+//! into v2 identically, so those two tests are the same checks on the same
+//! inputs.
+//!
+//! # What v2 adds (2026-08-27)
+//!
+//! Eleven vectors instead of ten. Eight carry forward byte-for-byte (identical
+//! shas across the two sets); two carry metadata-only additions that move no
+//! `expected` value — gemma-4 gains its sliding-window / `*_swa` family (still
+//! the R8 refusal case, since `attention.head_count_kv` is still absent) and
+//! deepseek-coder-v2 gains `attention.value_length` 128 against its
+//! `key_length` 192.
+//!
+//! That deepseek addition is upstream's recorded-but-unclosed R2/MLA gap
+//! (SPEC.md, "Known open gap"): R2 is specified for `key_length` alone, and
+//! bloomery derives `head_dim` from `key_length` only (R1), so the extra key is
+//! inert here and the vector's hardware-verified 331,776 B/token still passes.
+//! An implementation that ever models K and V widths separately would fail that
+//! vector — deliberately, until a rule and a measurement close the gap.
+//!
+//! The eleventh vector is new: `qwen3.8-27b` (`qwen35`, 65 blocks,
+//! `full_attention_interval` 4, `nextn_predict_layers` 1, `ssm.*`), the case v1
+//! withheld rather than pin at assay's then-published 266,240 B/token — a
+//! 4.0625x attention over-charge. It exercises R3, R4 and R6 together in one
+//! model, which is exactly the combination `resolve_serving_block_count` ->
+//! `resolve_attention_layers` -> `resolve_recurrent_state_bytes` computes, and
+//! it conformed through bloomery's own reader on the first run of this
+//! re-vendor with no production change.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -52,13 +86,17 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 /// sha256 of the vendored `MANIFEST.json`, computed at vendoring time
-/// (2026-08-27) from `gguf-geometry/vectors/v1/MANIFEST.json`. The manifest in
-/// turn pins every vector file, so this single constant pins the whole set: a
-/// vendored copy that has drifted from the published contract cannot be read
-/// by any test in this file.
-const MANIFEST_SHA256: &str = "44f8af208d4bd79055cdaa9e0b9c4e9fa81f305d5f81ab6e87457de6c3fa470a";
+/// (2026-08-27) from `gguf-geometry/vectors/v2/MANIFEST.json` at master
+/// `7f858c8`. The manifest in turn pins every vector file, so this single
+/// constant pins the whole set: a vendored copy that has drifted from the
+/// published contract cannot be read by any test in this file.
+///
+/// Set history: v1's manifest hashed
+/// `44f8af208d4bd79055cdaa9e0b9c4e9fa81f305d5f81ab6e87457de6c3fa470a`. A new
+/// set is a visible diff here, which is the point of the pin.
+const MANIFEST_SHA256: &str = "06da801b5dc57fedbfd42555c377c1cd3b6b8fb3c549cd2d367396447fc15116";
 
-const SET_VERSION: &str = "v1";
+const SET_VERSION: &str = "v2";
 
 /// Every vector id in the set, each with a `#[test]` of its own below. The
 /// `all_vectors_have_a_named_test` guard fails if the set grows a vector this
@@ -74,6 +112,7 @@ const VECTOR_IDS: &[&str] = &[
     "qwen2.5-coder-7b-instruct-q8_0",
     "qwen3.6-35b-a3b-reap48-mtp-trap",
     "qwen3.6-35b-a3b-reap48-ours-q4km",
+    "qwen3.8-27b",
 ];
 
 // ---------------------------------------------------------------------------
@@ -81,7 +120,7 @@ const VECTOR_IDS: &[&str] = &[
 // ---------------------------------------------------------------------------
 
 fn data_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/gguf_geometry_v1")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/gguf_geometry_v2")
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -106,7 +145,7 @@ fn manifest() -> Value {
         sha256_hex(&bytes),
         MANIFEST_SHA256,
         "vendored MANIFEST.json does not match the pinned sha256 — the vendored \
-         copy has drifted from gguf-geometry vectors/v1 (re-vendor byte-exact, \
+         copy has drifted from gguf-geometry vectors/v2 (re-vendor byte-exact, \
          do not re-pin)"
     );
     serde_json::from_slice(&bytes).expect("MANIFEST.json is valid JSON")
@@ -185,7 +224,7 @@ fn write_vector_gguf(vector: &Value) -> PathBuf {
     // synthesise the same vector, so the file name carries a per-call serial:
     // a shared path would let one thread truncate the file another is reading.
     static SERIAL: AtomicU32 = AtomicU32::new(0);
-    let dir = std::env::temp_dir().join("bloomery-geometry-conformance-v1");
+    let dir = std::env::temp_dir().join("bloomery-geometry-conformance-v2");
     fs::create_dir_all(&dir).expect("create temp dir");
     let path = dir.join(format!(
         "{}.{}.gguf",
@@ -337,9 +376,13 @@ fn bound_by_for(limited_by: &str) -> BoundBy {
 /// | `kv_bytes_per_token`   | `kv_per_token`      |
 /// | `user_cap`             | `user_cap`          |
 ///
-/// `recurrent_state_bytes` folds into bloomery's `ctx_overhead_bytes`; the v1
-/// window scenarios all sit on a dense model and state no recurrent term, so
-/// it is 0 here — a stated term, not a dropped one. `measured_ceiling` is a
+/// `recurrent_state_bytes` folds into bloomery's `ctx_overhead_bytes`; in v2 as
+/// in v1 the only window scenarios in the set are qwen2.5-coder-7b's three,
+/// which sit on a dense model and state no recurrent term, so it is 0 here — a
+/// stated term, not a dropped one. (`qwen3.8-27b` states no windows at all:
+/// upstream records that its erratum's conforming window figures stay
+/// condition-parameterized under a box state no later run can re-occupy.)
+/// `measured_ceiling` is a
 /// bloomery-only extra term, unmeasured (`None`) in every scenario, so per R7
 /// it drops out rather than being guessed.
 fn check_windows(id: &str, vector: &Value, meta: &GgufMeta) {
@@ -409,7 +452,7 @@ fn vendored_vector_set_matches_its_pinned_manifest() {
         assert_eq!(
             &sha256_hex(&bytes),
             sha.as_str().expect("sha is a string"),
-            "vendored {name} differs from the published v1 bytes"
+            "vendored {name} differs from the published v2 bytes"
         );
     }
 
@@ -443,7 +486,7 @@ fn all_vectors_have_a_named_test() {
     let covered: BTreeSet<String> = VECTOR_IDS.iter().map(|s| s.to_string()).collect();
     assert_eq!(
         listed, covered,
-        "every v1 vector needs its own #[test] in this file"
+        "every v2 vector needs its own #[test] in this file"
     );
 }
 
@@ -585,6 +628,72 @@ fn qwen3_6_35b_a3b_reap48_ours_q4km() {
 #[test]
 fn qwen3_6_35b_a3b_reap48_mtp_trap() {
     check_vector("qwen3.6-35b-a3b-reap48-mtp-trap");
+}
+
+/// New in v2, and the reason the re-vendor is worth doing: one model that
+/// exercises R3, R4 and R6 *together*, hardware-verified. `qwen35`,
+/// `block_count` 65 with `nextn_predict_layers` 1 (R6 -> 64 serving),
+/// `full_attention_interval` 4 (R3 -> 16 attention layers of those 64), and a
+/// full `ssm.*` block over the remaining 48 recurrent layers (R4 ->
+/// 156,893,184 B/ctx). The vector's banned answers are assay's own published
+/// figures, not hypotheticals: 266,240 B/token is all 65 raw blocks charged as
+/// attention layers (a 4.0625x over-charge, upstream erratum E2), and 65 is
+/// that raw block count.
+///
+/// This is the case v1 deliberately withheld rather than pin at the
+/// over-charged value; it entered v2 on the live conforming run that closed the
+/// erratum. `check_vector` drives it through `parse_gguf_meta` like every other
+/// vector, so all four terms are bloomery's own derivations.
+#[test]
+fn qwen3_8_27b() {
+    check_vector("qwen3.8-27b");
+}
+
+/// The v2 headline conformance, pinned as literals rather than read from the
+/// vector's `expected` block — the same belt-and-braces shape as
+/// `qwen3_6_35b_a3b_reap48_mtp_trap_r6_conformance_is_pinned`, so a regression
+/// in `parse_gguf_meta` is caught here even if the vendored vector ever moves.
+/// The chain is R6 -> R3 -> R2 and R6 -> R4: every number below is downstream
+/// of the serving-block subtraction, which is why the raw-block answer is
+/// banned at both ends.
+#[test]
+fn qwen3_8_27b_r3_r4_r6_conformance_is_pinned() {
+    let vector = load_vector("qwen3.8-27b");
+    let meta = parse_vector(&vector);
+
+    // R6: 65 raw blocks, one of them an MTP layer that never serves a token.
+    assert_eq!(
+        u64::from(meta.layers),
+        64,
+        "R6: the MTP layer is not a serving layer (65 - 1)"
+    );
+    assert_ne!(
+        u64::from(meta.layers),
+        banned_u64(&vector, "serving_block_count")[0],
+        "the raw block count stays banned"
+    );
+
+    // R3: 64 serving / interval 4, never the 65 raw blocks.
+    assert_eq!(
+        meta.attention_layers, 16,
+        "R3: serving 64 / interval 4 == 16"
+    );
+
+    // R1/R2: key_length 256 authoritative (embedding 5120 / 24 heads would be
+    // 213), 2 * 16 * 4 * 256 * 2.
+    assert_eq!(meta.head_dim, 256, "R1: key_length is authoritative");
+    assert_eq!(kv_bytes_per_token(&meta), 65_536, "R2 on the v2 hybrid");
+    assert_ne!(
+        kv_bytes_per_token(&meta),
+        266_240,
+        "the all-65-blocks answer (4.0625x over-charge) stays banned"
+    );
+
+    // R4: the 48 non-attention layers each carry a recurrent state.
+    assert_eq!(
+        meta.recurrent_state_bytes, 156_893_184,
+        "R4: 48 recurrent layers charged, not zero and not all 64"
+    );
 }
 
 /// The inverse of the tripwire this test used to be. Until R6 landed it pinned
