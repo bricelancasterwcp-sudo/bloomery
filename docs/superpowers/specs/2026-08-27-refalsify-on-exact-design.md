@@ -154,6 +154,16 @@ the organ spec promises. No new counters: `/status`'s `contradicted`
 already moves when a refalsification fails, and `GET /memory` already
 shows the status flip.
 
+**Amended 2026-08-27 (post-review):** the "always accompanied" rule has
+exactly one exception. An operator's `DELETE /memory/{id}` can land
+between this task's retrieval and the mark, leaving `mark_contradicted`
+nothing to mark (`Ok(false)`): the stamp still says `failed` and the task
+still runs memory-silent, but no `Event::MemoryContradicted` row is
+journaled — there is no episode left to accuse, and a row for a status
+transition that never happened would fabricate store history. The
+silence stands regardless (§7); the probe's evidence is not undone by the
+episode's disappearance.
+
 ## 5. Activation
 
 `[memory]` gains `refalsify` (bool, default `false`), read only when
