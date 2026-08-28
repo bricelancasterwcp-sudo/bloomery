@@ -546,6 +546,11 @@ fn canary_exists(sb: &Path) -> bool {
 /// What one probed task did, split into the observation that isolates the
 /// probe and the ordinary terminal result.
 struct Probed {
+    /// The probed task's own id — needed wherever a later assertion must
+    /// name exactly which task an accusation cites (e.g. the passive path's
+    /// `MemoryContradicted` row after an injected-but-unverified probe
+    /// task), not merely that one exists.
+    task_id: String,
     result: TaskResult,
     /// The stamp, from the replayed journal.
     stamp: Stamp,
@@ -598,6 +603,7 @@ fn probe(m: &Minted, dir: &Path, spec: TaskSpec, ctx: Arc<MemoryContext>) -> Pro
 
     let result = poll_to_terminal(&m.registry, &task_id);
     Probed {
+        task_id,
         result,
         stamp,
         stored,
@@ -837,6 +843,7 @@ fn an_uncited_drift_failure_reads_premise_held_and_injects() {
         spec_for(GOAL, &m.grant, &m.sb),
         memory_ctx(&dir, true, true),
     );
+    let probed_id = p.task_id.clone();
     assert_eq!(p.result.status, TaskStatus::Done, "{:?}", p.result);
     assert_eq!(
         p.stamp,
@@ -877,9 +884,10 @@ fn an_uncited_drift_failure_reads_premise_held_and_injects() {
          path either"
     );
     assert_eq!(
-        contradicted_ids(&events).len(),
-        1,
-        "one accusation — the passive path's, not the probe's: {events:?}"
+        contradicted_ids(&events),
+        vec![(probed_id.clone(), m.episode_id.clone())],
+        "one accusation, citing the probed task itself — the passive path's, \
+         not the probe's: {events:?}"
     );
     assert_eq!(mint_ids(&events).len(), 1, "no follow-up task minted");
 }
