@@ -136,7 +136,7 @@ def _median_or_none(values: Sequence[float]) -> float | None:
 
 
 def _arm_task_details(
-    arm_result: dict[str, Any], ledger_path: Path, manifest_tasks: list[dict[str, Any]]
+    arm_result: dict[str, Any], ledger_path: Path
 ) -> dict[int, dict[str, dict[str, Any]]]:
     """One arm's (phase, task name) -> {"refalsify", "wall_ms"} detail,
     restricted to exactly the non-dropped, joined task-halves `_load_arm`
@@ -149,7 +149,17 @@ def _arm_task_details(
 
     **Mutation check #2 lives here**: `stamp.get("id")` (the AGENT id,
     the correct key into `step_walls`) versus `task_id` (the ledger's
-    task-half id, the WRONG field)."""
+    task-half id, the WRONG field).
+
+    **None-vs-zero (forward-looking instrument-honesty fix).** A joined
+    task whose agent id never wrote a `TaskStep` row (no entry in
+    `step_walls`) yields `wall_ms: None`, never a silent `0` -- a
+    stepless-but-conducted task must not look like a zero-duration
+    measurement and drag A1's wall medians toward zero (the named bug
+    class: "a value that looks like a measurement but is not"). `_a1_wall`
+    below excludes `None` walls from every median/delta/per-task
+    computation and surfaces the exclusion count explicitly rather than
+    ever letting it vanish silently."""
     ledger_task_halves, _identity_rows = _read_ledger(Path(ledger_path))
     stamps_by_task_id = _index_memory_stamps(arm_result["tasks_journal_rows"])
     step_walls = _task_step_duration_by_agent(arm_result["tasks_journal_rows"])
@@ -163,7 +173,7 @@ def _arm_task_details(
             agent_id = stamp.get("id") if stamp else None
             details[phase][name] = {
                 "refalsify": stamp.get("refalsify") if stamp else None,
-                "wall_ms": step_walls.get(agent_id, 0) if agent_id else 0,
+                "wall_ms": step_walls.get(agent_id, None) if agent_id else None,
             }
     return details
 
@@ -535,11 +545,30 @@ def _a1_wall(
     `premise_gone` retrieval is also probed but never injected (design
     spec §3: happy-path corpus predicts every probe resolves
     `premise_held`, so the two counts coincide on a clean run, but the
-    formula itself must count probes, not injections)."""
-    wall_m_prime_p1 = [info["wall_ms"] for info in details_m_prime[1].values()]
-    wall_r_p1 = [info["wall_ms"] for info in details_r[1].values()]
-    wall_m_prime_p2 = [info["wall_ms"] for info in details_m_prime[2].values()]
-    wall_r_p2 = [info["wall_ms"] for info in details_r[2].values()]
+    formula itself must count probes, not injections).
+
+    **None-vs-zero.** `_arm_task_details` yields `wall_ms: None` for a
+    joined task whose agent wrote no `TaskStep` row (stepless but
+    conducted) -- every wall list below excludes those `None` entries
+    from medians/deltas/per-task deltas rather than letting a phantom `0`
+    pull them down, and the excluded count is surfaced per arm x phase as
+    `wall_unmeasured_count` so an exclusion is visible, never silent."""
+
+    def _measured_walls(details_phase: dict[str, dict[str, Any]]) -> list[float]:
+        return [info["wall_ms"] for info in details_phase.values() if info["wall_ms"] is not None]
+
+    def _unmeasured_count(details_phase: dict[str, dict[str, Any]]) -> int:
+        return sum(1 for info in details_phase.values() if info["wall_ms"] is None)
+
+    wall_m_prime_p1 = _measured_walls(details_m_prime[1])
+    wall_r_p1 = _measured_walls(details_r[1])
+    wall_m_prime_p2 = _measured_walls(details_m_prime[2])
+    wall_r_p2 = _measured_walls(details_r[2])
+
+    wall_unmeasured_count = {
+        "m_prime": {1: _unmeasured_count(details_m_prime[1]), 2: _unmeasured_count(details_m_prime[2])},
+        "r": {1: _unmeasured_count(details_r[1]), 2: _unmeasured_count(details_r[2])},
+    }
 
     median_m_prime_p1 = _median_or_none(wall_m_prime_p1)
     median_r_p1 = _median_or_none(wall_r_p1)
@@ -566,6 +595,7 @@ def _a1_wall(
     per_task = [
         {"task": name, "delta": details_r[2][name]["wall_ms"] - details_m_prime[2][name]["wall_ms"]}
         for name in common_names
+        if details_r[2][name]["wall_ms"] is not None and details_m_prime[2][name]["wall_ms"] is not None
     ]
     deltas_only = [entry["delta"] for entry in per_task]
 
@@ -581,6 +611,7 @@ def _a1_wall(
             "min": min(deltas_only) if deltas_only else None,
             "max": max(deltas_only) if deltas_only else None,
         },
+        "wall_unmeasured_count": wall_unmeasured_count,
     }
 
 
@@ -633,8 +664,8 @@ def recompute_v2(
 
     _check_arm_labels(arm_m_prime["ledger_arm_labels"], arm_r["ledger_arm_labels"], expected_arm_labels)
 
-    details_m_prime = _arm_task_details(arm_m_prime, Path(ledger_m_prime), manifest_tasks)
-    details_r = _arm_task_details(arm_r, Path(ledger_r), manifest_tasks)
+    details_m_prime = _arm_task_details(arm_m_prime, Path(ledger_m_prime))
+    details_r = _arm_task_details(arm_r, Path(ledger_r))
 
     # Fixed RNG consumption order (module docstring): H2 first, G1 second.
     rng = random.Random(seed)
@@ -754,7 +785,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--corpus-dir", type=Path, required=True, help="Frozen corpus directory (manifest.json).")
     parser.add_argument("--arm-m-prime-dir", type=Path, required=True, help="Arm M' (refalsify=false)'s data_dir.")
     parser.add_argument("--arm-r-dir", type=Path, required=True, help="Arm R (refalsify=true)'s data_dir.")
-    parser.add_argument("--ledger-m-prime", type=Path, required=True, help="Arm M's driver ledger JSONL path.")
+    parser.add_argument(
+        "--ledger-m-prime", type=Path, required=True, help="Arm M-prime's driver ledger JSONL path."
+    )
     parser.add_argument("--ledger-r", type=Path, required=True, help="Arm R's driver ledger JSONL path.")
     parser.add_argument(
         "--expected-digest",

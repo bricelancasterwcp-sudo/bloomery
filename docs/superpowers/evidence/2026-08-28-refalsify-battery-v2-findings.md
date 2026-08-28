@@ -12,7 +12,7 @@ output committed verbatim at
 
 ## 1. The licensed sentence
 
-All gating conditions passed (G1, G2, the stamp audit, H2, H3 — §§3–4
+All gating conditions passed (G1, G2, the stamp audit, H2, H3 — §§3–6
 below), so spec §1's sentence is licensed. Its `X ms` clause cannot be
 filled honestly with the raw p2 number, per the prereg's own A1 honesty
 rule (spec §4: "a p1 wall gap of the same order as the p2 gap means the
@@ -31,7 +31,7 @@ X-clause resolved honestly:
 
 Nothing here speaks to novel tasks, other models, other task shapes,
 accuracy, the `premise_gone` lane, staleness, or the design-§5
-passive-poisoning weight — see the named absences, §8 below, restated
+passive-poisoning weight — see the named absences, §9 below, restated
 verbatim.
 
 ## 2. Runs

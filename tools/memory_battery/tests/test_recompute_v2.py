@@ -135,6 +135,8 @@ def _write_arm(
     skip_names_p2: set[str] | None = None,
     p1_minted: set[str] | None = None,
     p2_mode_by_task: dict[str, str] | None = None,
+    p1_stepless: set[str] | None = None,
+    p2_stepless: set[str] | None = None,
 ) -> None:
     """Writes one v2 arm's ledger + both journals. `p2_refalsify` overrides
     the auto-derived refalsify spelling (default: "premise_held" for an
@@ -143,10 +145,17 @@ def _write_arm(
     entirely for those tasks in phase 2 (the "no ledger row" drop shape).
     `p1_minted` writes a MemoryMint row for those task names in phase 1.
     `p2_mode_by_task` overrides the uniform `p2_mode` for specific task
-    names (G2 deficit/excess fixtures: one task's mode differs)."""
+    names (G2 deficit/excess fixtures: one task's mode differs). `p1_stepless`/
+    `p2_stepless` omit ONLY the `TaskStep` row for those task names (ledger
+    row, MemoryStamp, and InferCompleted rows are all still written, so the
+    task-half still joins normally) -- the "stepless but conducted" shape
+    A1's none-vs-zero fix exists for: the task has a real cost and mode,
+    but no wall measurement at all."""
     skip_names_p2 = skip_names_p2 or set()
     p1_minted = p1_minted or set()
     p2_mode_by_task = p2_mode_by_task or {}
+    p1_stepless = p1_stepless or set()
+    p2_stepless = p2_stepless or set()
     ledger_rows: list[dict[str, Any]] = list(_identity_rows(ledger_arm_label, digest[0], digest[1]))
     tasks_journal: list[dict[str, Any]] = []
     boot: list[dict[str, Any]] = []
@@ -156,8 +165,9 @@ def _write_arm(
         agent_id = f"{ledger_arm_label}-1-{name}-agent"
         ledger_rows.append(_ledger_row(ledger_arm_label, 1, name, task_id))
         tasks_journal.append(_memory_stamp(agent_id, task_id, p1_mode, refalsify=None))
-        duration = (p1_wall_ms or {}).get(name, 1000)
-        tasks_journal.append(_task_step_done(agent_id, duration_ms=duration))
+        if name not in p1_stepless:
+            duration = (p1_wall_ms or {}).get(name, 1000)
+            tasks_journal.append(_task_step_done(agent_id, duration_ms=duration))
         if name in p1_minted:
             tasks_journal.append(_memory_mint(agent_id, task_id, f"ep-{name}"))
         cost = p1_costs[name]
@@ -177,8 +187,9 @@ def _write_arm(
             refalsify = "premise_held" if this_mode == "injected" else None
         episode_id = f"ep-{name}" if this_mode == "injected" else None
         tasks_journal.append(_memory_stamp(agent_id, task_id, this_mode, episode_id, refalsify=refalsify))
-        duration = (p2_wall_ms or {}).get(name, 1000)
-        tasks_journal.append(_task_step_done(agent_id, duration_ms=duration))
+        if name not in p2_stepless:
+            duration = (p2_wall_ms or {}).get(name, 1000)
+            tasks_journal.append(_task_step_done(agent_id, duration_ms=duration))
         cost = p2_costs[name]
         boot.append(_infer_completed(agent_id, cost, cost + 1))
 
@@ -211,6 +222,10 @@ def _build_fixture(
     r_minted: set[str] | None = None,
     m_prime_p2_mode_by_task: dict[str, str] | None = None,
     r_p2_mode_by_task: dict[str, str] | None = None,
+    m_prime_p1_stepless: set[str] | None = None,
+    m_prime_p2_stepless: set[str] | None = None,
+    r_p1_stepless: set[str] | None = None,
+    r_p2_stepless: set[str] | None = None,
     ledger_label_m_prime: str = "m_prime",
     ledger_label_r: str = "r",
     digest_m_prime: tuple[str | None, str | None] = ("digest-m-prime", "digest-m-prime"),
@@ -240,6 +255,8 @@ def _build_fixture(
         skip_names_p2=m_prime_skip_p2,
         p1_minted=m_prime_minted,
         p2_mode_by_task=m_prime_p2_mode_by_task,
+        p1_stepless=m_prime_p1_stepless,
+        p2_stepless=m_prime_p2_stepless,
     )
     _write_arm(
         arm_r_dir,
@@ -257,6 +274,8 @@ def _build_fixture(
         skip_names_p2=r_skip_p2,
         p1_minted=r_minted,
         p2_mode_by_task=r_p2_mode_by_task,
+        p1_stepless=r_p1_stepless,
+        p2_stepless=r_p2_stepless,
     )
 
     return {
@@ -381,6 +400,78 @@ class ArithmeticFixtureTests(unittest.TestCase):
         self.assertEqual(lens["arm_labels"], {"m_prime": "m_prime", "r": "r"})
         self.assertEqual(lens["n"], 6)
         self.assertIn("source_paths", lens)
+
+    def test_wall_unmeasured_count_all_zero_when_every_task_has_steps(self) -> None:
+        # Every task-half in this fixture writes a normal TaskStep row --
+        # the none-vs-zero exclusion counter must read 0 everywhere, and
+        # (per the arithmetic tests above) every median is unaffected.
+        counts = self.result["a1_wall"]["wall_unmeasured_count"]
+        self.assertEqual(counts, {"m_prime": {1: 0, 2: 0}, "r": {1: 0, 2: 0}})
+
+
+# ---------------------------------------------------------------------------
+# A1 wall none-vs-zero (fix 1): a stepless-but-conducted task's wall_ms must
+# be EXCLUDED from every A1 median/delta/per-task computation, never a
+# silent phantom 0 -- the named bug class "a value that looks like a
+# measurement but is not".
+# ---------------------------------------------------------------------------
+
+
+class A1WallNoneVsZeroTests(unittest.TestCase):
+    """Fixture: m_prime's phase-2 task "s0" joins normally (ledger row +
+    MemoryStamp + InferCompleted, all present) but writes NO `TaskStep` row
+    at all -- "stepless but conducted". Every other task-half (both arms,
+    both phases) has a normal TaskStep row. Hand-derived expectations below
+    treat s0's m_prime-p2 wall as ABSENT, never as 0."""
+
+    NAMES = ["s0", "s1", "s2", "s3"]
+    COSTS = {n: 50 for n in NAMES}
+    M_PRIME_P2_WALL = {"s0": 1000, "s1": 1100, "s2": 1200, "s3": 1300}
+    R_P2_WALL = {"s0": 2000, "s1": 2100, "s2": 2200, "s3": 2300}
+
+    def setUp(self) -> None:
+        self._tmp_ctx = TemporaryDirectory()
+        self.tmp = Path(self._tmp_ctx.name)
+        self.addCleanup(self._tmp_ctx.cleanup)
+        self.paths = _build_fixture(
+            self.tmp,
+            self.NAMES,
+            self.COSTS,
+            self.COSTS,
+            self.COSTS,
+            self.COSTS,
+            m_prime_p2_wall_ms=self.M_PRIME_P2_WALL,
+            r_p2_wall_ms=self.R_P2_WALL,
+            m_prime_p2_stepless={"s0"},
+        )
+        self.result = recompute_v2(**self.paths)
+
+    def test_stepless_task_excluded_from_p2_medians(self) -> None:
+        a1 = self.result["a1_wall"]
+        # m_prime p2 measured walls: [1100, 1200, 1300] (s0 excluded, NOT a
+        # phantom 0 in the list) -> median 1200, hand-derived over the
+        # remaining tasks only.
+        self.assertEqual(a1["p2"]["median_m_prime"], 1200)
+        # r p2 walls (no stepless task there): [2000, 2100, 2200, 2300] -> 2150.0
+        self.assertEqual(a1["p2"]["median_r"], 2150.0)
+        self.assertEqual(a1["p2"]["delta"], 950.0)
+
+    def test_wall_unmeasured_count_names_the_one_exclusion(self) -> None:
+        counts = self.result["a1_wall"]["wall_unmeasured_count"]
+        self.assertEqual(counts["m_prime"][2], 1)
+        self.assertEqual(counts["m_prime"][1], 0)
+        self.assertEqual(counts["r"][1], 0)
+        self.assertEqual(counts["r"][2], 0)
+
+    def test_per_task_wall_delta_excludes_stepless_task(self) -> None:
+        per_task = self.result["a1_wall"]["per_task_wall_delta_p2"]
+        by_task = {entry["task"]: entry["delta"] for entry in per_task["per_task"]}
+        self.assertNotIn("s0", by_task)
+        self.assertEqual(by_task, {"s1": 1000, "s2": 1000, "s3": 1000})
+        self.assertEqual(per_task["n"], 3)
+        self.assertEqual(per_task["median"], 1000)
+        self.assertEqual(per_task["min"], 1000)
+        self.assertEqual(per_task["max"], 1000)
 
 
 # ---------------------------------------------------------------------------
