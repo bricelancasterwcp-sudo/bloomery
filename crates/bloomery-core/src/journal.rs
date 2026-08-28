@@ -374,6 +374,16 @@ pub enum Event {
         mode: String,
         episode_id: Option<String>,
         candidates_checked: u32,
+        /// Refalsify-on-exact's verdict for this retrieval (refalsify spec
+        /// `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md`
+        /// §4): `None` when the flag is off, memory is off, or nothing was
+        /// retrieved; `Some("passed" | "failed" | "skipped_ungranted" |
+        /// "inconclusive")` when a hit was probed or skipped. Additive —
+        /// absent-key rows replay as `None`, which is the truth of every
+        /// pre-refalsify stamp. A `"failed"` stamp is always accompanied by
+        /// an ordinary [`Event::MemoryContradicted`] citing the same task.
+        #[serde(default)]
+        refalsify: Option<String>,
     },
     /// A verified task minted (or refreshed) an episode (design §2). Paired
     /// with the task's own [`Event::MemoryStamp`] by `task_id`, which is

@@ -352,6 +352,7 @@ fn memory_organ_rows_round_trip() {
         mode: "injected".into(),
         episode_id: Some("ep-a1".into()),
         candidates_checked: 4,
+        refalsify: None,
     };
     let silent = Event::MemoryStamp {
         id: "agent-5".into(),
@@ -359,6 +360,7 @@ fn memory_organ_rows_round_trip() {
         mode: "silent".into(),
         episode_id: None,
         candidates_checked: 2,
+        refalsify: None,
     };
     let off = Event::MemoryStamp {
         id: "agent-7".into(),
@@ -366,6 +368,7 @@ fn memory_organ_rows_round_trip() {
         mode: "off".into(),
         episode_id: None,
         candidates_checked: 0,
+        refalsify: None,
     };
     let mint = Event::MemoryMint {
         id: "agent-9".into(),
@@ -567,4 +570,75 @@ fn a_task_step_row_round_trips_its_rung() {
         Event::TaskStep { rung, .. } => assert_eq!(rung, 3),
         other => panic!("expected TaskStep, got {other:?}"),
     }
+}
+
+/// Refalsify spec §4 compat pin: a `MemoryStamp` row journaled before the
+/// `refalsify` field existed carries no `refalsify` key at all, and the
+/// absent-key default must be `None` — un-probed, which is the truth of
+/// every pre-refalsify stamp (no probe existed to run). The first line is
+/// the verbatim pre-change serializer output; the second is a real row off
+/// the memory-organ acceptance journal
+/// (`docs/superpowers/evidence/2026-08-26-memory-organ-acceptance.md`),
+/// `epoch_ms` and all, so the pin is against bytes that actually exist on
+/// an operator's disk and not only against a reconstruction.
+#[test]
+fn a_pre_refalsify_memory_stamp_replays_with_refalsify_none() {
+    let synthesized = r#"{"event":"MemoryStamp","id":"a1","task_id":"t1","mode":"injected","episode_id":"e1","candidates_checked":1}"#;
+    let on_disk = r#"{"event":"MemoryStamp","id":"a147","task_id":"task-1","mode":"silent","episode_id":null,"candidates_checked":0,"epoch_ms":1787788580099}"#;
+    for (line, expected_episode) in [(synthesized, Some("e1")), (on_disk, None)] {
+        let event: Event =
+            serde_json::from_str(line).expect("a pre-refalsify MemoryStamp line must parse");
+        match event {
+            Event::MemoryStamp {
+                refalsify,
+                episode_id,
+                ..
+            } => {
+                assert_eq!(
+                    refalsify, None,
+                    "absent refalsify must replay as None: {line}"
+                );
+                // The neighbouring Option must not be disturbed by the new
+                // one: a `silent` stamp's `null` episode stays `None`, and
+                // an `injected` stamp's episode still names its row.
+                assert_eq!(episode_id.as_deref(), expected_episode, "{line}");
+            }
+            other => panic!("expected MemoryStamp, got {other:?}"),
+        }
+    }
+}
+
+/// New-writer round trip: a probed retrieval's verdict (refalsify spec §4)
+/// survives serialization and replay under its own key, and an un-probed
+/// stamp still writes `null` rather than inventing a verdict.
+#[test]
+fn a_memory_stamp_round_trips_its_refalsify_verdict() {
+    let probed = Event::MemoryStamp {
+        id: "a1".into(),
+        task_id: "t1".into(),
+        mode: "injected".into(),
+        episode_id: Some("e1".into()),
+        candidates_checked: 1,
+        refalsify: Some("failed".into()),
+    };
+    let json = serde_json::to_string(&probed).unwrap();
+    assert!(json.contains(r#""refalsify":"failed""#), "{json}");
+    match serde_json::from_str::<Event>(&json).unwrap() {
+        Event::MemoryStamp { refalsify, .. } => {
+            assert_eq!(refalsify.as_deref(), Some("failed"))
+        }
+        other => panic!("expected MemoryStamp, got {other:?}"),
+    }
+
+    let unprobed = Event::MemoryStamp {
+        id: "a2".into(),
+        task_id: "t2".into(),
+        mode: "off".into(),
+        episode_id: None,
+        candidates_checked: 0,
+        refalsify: None,
+    };
+    let json = serde_json::to_string(&unprobed).unwrap();
+    assert!(json.contains(r#""refalsify":null"#), "{json}");
+    assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), unprobed);
 }

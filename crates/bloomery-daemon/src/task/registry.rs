@@ -288,6 +288,13 @@ struct OrganDecision {
     candidates_checked: u32,
     injected_id: Option<String>,
     block: Option<String>,
+    /// The refalsification verdict this retrieval earned — see
+    /// `Event::MemoryStamp::refalsify` for the closed set of spellings.
+    /// `None` means un-probed, which every decision is until the probe
+    /// itself lands: no current constructor sets anything else, so the
+    /// stamp's key stays `null` and flag-on behavior is still identical to
+    /// flag-off.
+    refalsify: Option<&'static str>,
 }
 
 impl OrganDecision {
@@ -302,6 +309,7 @@ impl OrganDecision {
             candidates_checked: 0,
             injected_id: None,
             block: None,
+            refalsify: None,
         }
     }
 }
@@ -341,6 +349,7 @@ fn organ_before_run(
             candidates_checked: retrieval.candidates_checked,
             injected_id: None,
             block: None,
+            refalsify: None,
         };
     };
 
@@ -366,6 +375,7 @@ fn organ_before_run(
             candidates_checked: retrieval.candidates_checked,
             injected_id: None,
             block: None,
+            refalsify: None,
         };
     }
 
@@ -374,6 +384,7 @@ fn organ_before_run(
         candidates_checked: retrieval.candidates_checked,
         injected_id: Some(episode.episode_id.clone()),
         block: Some(block),
+        refalsify: None,
     }
 }
 
@@ -662,6 +673,7 @@ impl TaskRegistry {
                     mode: decision.mode.to_string(),
                     episode_id: injected_id.clone(),
                     candidates_checked: decision.candidates_checked,
+                    refalsify: decision.refalsify.map(String::from),
                 },
             );
 
