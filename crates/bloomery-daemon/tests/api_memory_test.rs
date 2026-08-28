@@ -67,6 +67,7 @@ fn operational_ctx(tag: &str) -> (Arc<MemoryContext>, PathBuf) {
     let cfg = MemoryConfig {
         enabled: true,
         max_episodes: 256,
+        refalsify: false,
     };
     let ctx = build_memory(&cfg, &dir);
     assert!(
@@ -117,6 +118,7 @@ fn config_disabled_is_501_on_both_routes_even_with_the_wrong_method() {
     let cfg = MemoryConfig {
         enabled: false,
         max_episodes: 256,
+        refalsify: false,
     };
     let ctx = build_memory(&cfg, &dir);
     assert!(!ctx.operational());
@@ -154,6 +156,7 @@ fn enabled_but_broken_store_is_503_with_the_reason() {
     let cfg = MemoryConfig {
         enabled: true,
         max_episodes: 256,
+        refalsify: false,
     };
     let ctx = build_memory(&cfg, &dir);
     assert!(!ctx.operational());

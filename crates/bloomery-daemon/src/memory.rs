@@ -59,6 +59,14 @@ pub struct MemoryContext {
     /// The `[memory] max_episodes` retention cap on distinct ids (spec §6),
     /// passed to [`store::MemoryStore::mint`] at every mint.
     pub max_episodes: usize,
+    /// The `[memory] refalsify` opt-in (refalsify-on-exact spec
+    /// `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md` §5,
+    /// default `false`): whether the worker probes a retrieved episode's
+    /// stored run command under the incoming task's grant before injecting.
+    /// Meaningful only for an [`operational`](Self::operational) organ — the
+    /// flag never turns an organ on, it only changes what an already-on
+    /// organ does before it speaks.
+    pub refalsify: bool,
     /// Why the organ is off despite `enabled`, when it is — the store was
     /// unreadable at boot (spec §7). Surfaced at `/status`, never inferred.
     pub disabled_reason: Option<String>,
@@ -107,12 +115,14 @@ pub fn build_memory(cfg: &MemoryConfig, data_dir: &Path) -> Arc<MemoryContext> {
         Ok(store) => Arc::new(MemoryContext {
             enabled: cfg.enabled,
             max_episodes: cfg.max_episodes,
+            refalsify: cfg.refalsify,
             disabled_reason: None,
             store: Some(Mutex::new(store)),
         }),
         Err(e) => Arc::new(MemoryContext {
             enabled: cfg.enabled,
             max_episodes: cfg.max_episodes,
+            refalsify: cfg.refalsify,
             disabled_reason: Some(format!("memory store unreadable: {e}")),
             store: None,
         }),
@@ -150,6 +160,7 @@ mod tests {
         let ctx = MemoryContext {
             enabled: true,
             max_episodes: 256,
+            refalsify: false,
             disabled_reason: Some("memory store unreadable: test".to_string()),
             store: None,
         };
@@ -162,6 +173,7 @@ mod tests {
         let cfg = MemoryConfig {
             enabled: true,
             max_episodes: 256,
+            refalsify: false,
         };
         let ctx = build_memory(&cfg, &dir);
         assert!(
@@ -184,6 +196,7 @@ mod tests {
         let cfg = MemoryConfig {
             enabled: false,
             max_episodes: 256,
+            refalsify: false,
         };
         let ctx = build_memory(&cfg, &dir);
         assert!(!ctx.enabled);
@@ -214,6 +227,7 @@ mod tests {
         let cfg = MemoryConfig {
             enabled: true,
             max_episodes: 256,
+            refalsify: false,
         };
         let ctx = build_memory(&cfg, &dir);
         assert!(!ctx.operational());

@@ -314,7 +314,7 @@ impl OrganDecision {
 /// and a stamp claiming an injection the prompt never carried would be the
 /// one lie that row exists to prevent.
 fn organ_before_run(
-    organ: Option<(&Mutex<MemoryStore>, usize)>,
+    organ: Option<(&Mutex<MemoryStore>, usize, bool)>,
     spec: &TaskSpec,
     task_id: &str,
     journal: &mut Journal,
@@ -322,7 +322,12 @@ fn organ_before_run(
     // Step 1: retrieve, holding the store lock only for the read itself —
     // never across `run_task`, which would serialize every other task's
     // retrieval behind this one's whole execution.
-    let Some((store, _)) = organ else {
+    //
+    // The tuple's third element is the `[memory] refalsify` opt-in
+    // (`docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md` §5),
+    // deliberately UNREAD here: this slice only plumbs the flag through, so
+    // flag-on and flag-off behavior are still bit-identical.
+    let Some((store, _, _)) = organ else {
         return OrganDecision::off();
     };
     let retrieval = {
@@ -390,12 +395,14 @@ struct OrganOutcome<'a> {
 /// falsified, then mint what it verified. Called after the pager guard has
 /// dropped, so the store lock is never held alongside it.
 fn organ_after_run(
-    organ: Option<(&Mutex<MemoryStore>, usize)>,
+    organ: Option<(&Mutex<MemoryStore>, usize, bool)>,
     result: &TaskResult,
     outcome: &OrganOutcome<'_>,
     journal: &mut Journal,
 ) {
-    let Some((store, max_episodes)) = organ else {
+    // The tuple's `refalsify` flag is a *before*-run concern only (design §5:
+    // the probe runs at the retrieval moment); nothing after the run reads it.
+    let Some((store, max_episodes, _)) = organ else {
         return;
     };
     let mut store = lock_store(store, journal);
@@ -611,15 +618,23 @@ impl TaskRegistry {
                 }
             };
 
-            // The organ's handle for this task: `Some` exactly when the
-            // config switch is on AND a store loaded at boot. Re-deriving
-            // the store from `operational()`'s own two conjuncts is what
-            // keeps this `expect`-free — the invariant is documented on
-            // `MemoryContext`, and read here rather than trusted.
-            let organ: Option<(&Mutex<MemoryStore>, usize)> = memory
+            // The organ's handle for this task: the store, the retention cap,
+            // and the refalsify-on-exact opt-in
+            // (`docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md`
+            // §5). `Some` exactly when the config switch is on AND a store
+            // loaded at boot. Re-deriving the store from `operational()`'s own
+            // two conjuncts is what keeps this `expect`-free — the invariant is
+            // documented on `MemoryContext`, and read here rather than trusted.
+            // `refalsify` rides along unconditionally: it is only ever read
+            // inside a `Some` arm, so an off organ can never act on it.
+            let organ: Option<(&Mutex<MemoryStore>, usize, bool)> = memory
                 .as_ref()
                 .filter(|ctx| ctx.operational())
-                .and_then(|ctx| ctx.store.as_ref().map(|store| (store, ctx.max_episodes)));
+                .and_then(|ctx| {
+                    ctx.store
+                        .as_ref()
+                        .map(|store| (store, ctx.max_episodes, ctx.refalsify))
+                });
 
             // Steps 1-3 (design §3/§4), under panic containment: this whole
             // region runs in the worker thread ahead of the terminal

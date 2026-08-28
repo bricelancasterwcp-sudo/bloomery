@@ -431,18 +431,29 @@ fn default_max_episodes() -> usize {
     256
 }
 
-/// The `[memory]` section (spec §6): the organ's on/off switch and its
-/// retention cap. `#[serde(default)]` on both fields, plus `Default` on the
-/// whole struct via `#[serde(default)] pub memory: MemoryConfig` on
-/// [`Config`], means a TOML with no `[memory]` table at all parses to
-/// `enabled: false, max_episodes: 256` — byte-compatible with every config
-/// written before this section existed.
+/// The `[memory]` section (spec §6): the organ's on/off switch, its
+/// retention cap, and the refalsify-on-exact opt-in. `#[serde(default)]` on
+/// every field, plus `Default` on the whole struct via `#[serde(default)]
+/// pub memory: MemoryConfig` on [`Config`], means a TOML with no `[memory]`
+/// table at all parses to `enabled: false, max_episodes: 256,
+/// refalsify: false` — byte-compatible with every config written before this
+/// section existed, and with every config written before `refalsify` was
+/// added to it.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct MemoryConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default = "default_max_episodes")]
     pub max_episodes: usize,
+    /// Refalsify-on-exact (spec
+    /// `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md` §5):
+    /// `true` makes the worker probe a retrieved episode's stored run
+    /// command under the incoming task's grant before injecting. Default
+    /// `false` — an enabled organ behaves exactly as the memory battery's
+    /// GATE PASS measured (inject-without-refalsify) until the operator
+    /// opts in. Read only when `enabled` is true.
+    #[serde(default)]
+    pub refalsify: bool,
 }
 
 impl Default for MemoryConfig {
@@ -450,6 +461,7 @@ impl Default for MemoryConfig {
         MemoryConfig {
             enabled: false,
             max_episodes: default_max_episodes(),
+            refalsify: false,
         }
     }
 }

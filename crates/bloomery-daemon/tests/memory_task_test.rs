@@ -151,6 +151,7 @@ fn memory_ctx(dir: &Path, enabled: bool) -> Arc<MemoryContext> {
     Arc::new(MemoryContext {
         enabled,
         max_episodes: 64,
+        refalsify: false,
         disabled_reason: None,
         store: Some(Mutex::new(store)),
     })

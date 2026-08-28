@@ -1,4 +1,4 @@
-use bloomery_daemon::config::{load_config, EnvelopeLens};
+use bloomery_daemon::config::{load_config, EnvelopeLens, MemoryConfig};
 
 fn write_temp_toml(name: &str, contents: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join("bloomery-daemon-config-test");
@@ -680,4 +680,57 @@ path = "/mnt/extra/models/qwen3.8-27b.gguf"
     let config = load_config(&path).unwrap();
     assert!(!config.models.get("qwen3:14b").unwrap().g5_probe());
     assert!(!config.models.get("qwen3.8:27b").unwrap().g5_probe());
+}
+
+// ---------------------------------------------------------------------------
+// `[memory] refalsify`
+// (docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md §5: "bool,
+// default `false`, read only when `enabled` is true")
+// ---------------------------------------------------------------------------
+
+/// Absent → `false` *even under an enabled organ* (spec §5: the memory
+/// battery's GATE PASS was measured inject-without-refalsify, so an enabled
+/// organ keeps exactly that behavior until the operator opts in), and the
+/// explicit opt-in parses. The whole-`Config` fixture mirrors the existing
+/// `[memory]` parse tests in `src/config.rs`, routed through `load_config`'s
+/// file-reading path the way this file's other cases are.
+#[test]
+fn memory_refalsify_defaults_false_and_parses_true() {
+    let absent = r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = { name = "enthusiast-16gb", emulated = false }
+assay = { enabled = false, python = "python3" }
+
+[models]
+llama = "/models/llama.gguf"
+
+[memory]
+enabled = true
+"#;
+    let path = write_temp_toml("memory-refalsify-absent.toml", absent);
+    let config = load_config(&path).unwrap();
+    assert!(config.memory.enabled);
+    assert!(!config.memory.refalsify);
+    assert!(!MemoryConfig::default().refalsify);
+
+    let opted_in = r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = { name = "enthusiast-16gb", emulated = false }
+assay = { enabled = false, python = "python3" }
+
+[models]
+llama = "/models/llama.gguf"
+
+[memory]
+enabled = true
+refalsify = true
+"#;
+    let path = write_temp_toml("memory-refalsify-on.toml", opted_in);
+    let config = load_config(&path).unwrap();
+    assert!(config.memory.enabled);
+    assert!(config.memory.refalsify);
+    // The opt-in is orthogonal to retention — `max_episodes` still defaults.
+    assert_eq!(config.memory.max_episodes, 256);
 }

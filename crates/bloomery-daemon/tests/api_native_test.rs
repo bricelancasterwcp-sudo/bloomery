@@ -1229,6 +1229,7 @@ fn status_reports_memory_zero_counts_for_a_fresh_enabled_context() {
     let cfg = MemoryConfig {
         enabled: true,
         max_episodes: 256,
+        refalsify: false,
     };
     let memory = build_memory(&cfg, &dir);
     assert!(memory.operational(), "{:?}", memory.disabled_reason);
@@ -1260,6 +1261,7 @@ fn status_reports_memory_disabled_reason_when_store_path_is_unreadable() {
     let cfg = MemoryConfig {
         enabled: true,
         max_episodes: 256,
+        refalsify: false,
     };
     let memory = build_memory(&cfg, &dir);
     assert!(!memory.operational());
