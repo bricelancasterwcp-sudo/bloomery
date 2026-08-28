@@ -1570,3 +1570,40 @@ probing — `premise_held` now injects into cases v1 either never probed
 discipline carries shifts even though its text does not. A future slice
 weighing it should start from the memory-organ design's §5, not from the
 probe. Recorded as a second named limitation in the v2 spec's §1.
+
+**Amended 2026-08-28 (refalsify-battery-v2 executed, branch
+`refalsify-battery-v2`):** the battery re-registered against v2 above
+(prereg `2026-08-28-refalsify-battery-v2-preregistration.md`, commit
+`98b4ad2`) ran to completion the same evening on Brice's launch ruling —
+both arms `DONE exit_code=0`, 102/102 ledger rows each, zero infra
+faults, zero dropped tasks — and its gates were read exactly once
+(findings: `2026-08-28-refalsify-battery-v2-findings.md`; raw recompute
+output committed verbatim at
+`2026-08-28-refalsify-battery-v2-recompute.json`). **Verdicts: G1
+(token preservation) PASS, diff 0.0 within band 5.325; G2 (injection
+preservation) PASS, 50=50 exact; stamp audit clean (100% `premise_held`
+on R-p2 injections, zero forbidden spellings, zero `premise_gone`); H2
+(instrument validity) not violated, run VALID; H3 (infra) not violated,
+0% both arms.** The licensed sentence (spec §1) is therefore said, with
+one honest qualifier: **A1's probe-cost number is not resolved from box
+noise** — the no-probe p1 control (where neither arm can fire a probe at
+all) shows a −3.5 ms median wall gap, the same order as the probed p2
+gap of +4.5 ms (0.09 ms/probed-retrieval nominal), so this instrument
+cannot distinguish a real probe cost from box noise at this resolution.
+This closes the "queued refalsify-on-battery slice" that the prior two
+amendments above left unscheduled — it is no longer open, it ran and its
+numbers are read. **Left open by these verdicts:** the three named
+absences (spec §1: `premise_gone` lane, the staleness-benefit story, the
+design-§5 passive-poisoning weight) each still need their own corpus
+treatment and their own registration, unchanged by this run; the
+default-flip ruling for `[memory] refalsify` is Brice's call — these
+findings inform it, per spec §7, but do not make it; and A1's probe-cost
+question is a genuine open measurement, not merely deferred — resolving
+it needs a battery purpose-built to shrink box noise below a few
+milliseconds (more probed retrievals, repeated boots, or both), which is
+a new pre-registration, not a re-read of this one. A parked wording nit
+from Task 3 (the prereg's amendment-rule section claims to be "copied
+verbatim from v1's prereg" but adapted one self-referential clause to
+this document's own section numbering) is recorded in the findings
+doc §10 — force preserved, not grounds to amend the lock, not fixed
+here.

@@ -1,0 +1,373 @@
+{
+  "a1_wall": {
+    "p1_control": {
+      "delta": -3.5,
+      "median_m_prime": 456.0,
+      "median_r": 452.5
+    },
+    "p2": {
+      "delta": 4.5,
+      "median_m_prime": 483.0,
+      "median_r": 487.5
+    },
+    "per_probed_retrieval_ms": 0.09,
+    "per_task_wall_delta_p2": {
+      "max": 126,
+      "median": 2.0,
+      "min": -219,
+      "n": 50,
+      "per_task": [
+        {
+          "delta": 3,
+          "task": "py_inverted_boolean_run_verified-0000"
+        },
+        {
+          "delta": 126,
+          "task": "py_inverted_boolean_run_verified-0008"
+        },
+        {
+          "delta": 28,
+          "task": "py_inverted_boolean_run_verified-0016"
+        },
+        {
+          "delta": -1,
+          "task": "py_inverted_boolean_run_verified-0024"
+        },
+        {
+          "delta": 0,
+          "task": "py_inverted_boolean_run_verified-0032"
+        },
+        {
+          "delta": 6,
+          "task": "py_inverted_boolean_run_verified-0040"
+        },
+        {
+          "delta": 7,
+          "task": "py_inverted_boolean_run_verified-0048"
+        },
+        {
+          "delta": 0,
+          "task": "py_off_by_one_index_run_verified-0001"
+        },
+        {
+          "delta": -3,
+          "task": "py_off_by_one_index_run_verified-0009"
+        },
+        {
+          "delta": 1,
+          "task": "py_off_by_one_index_run_verified-0017"
+        },
+        {
+          "delta": 2,
+          "task": "py_off_by_one_index_run_verified-0025"
+        },
+        {
+          "delta": -3,
+          "task": "py_off_by_one_index_run_verified-0033"
+        },
+        {
+          "delta": 3,
+          "task": "py_off_by_one_index_run_verified-0041"
+        },
+        {
+          "delta": 3,
+          "task": "py_off_by_one_index_run_verified-0049"
+        },
+        {
+          "delta": 10,
+          "task": "py_off_by_one_range_bound_run_verified-0002"
+        },
+        {
+          "delta": -30,
+          "task": "py_off_by_one_range_bound_run_verified-0010"
+        },
+        {
+          "delta": -30,
+          "task": "py_off_by_one_range_bound_run_verified-0018"
+        },
+        {
+          "delta": 0,
+          "task": "py_off_by_one_range_bound_run_verified-0026"
+        },
+        {
+          "delta": 0,
+          "task": "py_off_by_one_range_bound_run_verified-0034"
+        },
+        {
+          "delta": -2,
+          "task": "py_off_by_one_range_bound_run_verified-0042"
+        },
+        {
+          "delta": -2,
+          "task": "py_wrong_comparison_operator_run_verified-0003"
+        },
+        {
+          "delta": -219,
+          "task": "py_wrong_comparison_operator_run_verified-0011"
+        },
+        {
+          "delta": 10,
+          "task": "py_wrong_comparison_operator_run_verified-0019"
+        },
+        {
+          "delta": 14,
+          "task": "py_wrong_comparison_operator_run_verified-0027"
+        },
+        {
+          "delta": 10,
+          "task": "py_wrong_comparison_operator_run_verified-0035"
+        },
+        {
+          "delta": -5,
+          "task": "py_wrong_comparison_operator_run_verified-0043"
+        },
+        {
+          "delta": -1,
+          "task": "py_wrong_constant_multiplier_run_verified-0004"
+        },
+        {
+          "delta": -11,
+          "task": "py_wrong_constant_multiplier_run_verified-0012"
+        },
+        {
+          "delta": 2,
+          "task": "py_wrong_constant_multiplier_run_verified-0020"
+        },
+        {
+          "delta": -12,
+          "task": "py_wrong_constant_multiplier_run_verified-0028"
+        },
+        {
+          "delta": -8,
+          "task": "py_wrong_constant_multiplier_run_verified-0036"
+        },
+        {
+          "delta": -3,
+          "task": "py_wrong_constant_multiplier_run_verified-0044"
+        },
+        {
+          "delta": 3,
+          "task": "py_wrong_dict_key_run_verified-0005"
+        },
+        {
+          "delta": 9,
+          "task": "py_wrong_dict_key_run_verified-0013"
+        },
+        {
+          "delta": 6,
+          "task": "py_wrong_dict_key_run_verified-0021"
+        },
+        {
+          "delta": 12,
+          "task": "py_wrong_dict_key_run_verified-0029"
+        },
+        {
+          "delta": -4,
+          "task": "py_wrong_dict_key_run_verified-0037"
+        },
+        {
+          "delta": 6,
+          "task": "py_wrong_dict_key_run_verified-0045"
+        },
+        {
+          "delta": 5,
+          "task": "py_wrong_fstring_field_run_verified-0006"
+        },
+        {
+          "delta": 4,
+          "task": "py_wrong_fstring_field_run_verified-0014"
+        },
+        {
+          "delta": -4,
+          "task": "py_wrong_fstring_field_run_verified-0022"
+        },
+        {
+          "delta": 1,
+          "task": "py_wrong_fstring_field_run_verified-0030"
+        },
+        {
+          "delta": -6,
+          "task": "py_wrong_fstring_field_run_verified-0038"
+        },
+        {
+          "delta": -1,
+          "task": "py_wrong_fstring_field_run_verified-0046"
+        },
+        {
+          "delta": 6,
+          "task": "py_wrong_variable_reference_run_verified-0007"
+        },
+        {
+          "delta": 4,
+          "task": "py_wrong_variable_reference_run_verified-0015"
+        },
+        {
+          "delta": 3,
+          "task": "py_wrong_variable_reference_run_verified-0023"
+        },
+        {
+          "delta": 5,
+          "task": "py_wrong_variable_reference_run_verified-0031"
+        },
+        {
+          "delta": 3,
+          "task": "py_wrong_variable_reference_run_verified-0039"
+        },
+        {
+          "delta": 10,
+          "task": "py_wrong_variable_reference_run_verified-0047"
+        }
+      ]
+    },
+    "probed_retrieval_count": 50
+  },
+  "completeness": {
+    "m_prime": {
+      "actual_task_halves": 100,
+      "expected_task_halves": 100,
+      "reason": null,
+      "violated": false
+    },
+    "r": {
+      "actual_task_halves": 100,
+      "expected_task_halves": 100,
+      "reason": null,
+      "violated": false
+    },
+    "violated": false
+  },
+  "corpus_sha": "778b1491aac67f9235ff2ae6ce74c0c767465fb30b2ab5053e17ce99ccc9a5ff",
+  "dropped": {
+    "m_prime": [],
+    "r": []
+  },
+  "g1": {
+    "band": 5.325166059382561,
+    "diff": 0.0,
+    "headroom_m_prime": 80.5,
+    "headroom_r": 80.5,
+    "median_m_prime_p2": 109.5,
+    "median_r_p2": 109.5,
+    "n_m_prime_p2": 50,
+    "n_r_p2": 50,
+    "reason": null,
+    "se_boot": 2.6625830296912807,
+    "verdict": "PASS"
+  },
+  "g2": {
+    "injected_count_m_prime": 50,
+    "injected_count_r": 50,
+    "reason": null,
+    "verdict": "PASS"
+  },
+  "h2_p1_equivalence": {
+    "band": 4.198194563142589,
+    "diff": 0.0,
+    "median_m_prime_p1": 121.5,
+    "median_r_p1": 121.5,
+    "n_m_prime_p1": 50,
+    "n_r_p1": 50,
+    "reason": null,
+    "se_boot": 2.0990972815712947,
+    "violated": false
+  },
+  "h3_infra": {
+    "ceiling": 0.05,
+    "m_prime_infra_count": 0,
+    "m_prime_infra_rate": 0.0,
+    "m_prime_task_halves": 100,
+    "r_infra_count": 0,
+    "r_infra_rate": 0.0,
+    "r_task_halves": 100,
+    "reason": null,
+    "violated": false
+  },
+  "h4_advisory": {
+    "m_prime": {
+      "mint_count_p1": 50,
+      "mint_rate_p1": 1.0,
+      "n": 50,
+      "retrieval_count_p2": 50,
+      "retrieval_rate_p2": 1.0
+    },
+    "r": {
+      "mint_count_p1": 50,
+      "mint_rate_p1": 1.0,
+      "n": 50,
+      "retrieval_count_p2": 50,
+      "retrieval_rate_p2": 1.0
+    }
+  },
+  "lens": {
+    "arm_labels": {
+      "m_prime": "m_prime",
+      "r": "r"
+    },
+    "b": 10000,
+    "digest_m_prime": {
+      "phase1": "7020b925c07c5a3808e1155700ca707598cb4f6d6089bb6daff4147b4d6b00bd",
+      "phase2": "7020b925c07c5a3808e1155700ca707598cb4f6d6089bb6daff4147b4d6b00bd"
+    },
+    "digest_r": {
+      "phase1": "7020b925c07c5a3808e1155700ca707598cb4f6d6089bb6daff4147b4d6b00bd",
+      "phase2": "7020b925c07c5a3808e1155700ca707598cb4f6d6089bb6daff4147b4d6b00bd"
+    },
+    "expected_digest": "7020b925c07c5a3808e1155700ca707598cb4f6d6089bb6daff4147b4d6b00bd",
+    "identity": {
+      "m_prime": {
+        "agree": true,
+        "matches_expected": true,
+        "phase1_digest": "7020b925c07c5a3808e1155700ca707598cb4f6d6089bb6daff4147b4d6b00bd",
+        "phase2_digest": "7020b925c07c5a3808e1155700ca707598cb4f6d6089bb6daff4147b4d6b00bd",
+        "reason": null,
+        "violated": false
+      },
+      "r": {
+        "agree": true,
+        "matches_expected": true,
+        "phase1_digest": "7020b925c07c5a3808e1155700ca707598cb4f6d6089bb6daff4147b4d6b00bd",
+        "phase2_digest": "7020b925c07c5a3808e1155700ca707598cb4f6d6089bb6daff4147b4d6b00bd",
+        "reason": null,
+        "violated": false
+      },
+      "violated": false
+    },
+    "n": 50,
+    "seed": 20260828,
+    "source_paths": {
+      "arm_m_prime_dir": "/home/brice/workspace/bloomery/.superpowers/sdd/2026-08-28-refalsify-battery-v2/real/runs/arm-m-prime/data",
+      "arm_r_dir": "/home/brice/workspace/bloomery/.superpowers/sdd/2026-08-28-refalsify-battery-v2/real/runs/arm-r/data",
+      "corpus_dir": "tools/memory_battery/corpus-v1",
+      "ledger_m_prime": "/home/brice/workspace/bloomery/.superpowers/sdd/2026-08-28-refalsify-battery-v2/real/runs/arm-m-prime/ledger.jsonl",
+      "ledger_r": "/home/brice/workspace/bloomery/.superpowers/sdd/2026-08-28-refalsify-battery-v2/real/runs/arm-r/ledger.jsonl"
+    }
+  },
+  "stamp_audit": {
+    "counts": {
+      "m_prime": {
+        "1": {
+          "none": 50
+        },
+        "2": {
+          "none": 50
+        }
+      },
+      "r": {
+        "1": {
+          "none": 50
+        },
+        "2": {
+          "premise_held": 50
+        }
+      }
+    },
+    "forbidden_spelling_hits": [],
+    "forbidden_spellings_absent": true,
+    "inconclusive_count": 0,
+    "offending_premise_held": [],
+    "premise_gone_hits": [],
+    "premise_gone_zero": true,
+    "premise_held_complete": true,
+    "skipped_ungranted_count": 0
+  }
+}
