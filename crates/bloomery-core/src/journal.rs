@@ -396,14 +396,26 @@ pub enum Event {
         task_id: String,
         episode_id: String,
     },
-    /// An injected episode's task failed its own verification, so the
-    /// episode's stored status became `contradicted` and it will never be
-    /// injected again (design §5, passive falsification — the organ reads
-    /// outcomes, it never re-executes anything to produce them).
+    /// An episode was refuted, so its stored status became `contradicted`
+    /// and it will never be injected again. One row, two ways to earn it:
     ///
-    /// `task_id` is the task that received the injection and then failed;
-    /// it is also the `contradicted_by` value written into the store row, so
-    /// the journal and the store name the same accuser.
+    /// - **Passive falsification** (memory-organ design §5): the task that
+    ///   received the injection then failed its own verification. The organ
+    ///   only reads that outcome; it initiates nothing to produce it.
+    /// - **Refalsification** (refalsify-on-exact design
+    ///   `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md`
+    ///   §2.3): before injecting, the worker re-ran the episode's own stored
+    ///   verification command under the incoming task's grant and it exited
+    ///   cleanly nonzero. That task then runs memory-silent, so its
+    ///   `Event::MemoryStamp` says `mode: "silent"` with
+    ///   `refalsify: Some("failed")` — which is also how a replay tells the
+    ///   two paths apart, the passive one always pairing with an `injected`
+    ///   stamp instead.
+    ///
+    /// `task_id` is the accusing task either way — the one that received the
+    /// injection and failed, or the one whose probe refuted it — and is also
+    /// the `contradicted_by` value written into the store row, so the
+    /// journal and the store always name the same accuser.
     MemoryContradicted {
         id: AgentId,
         task_id: String,

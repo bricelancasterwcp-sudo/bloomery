@@ -145,13 +145,22 @@ fn spec_for(goal: &str, grant: &Grant, cwd: &Path) -> TaskSpec {
     }
 }
 
-/// An operational organ: config switch on, a store in `dir/memory`.
-fn memory_ctx(dir: &Path, enabled: bool) -> Arc<MemoryContext> {
+/// An operational organ: config switch on, a store in `dir/memory`, and the
+/// `[memory] refalsify` opt-in (refalsify spec
+/// `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md` §5).
+///
+/// Every call in THIS file passes `false`, deliberately: these are the
+/// organ's own binding tests and they must keep measuring the
+/// inject-without-refalsify behavior the memory battery's GATE PASS was
+/// measured under. The parameter exists so that fact is stated at each call
+/// site rather than hidden in the helper — the probe's own suite
+/// (`memory_refalsify_test.rs`) mirrors this helper with the flag on.
+fn memory_ctx(dir: &Path, enabled: bool, refalsify: bool) -> Arc<MemoryContext> {
     let store = MemoryStore::load(&store_path(dir)).unwrap();
     Arc::new(MemoryContext {
         enabled,
         max_episodes: 64,
-        refalsify: false,
+        refalsify,
         disabled_reason: None,
         store: Some(Mutex::new(store)),
     })
@@ -316,7 +325,7 @@ fn verified_task_mints_and_journal_carries_stamp_and_mint() {
     let pager = Arc::new(Mutex::new(pager));
     let registry = TaskRegistry::new();
     let journal_path = dir.join("tasks.jsonl");
-    let ctx = memory_ctx(&dir, true);
+    let ctx = memory_ctx(&dir, true, false);
 
     let (task_id, result) = drive(
         &registry,
@@ -381,7 +390,7 @@ fn exact_repeat_is_injected_and_a_stranger_is_silent() {
     let pager = Arc::new(Mutex::new(pager));
     let registry = TaskRegistry::new();
     let journal_path = dir.join("tasks.jsonl");
-    let ctx = memory_ctx(&dir, true);
+    let ctx = memory_ctx(&dir, true, false);
     let goal = "make a.py say two";
 
     // 1. Mint.
@@ -501,7 +510,7 @@ fn injected_then_failed_contradicts_and_next_repeat_is_silent() {
     let pager = Arc::new(Mutex::new(pager));
     let registry = TaskRegistry::new();
     let journal_path = dir.join("tasks.jsonl");
-    let ctx = memory_ctx(&dir, true);
+    let ctx = memory_ctx(&dir, true, false);
     let goal = "make a.py say two";
 
     let (_, first) = drive(
@@ -601,7 +610,7 @@ fn memory_none_and_disabled_stamp_off_and_never_touch_the_store() {
     );
 
     std::fs::write(sb.join("a.py"), BEFORE).unwrap();
-    let disabled = memory_ctx(&dir, false);
+    let disabled = memory_ctx(&dir, false, false);
     assert!(!disabled.operational());
     let (off_id, off_result) = drive(
         &registry,
@@ -657,7 +666,7 @@ fn an_injected_episode_deleted_mid_task_is_not_journaled_as_contradicted() {
     let pager = Arc::new(Mutex::new(pager));
     let registry = TaskRegistry::new();
     let journal_path = dir.join("tasks.jsonl");
-    let ctx = memory_ctx(&dir, true);
+    let ctx = memory_ctx(&dir, true, false);
     let goal = "make a.py say two";
 
     let (_, first) = drive(
@@ -742,7 +751,7 @@ fn an_injected_task_that_ends_in_infra_error_does_not_contradict() {
     let pager = Arc::new(Mutex::new(pager));
     let registry = TaskRegistry::new();
     let journal_path = dir.join("tasks.jsonl");
-    let ctx = memory_ctx(&dir, true);
+    let ctx = memory_ctx(&dir, true, false);
     let goal = "make a.py say two";
 
     let (_, first) = drive(
@@ -831,7 +840,7 @@ fn an_oversized_memory_block_is_skipped_and_stamped_silent() {
     let pager = Arc::new(Mutex::new(pager));
     let registry = TaskRegistry::new();
     let journal_path = dir.join("tasks.jsonl");
-    let ctx = memory_ctx(&dir, true);
+    let ctx = memory_ctx(&dir, true, false);
     let goal = "make a.py say two";
 
     let cited_path = sb.join("a.py").display().to_string();
@@ -937,7 +946,7 @@ fn a_store_io_failure_leaves_the_task_result_intact_and_terminal() {
     let pager = Arc::new(Mutex::new(pager));
     let registry = TaskRegistry::new();
     let journal_path = dir.join("tasks.jsonl");
-    let ctx = memory_ctx(&dir, true);
+    let ctx = memory_ctx(&dir, true, false);
 
     // The store loaded fine; now make every future append fail at the OS
     // level by putting a directory where its file belongs.

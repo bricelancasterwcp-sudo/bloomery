@@ -446,9 +446,11 @@ pub struct MemoryConfig {
     #[serde(default = "default_max_episodes")]
     pub max_episodes: usize,
     /// Refalsify-on-exact (spec
-    /// `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md` §5):
-    /// `true` makes the worker probe a retrieved episode's stored run
-    /// command under the incoming task's grant before injecting. Default
+    /// `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md` —
+    /// activation §5; mechanism §2): `true` makes the worker probe a
+    /// retrieved episode's stored run command under the incoming task's
+    /// grant, `cwd` and `ExecBounds` before injecting; a clean nonzero exit
+    /// contradicts the episode and the task runs memory-silent. Default
     /// `false` — an enabled organ behaves exactly as the memory battery's
     /// GATE PASS measured (inject-without-refalsify) until the operator
     /// opts in. Read only when `enabled` is true.

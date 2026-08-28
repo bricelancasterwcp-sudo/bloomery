@@ -56,7 +56,7 @@
 //! **The memory organ's pipeline lives here** (memory-organ design
 //! `docs/superpowers/specs/2026-08-26-memory-organ-design.md` §4/§5), inside
 //! the same worker thread and around the same `run_task` call: retrieve →
-//! stamp → inject → run → mint-or-contradict. This is the only place in the
+//! probe → stamp → inject → run → mint-or-contradict. This is the only place in the
 //! daemon that has all three things the organ needs at once — the task's
 //! `TaskSpec` (goal, grant, cwd) before step 1, the task's own `Journal`
 //! handle, and the terminal `TaskResult` after. `api_task::create_task` has
@@ -69,6 +69,20 @@
 //! IO failure journals [`bloomery_core::journal::Event::Degraded`] and
 //! continues, per design §7 ("the organ being broken can only ever produce
 //! memory-off behavior — never a wrong injection, never a failed task").
+//!
+//! **The one execution the organ performs, and the law that permits it**
+//! (refalsify-on-exact design
+//! `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md` §2/§3).
+//! With `[memory] refalsify` on, [`organ_before_run`] re-runs a retrieved
+//! episode's own stored verification command before injecting it. Organ
+//! design §5's "the organ never executes anything" is revised by that spec
+//! to **the organ never *initiates* execution**: the probe is task-scoped —
+//! the incoming task's `Grant`, `cwd` and `ExecBounds`, through the same
+//! `exec_run` that task's own `run` verb uses, at that task's moment.
+//! Daemon-spontaneous execution stays banned, and everything else the organ
+//! does is still read-outcomes-only. The probe never journals a `TaskStep`
+//! and never renders into a prompt, so it is invisible to the transcript;
+//! and with the flag off (the default) it does not exist at all.
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -84,7 +98,7 @@ use crate::memory::render::render_memory_block;
 use crate::memory::store::MemoryStore;
 use crate::memory::{MemoryContext, MEMORY_BLOCK_MAX_BYTES};
 use crate::pager::Pager;
-use crate::task::{run_task, TaskResult, TaskSpec, TaskStatus};
+use crate::task::{exec_run, run_task, Observation, TaskResult, TaskSpec, TaskStatus};
 
 /// `Arc<Mutex<HashMap<task id, TaskResult>>>` per the Task 5 brief.
 /// `TaskResult` already carries `status`, so a `Running` entry is simply one
@@ -290,10 +304,10 @@ struct OrganDecision {
     block: Option<String>,
     /// The refalsification verdict this retrieval earned — see
     /// `Event::MemoryStamp::refalsify` for the closed set of spellings.
-    /// `None` means un-probed, which every decision is until the probe
-    /// itself lands: no current constructor sets anything else, so the
-    /// stamp's key stays `null` and flag-on behavior is still identical to
-    /// flag-off.
+    /// `None` means nothing was probed, which covers every decision the
+    /// probe never reaches: memory off, nothing retrieved, an oversize skip
+    /// (see [`organ_before_run`] on why the probe runs *after* that check),
+    /// and every decision at all while `[memory] refalsify` is off.
     refalsify: Option<&'static str>,
 }
 
@@ -314,17 +328,62 @@ impl OrganDecision {
     }
 }
 
-/// Steps 1-3 of the pipeline (design §3/§4): retrieve, then decide whether
-/// to inject, silence, or stay off.
+/// The probe's verdict, read off `exec_run`'s [`Observation`] (refalsify
+/// spec `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md`
+/// §2.3).
+///
+/// **Only a genuine nonzero exit contradicts.** A run that *completed*
+/// carries `failed: false` and `exec_run`'s pinned success-arm outcome
+/// `"ran {program} exit {code}"` — the same load-bearing constant
+/// `memory::mint::verifying_run` reads the mint bar out of. A `code` of `-1`
+/// is that arm's "no exit code" sentinel for a child killed by a signal
+/// (`status.code()` was `None`), not a real exit, so it can never be read as
+/// evidence the lesson is wrong. Every `failed: true` arm — timeout, spawn
+/// failure, wait failure — is environmental rather than semantic and
+/// classifies `inconclusive`, so the probe's own infrastructure can never
+/// cost a task its injection (spec §2.3; organ design §7).
+///
+/// Grant refusals never reach here: [`organ_before_run`]'s pre-check runs
+/// BEFORE anything spawns, precisely because a refusal `Observation` is
+/// shaped like a failed run and must never be mistakable for evidence.
+fn classify_probe(obs: &Observation) -> &'static str {
+    if obs.failed {
+        return "inconclusive";
+    }
+    // `rfind`, not `find`: `argv[0]` is interpolated into the outcome ahead
+    // of the suffix, and a program named with a literal " exit " in it would
+    // otherwise capture the parse.
+    match obs
+        .outcome
+        .rfind(" exit ")
+        .and_then(|i| obs.outcome[i + " exit ".len()..].parse::<i64>().ok())
+    {
+        Some(0) => "passed",
+        Some(code) if code > 0 => "failed",
+        // The signal sentinel (-1), and any outcome this cannot parse at
+        // all: neither is a clean nonzero exit, so neither accuses.
+        _ => "inconclusive",
+    }
+}
+
+/// Steps 1-3 of the pipeline (design §3/§4), plus refalsification's probe
+/// (refalsify spec
+/// `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md` §2):
+/// retrieve, then decide whether to inject, silence, or stay off.
 ///
 /// Rendering happens here, before the caller writes the stamp, because the
 /// oversize rule can turn an otherwise-injected episode into a silent one —
 /// and a stamp claiming an injection the prompt never carried would be the
 /// one lie that row exists to prevent.
+///
+/// `agent_id` is needed only by the probe's failing arm, which journals the
+/// ordinary `Event::MemoryContradicted` row — the same row and the same
+/// accusation shape passive contradiction uses in [`organ_after_run`].
 fn organ_before_run(
     organ: Option<(&Mutex<MemoryStore>, usize, bool)>,
     spec: &TaskSpec,
     task_id: &str,
+    agent_id: &str,
     journal: &mut Journal,
 ) -> OrganDecision {
     // Step 1: retrieve, holding the store lock only for the read itself —
@@ -332,10 +391,10 @@ fn organ_before_run(
     // retrieval behind this one's whole execution.
     //
     // The tuple's third element is the `[memory] refalsify` opt-in
-    // (`docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md` §5),
-    // deliberately UNREAD here: this slice only plumbs the flag through, so
-    // flag-on and flag-off behavior are still bit-identical.
-    let Some((store, _, _)) = organ else {
+    // (refalsify spec §5); the probe it gates is below, after the two-stage
+    // exact gate and the oversize rule have both said this episode would
+    // otherwise inject.
+    let Some((store, _, refalsify)) = organ else {
         return OrganDecision::off();
     };
     let retrieval = {
@@ -379,12 +438,109 @@ fn organ_before_run(
         };
     }
 
+    // Refalsify-on-exact (refalsify spec §2): re-run the episode's own
+    // stored verification under THIS task's granted capability before
+    // trusting it.
+    //
+    // **Order: deliberately AFTER the oversize check.** The probe runs only
+    // on an episode that would otherwise inject, so a block this task was
+    // never going to carry costs no execution at all — and the oversize skip
+    // above keeps stamping `refalsify: None`, which is the truth of it:
+    // nothing was probed. The other order (probe, then discover the block is
+    // too big) would spend a subprocess to learn something the cheap check
+    // already knew.
+    //
+    // The store lock is NOT held across this. Retrieval released it above,
+    // and a probe may legitimately run for the whole of
+    // `ExecBounds::run_timeout_secs` — holding the store across that would
+    // serialize every other task's retrieval behind this one's subprocess.
+    let verdict = if refalsify {
+        // Coverage pre-check and demotion, BEFORE any execution attempt
+        // (spec §2.1). An `exec_run` grant refusal is an `Observation`
+        // shaped like a failed run, and a refusal must never be mistakable
+        // for evidence — so the refusal case is decided here rather than
+        // classified from an outcome string. Demotion outranks the grant: a
+        // task that may not `run` has no commands executed at its moment,
+        // whatever its grant happens to say.
+        if !spec.mutating_verbs
+            || spec
+                .grant
+                .check_command(&episode.run_evidence.argv)
+                .is_err()
+        {
+            Some("skipped_ungranted")
+        } else {
+            // The task loop's own executor, with the incoming task's grant,
+            // cwd and bounds — the identical capability check, output cap
+            // and timeout this task's own `run` verb would get. A probe
+            // never journals a `TaskStep` and never renders into a prompt:
+            // it is not a model action.
+            let obs = exec_run(
+                &spec.grant,
+                &spec.cwd,
+                &episode.run_evidence.argv,
+                &spec.bounds,
+            );
+            Some(classify_probe(&obs))
+        }
+    } else {
+        None
+    };
+
+    if verdict == Some("failed") {
+        // The same accusation mechanism passive contradiction uses (spec
+        // §2.3): mark the store, journal the ordinary `MemoryContradicted`
+        // row citing THIS task, and hand the task silence — byte-identical
+        // to a stranger's prompt.
+        //
+        // The three arms mirror `organ_after_run`'s exactly, including
+        // R-PF-2's `Ok(false)`: an operator's `DELETE /memory/{id}` can land
+        // between this task's retrieval and its probe, and journaling a
+        // contradiction for a row that never changed would fabricate store
+        // history. The lock is taken for the mark alone and released before
+        // the journal write.
+        //
+        // Whatever any of that reports, the silence stands (spec §7): the
+        // task must not receive guidance the probe just refuted, even if
+        // recording the refutation failed.
+        let marked = {
+            let mut store = lock_store(store, journal);
+            store.mark_contradicted(&episode.episode_id, task_id)
+        };
+        match marked {
+            Ok(true) => record(
+                journal,
+                &Event::MemoryContradicted {
+                    id: agent_id.to_string(),
+                    task_id: task_id.to_string(),
+                    episode_id: episode.episode_id.clone(),
+                },
+            ),
+            Ok(false) => {}
+            Err(e) => degrade(
+                journal,
+                format!(
+                    "memory organ: could not contradict episode {} refuted by task {task_id}'s \
+                     refalsification probe: {e}",
+                    episode.episode_id
+                ),
+            ),
+        }
+        return OrganDecision {
+            mode: "silent",
+            candidates_checked: retrieval.candidates_checked,
+            injected_id: None,
+            block: None,
+            refalsify: verdict,
+        };
+    }
+
     OrganDecision {
         mode: "injected",
         candidates_checked: retrieval.candidates_checked,
         injected_id: Some(episode.episode_id.clone()),
         block: Some(block),
-        refalsify: None,
+        refalsify: verdict,
     }
 }
 
@@ -411,8 +567,10 @@ fn organ_after_run(
     outcome: &OrganOutcome<'_>,
     journal: &mut Journal,
 ) {
-    // The tuple's `refalsify` flag is a *before*-run concern only (design §5:
-    // the probe runs at the retrieval moment); nothing after the run reads it.
+    // The tuple's `refalsify` flag is a *before*-run concern only (refalsify
+    // spec `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md`
+    // §2: the probe runs at the retrieval moment, before injection); nothing
+    // after the run reads it.
     let Some((store, max_episodes, _)) = organ else {
         return;
     };
@@ -657,7 +815,7 @@ impl TaskRegistry {
             let decision = contained(
                 &mut journal,
                 &format!("retrieval for task {worker_task_id}"),
-                |journal| organ_before_run(organ, &spec, &worker_task_id, journal),
+                |journal| organ_before_run(organ, &spec, &worker_task_id, &agent_id, journal),
             )
             .unwrap_or_else(OrganDecision::off);
             // Step 3: injection is the caller's write, from a decision that
@@ -786,6 +944,64 @@ mod tests {
     use crate::task::ExecBounds;
     use bloomery_core::action::PatchCodec;
     use bloomery_core::journal::replay;
+
+    /// [`classify_probe`]'s rule, arm by arm (refalsify spec §2.3) — tested
+    /// here rather than only through `tests/memory_refalsify_test.rs`
+    /// because two of these arms have no honest full-fixture spelling.
+    ///
+    /// The `failed: true` guard is the sharp one. Today every `failed: true`
+    /// outcome `exec_run` produces (`"ran {p} timed out"`, `"run failed:
+    /// ..."`) happens to carry no `" exit "` substring, so the parse below
+    /// falls through to `inconclusive` even with the guard deleted — a
+    /// property of the current outcome *strings*, not of the rule. The rule
+    /// is that a run which never COMPLETED carries no evidence about what
+    /// the command would have reported, whatever its text says, so this
+    /// hands the classifier a `failed: true` observation whose outcome
+    /// *would* parse as a clean nonzero exit. Without that case, an
+    /// executor that ever grew a timeout message containing an exit code
+    /// would start contradicting episodes over a timeout, and nothing would
+    /// notice.
+    #[test]
+    fn classify_probe_reads_only_completed_runs_and_only_real_exit_codes() {
+        let obs = |outcome: &str, failed: bool| Observation {
+            outcome: outcome.to_string(),
+            content: String::new(),
+            failed,
+            touched: None,
+        };
+
+        assert_eq!(classify_probe(&obs("ran sh exit 0", false)), "passed");
+        assert_eq!(classify_probe(&obs("ran sh exit 1", false)), "failed");
+        assert_eq!(classify_probe(&obs("ran sh exit 137", false)), "failed");
+        // `exec_run`'s signal-death sentinel: `status.code()` was `None`, so
+        // -1 is "no exit code", not a nonzero one. It must never accuse.
+        assert_eq!(
+            classify_probe(&obs("ran sh exit -1", false)),
+            "inconclusive"
+        );
+        // Never completed — environmental, not semantic, on both the arm
+        // that exists today and the one that would parse if it did.
+        assert_eq!(
+            classify_probe(&obs("ran sh timed out", true)),
+            "inconclusive"
+        );
+        assert_eq!(classify_probe(&obs("ran sh exit 1", true)), "inconclusive");
+        assert_eq!(
+            classify_probe(&obs("run failed: could not spawn \"sh\"", true)),
+            "inconclusive"
+        );
+        // `rfind`, not `find`: argv[0] is interpolated ahead of the suffix,
+        // so a program name containing " exit " must not capture the parse.
+        assert_eq!(
+            classify_probe(&obs("ran my exit 9 tool exit 0", false)),
+            "passed"
+        );
+        // Unparseable is not an accusation either.
+        assert_eq!(
+            classify_probe(&obs("ran sh exit notanumber", false)),
+            "inconclusive"
+        );
+    }
 
     /// The organ's panic containment, at the seam that carries it (review
     /// finding, 2026-08-26). Both organ regions run in the worker thread

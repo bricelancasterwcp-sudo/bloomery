@@ -60,9 +60,11 @@ pub struct MemoryContext {
     /// passed to [`store::MemoryStore::mint`] at every mint.
     pub max_episodes: usize,
     /// The `[memory] refalsify` opt-in (refalsify-on-exact spec
-    /// `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md` §5,
-    /// default `false`): whether the worker probes a retrieved episode's
-    /// stored run command under the incoming task's grant before injecting.
+    /// `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md` —
+    /// activation §5, mechanism §2; default `false`): whether the worker
+    /// probes a retrieved episode's stored run command under the incoming
+    /// task's grant, `cwd` and `ExecBounds` before injecting, and
+    /// contradicts the episode on a clean nonzero exit.
     /// Meaningful only for an [`operational`](Self::operational) organ — the
     /// flag never turns an organ on, it only changes what an already-on
     /// organ does before it speaks.
