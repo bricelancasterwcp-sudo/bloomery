@@ -151,6 +151,11 @@ pre-registers its own memory-on lens.
 
 ## 5. Falsification: passive only
 
+> **Amended 2026-08-27:** active refalsification exists now, as a
+> task-scoped probe under the incoming task's grant — see
+> `2026-08-27-refalsify-on-exact-design.md`. Daemon-spontaneous execution
+> stays banned; everything else in this section stands.
+
 The organ never executes anything, so falsification never re-runs a cited
 command. Two guards carry it:
 

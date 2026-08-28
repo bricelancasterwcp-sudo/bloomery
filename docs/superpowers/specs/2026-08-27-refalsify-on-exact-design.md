@@ -118,6 +118,17 @@ passive-contradiction path, and rendered memory block are all untouched.
 A probe never appears in the transcript, never renders into any prompt,
 and never journals a `TaskStep` — it is not a model action.
 
+**Amended 2026-08-27 (post-review):** the implemented order is retrieve →
+render → oversize gate → probe → stamp, which supersedes this section's
+literal "before rendering or stamping": the probe runs AFTER the rendered
+block has cleared `MEMORY_BLOCK_MAX_BYTES`, so an episode the oversize rule
+has already turned silent is never executed. The rationale is the oversize
+rule's own — a block this task was never going to carry must not cost a
+subprocess to learn what the cheap check already knew — and the oversize
+skip keeps stamping `refalsify: None`, which is the truth of it: nothing
+was probed. What the four verdicts actually depend on is unchanged and
+still holds: the probe precedes the stamp and precedes every injection.
+
 ## 3. The law, revised
 
 Organ spec §5's "the organ never executes anything" is revised to: **the
@@ -163,6 +174,24 @@ the trade is favorable — it makes the trade available, gated off, and
 measurable later. The one cost asymmetry worth naming: passive
 contradiction spends a full failed task to learn what a probe learns in
 one command.
+
+**Amended 2026-08-27 (post-review):** the cost is not only wall-clock —
+the probe also has a **side-effect surface**, and it must be named. A
+probe executes the episode's stored command in the INCOMING task's `cwd`
+with that task's write grants, BEFORE the task takes its first step, so a
+stored verification like `make clean && make` — or any test run that
+writes artifacts, migrates a database, or touches the tree — materially
+alters the world the receiving task then starts in. This is inherent to
+task-scoped probing rather than a defect of this implementation: §2.2
+authorizes exactly the executor, grant, cwd and bounds the task's own
+`run` verb would get, and a stored verification is only evidence if it is
+the real command, run for real. The arc's canary test demonstrates it
+directly — the pass-path fixture detects its own probe by the file the
+stored command writes into the sandbox, and the flag-off and skip tests
+prove the absence of that file when nothing ran. The honest statement for
+a future battery to weigh alongside tokens and wall time: refalsify-on
+exercises the task's own grants one command early, and is not
+side-effect-free.
 
 ## 7. Error handling
 
