@@ -1538,3 +1538,35 @@ queued refalsify-on battery over the v1 corpus is cancelled as designed
 (100% patch-class: every endpoint entailed pre-boot). Open: refalsify-v2
 (class-aware / expectation-matched probe) needs its own spec; the §6 cost
 question transfers to it.
+
+**Amended 2026-08-28 (refalsify v2 closes the erratum):** the
+domain-of-validity erratum above is closed by refalsify v2
+(`docs/superpowers/specs/2026-08-28-refalsify-v2-class-aware-design.md`,
+commit `7a930d4`; branch head `32431b8`): the two clean-outcome verdicts
+invert — a clean nonzero exit now injects, stamped `premise_held` (the
+failure confirms the matched premise); a clean exit 0 goes silent with no
+store mutation, stamped `premise_gone` — and no probe verdict ever calls
+`mark_contradicted`. The stamp spellings `passed` and `failed` retire
+from reachable probe verdicts under v2; they remain valid, parseable
+spellings in journals written by v1 builds (refalsify-on-exact design
+`docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md` §2.3) —
+retired, not removed, no schema change. Open: the queued
+refalsify-on-battery slice is re-registered against v2 as its own future
+pre-registration (v1 spec §6's cost question transfers to it, per the v2
+spec §5), and remains unscheduled.
+
+A second tension was found by this arc's implementer during v2's own
+implementation, verified by its reviewer and by the controller against
+`crates/bloomery-daemon/src/task/registry.rs:599`: a correct
+`premise_held` injection into a task that legitimately completes without
+its own patch-and-verifying-run cycle is passively contradicted by the
+pre-existing memory-organ design §5 rule (`organ_after_run`: a scored
+outcome with no verifying run contradicts whatever was injected) — the
+poisoning is indistinguishable from "the lesson was wrong." This is
+pre-existing discipline, not a v2 defect (the rule predates this spec and
+is unchanged by it), but v2 changes which episodes get injected via
+probing — `premise_held` now injects into cases v1 either never probed
+(flag off) or contradicted outright — so the practical weight this
+discipline carries shifts even though its text does not. A future slice
+weighing it should start from the memory-organ design's §5, not from the
+probe. Recorded as a second named limitation in the v2 spec's §1.

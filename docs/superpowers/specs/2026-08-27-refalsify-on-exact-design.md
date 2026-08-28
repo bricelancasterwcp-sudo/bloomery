@@ -104,6 +104,10 @@ and before rendering or stamping, with `[memory] refalsify = true`:
      passes on the PRE-state — see the domain-of-validity erratum
      appended to §6. For a patch-class episode this failure is entailed
      by the exact match itself and refutes a true lesson.)**
+     **Superseded 2026-08-28 by refalsify v2**
+     (`docs/superpowers/specs/2026-08-28-refalsify-v2-class-aware-design.md`,
+     commit `7a930d4`): the clean-outcome verdicts invert to
+     premise_held/premise_gone and no probe contradicts.
    - **Timeout or spawn failure** → inject, stamp `inconclusive`. Not
      clean evidence the lesson is wrong — environmental, not semantic —
      and the organ's own law ("total failure must be indistinguishable
@@ -241,6 +245,11 @@ store at one subprocess per retrieval). §6's open question ("whether
 earlier contradiction detection pays for its execution cost") remains
 open and now presupposes a v2 probe whose verdict is informative for both
 episode classes; the v2 design is a separate spec.
+
+**Superseded 2026-08-28 by refalsify v2**
+(`docs/superpowers/specs/2026-08-28-refalsify-v2-class-aware-design.md`,
+commit `7a930d4`): the clean-outcome verdicts invert to
+premise_held/premise_gone and no probe contradicts.
 
 ## 7. Error handling
 

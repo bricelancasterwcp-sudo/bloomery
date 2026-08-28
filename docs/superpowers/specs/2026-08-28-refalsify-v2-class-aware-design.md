@@ -43,6 +43,22 @@ noise, not damage, and the passive contradiction path still catches the
 aftermath. Distinguishing that case needs recorded pre-state evidence —
 option (ii), out of scope, not foreclosed.
 
+**Named limitation, second (2026-08-28, found during this arc's
+implementation, verified by its reviewer and by the controller against
+`crates/bloomery-daemon/src/task/registry.rs:599`):** a correct
+`premise_held` injection into a task that legitimately completes without
+its own patch-and-verifying-run cycle is passively contradicted by the
+pre-existing memory-organ design §5 rule (`organ_after_run`: a scored
+outcome with no verifying run contradicts whatever was injected) — the
+poisoning is indistinguishable from "the lesson was wrong." This is
+pre-existing discipline, not a v2 defect: the rule predates this spec and
+is unchanged by it. What v2 changes is which episodes get injected via
+probing — `premise_held` now injects into cases v1 either never probed
+(flag off) or contradicted outright — so the practical weight this
+discipline carries shifts even though its text does not. A future slice
+weighing it should start from the memory-organ design's §5, not from this
+probe.
+
 ## 2. Verdicts
 
 Unchanged arms: the coverage pre-check and demotion boundary

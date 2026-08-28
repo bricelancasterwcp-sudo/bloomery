@@ -404,25 +404,34 @@ pub enum Event {
         episode_id: String,
     },
     /// An episode was refuted, so its stored status became `contradicted`
-    /// and it will never be injected again. One row, two ways to earn it:
+    /// and it will never be injected again. Under refalsify v2, there is
+    /// exactly one live way to earn this row:
     ///
-    /// - **Passive falsification** (memory-organ design §5): the task that
-    ///   received the injection then failed its own verification. The organ
-    ///   only reads that outcome; it initiates nothing to produce it.
-    /// - **Refalsification** (refalsify-on-exact design
-    ///   `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md`
-    ///   §2.3): before injecting, the worker re-ran the episode's own stored
-    ///   verification command under the incoming task's grant and it exited
-    ///   cleanly nonzero. That task then runs memory-silent, so its
-    ///   `Event::MemoryStamp` says `mode: "silent"` with
-    ///   `refalsify: Some("failed")` — which is also how a replay tells the
-    ///   two paths apart, the passive one always pairing with an `injected`
-    ///   stamp instead.
+    /// - **Passive falsification** (memory-organ design §5,
+    ///   `organ_after_run`): the task that received the injection then
+    ///   failed its own verification. The organ only reads that outcome; it
+    ///   initiates nothing to produce it.
     ///
-    /// `task_id` is the accusing task either way — the one that received the
-    /// injection and failed, or the one whose probe refuted it — and is also
-    /// the `contradicted_by` value written into the store row, so the
-    /// journal and the store always name the same accuser.
+    /// Refalsify v2
+    /// (`docs/superpowers/specs/2026-08-28-refalsify-v2-class-aware-design.md`)
+    /// retired a second, formerly-live source of this row: the
+    /// refalsify-on-exact probe (`docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md`
+    /// §2.3) used to re-run an episode's stored verification before
+    /// injection and, on a clean nonzero exit, call `mark_contradicted`
+    /// itself, stamping `Event::MemoryStamp`'s `refalsify: Some("failed")`.
+    /// Under v2 no probe verdict ever contradicts: a clean nonzero exit now
+    /// injects, stamped `Some("premise_held")`, and a clean exit 0 goes
+    /// silent with no store mutation, stamped `Some("premise_gone")`. Rows
+    /// written by v1 builds — where a probe contradicted and stamped
+    /// `Some("failed")` — exist in historical journals and still parse: a
+    /// retired spelling, not a schema break.
+    ///
+    /// `task_id` is the accusing task: the one that received the injection
+    /// and then failed its own verification — the only live path under
+    /// v2 — or, in a journal written by a v1 build, the one whose probe
+    /// refuted it. Either way it is also the `contradicted_by` value
+    /// written into the store row, so the journal and the store always
+    /// name the same accuser.
     MemoryContradicted {
         id: AgentId,
         task_id: String,
