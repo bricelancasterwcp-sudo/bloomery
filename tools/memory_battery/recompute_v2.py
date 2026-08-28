@@ -6,79 +6,66 @@ the analysis instrument for the refalsify-v2 cost-and-preservation battery.
 **Two arms, honest labels.** `m_prime` (`[memory] refalsify = false`) and
 `r` (`[memory] refalsify = true`) -- design spec §5: "battery-v1's `c_/m_`
 slot names must not be reused for different semantics." No output key,
-reason string, or fixture in this module or its tests ever spells an arm
-`C`/`M`; a ledger carrying either label is REJECTED unconditionally by
-`_check_arm_labels`, regardless of what `expected_arm_labels` says (the
-override exists only to let the dry-shakedown's `M_PRIME_DRY`/`R_DRY`
-ledgers parse).
+reason string, or fixture here ever spells an arm `C`/`M`; a ledger
+carrying either label is REJECTED unconditionally by `_check_arm_labels`
+regardless of `expected_arm_labels` (which exists only so the
+dry-shakedown's `M_PRIME_DRY`/`R_DRY` ledgers parse).
 
-**Reuse-mechanism choice (recorded here per the task-1 brief): direct
-underscore imports, no `recompute_shared.py`.** `_load_arm`
-(`recompute_join.py`), `_read_ledger`/`_index_memory_stamps`/
-`_task_step_duration_by_agent` (`recompute_journal.py`), and
-`_bootstrap_diff_independent`/`HYGIENE_SE_MULTIPLIER`/`INFRA_RATE_CEILING`
-(`recompute_bootstrap.py`) are imported straight from their modules, exactly
-as `recompute.py` itself already imports across these same module
+**Reuse-mechanism choice: direct underscore imports, no
+`recompute_shared.py`.** `_load_arm` (`recompute_join.py`), the ledger/
+journal row readers (`recompute_journal.py`), and the bootstrap/rate
+primitives + `_check_identity`/`_check_arm_completeness`
+(`recompute_bootstrap.py`) are imported straight from their modules --
+exactly how `recompute.py` itself already imports across these same
 boundaries. Leading-underscore names are a *convention*, not an import
-barrier -- there is nothing fragile about it, and this codebase already
-relies on the pattern. `_corpus_sha` is imported from `recompute.py` for
-the same reason (pure manifest-hash math, no C/M semantics baked in). A
-`recompute_shared.py` escape hatch was considered and not needed: nothing
-here requires editing a v1 file, and no v1 import site raised, moved, or
-otherwise misbehaved when used this way. NONE of `recompute.py`/
+barrier; nothing here required editing a v1 file, so the
+`recompute_shared.py` escape hatch was not needed. NONE of `recompute.py`/
 `recompute_join.py`/`recompute_journal.py`/`recompute_bootstrap.py`/
 `driver.py`/`corpus.py` is edited by this module.
 
 **Deliberately NOT reused (label-honesty, spec §5):** `_check_h1` (no v2
-analogue -- design spec §4: "both arms carry the treatment-relevant store");
-`_check_h2`/`_check_h3`/`_check_e1`/`_check_treatment_identity`/
-`_paired_deltas_m` all bake literal `"C"`/`"M"` (or `c_`/`m_`-prefixed key
-names) into their reason strings or return-dict keys -- reusing them
-verbatim would leak v1's slot spelling into v2's honestly-labeled output.
-Their FORMULAS are the same shape (equivalence/infra-rate/median), so this
-module re-implements the thin presentation layer locally while still
-calling the shared, label-agnostic PURE MATH primitives
-(`_bootstrap_diff_independent`, `HYGIENE_SE_MULTIPLIER`,
-`INFRA_RATE_CEILING`). `_check_identity` IS reused directly -- its
-`arm_label` is a caller-supplied parameter, not a hardcoded `"C"`/`"M"`, so
-passing `"m_prime"`/`"r"` produces honestly-labeled output for free.
+analogue -- both arms carry the treatment-relevant store); `_check_h2`/
+`_check_h3`/`_check_e1`/`_check_treatment_identity`/`_paired_deltas_m` all
+bake literal `"C"`/`"M"` (or `c_`/`m_`-prefixed keys) into their reason
+strings or return shape. Their FORMULAS are the same shape, so this module
+re-implements the thin presentation layer locally while calling the
+shared, label-agnostic PURE MATH primitives (`_bootstrap_diff_independent`,
+`HYGIENE_SE_MULTIPLIER`, `INFRA_RATE_CEILING`). `_check_identity` and
+`_check_arm_completeness` ARE reused directly -- both take `arm_label` as
+a caller-supplied parameter rather than a hardcoded `"C"`/`"M"`, so passing
+`"m_prime"`/`"r"` produces honestly-labeled output for free.
 
 **No superiority/inferiority endpoint here.** G1 is an EQUIVALENCE gate
 (`|diff| <= band`), not E1's one-sided `median_M <= median_C - delta_min`
--- design spec §4 names G1's formula explicitly and the task-1 brief is
-explicit that "E1 is v1's, not copied." This module owns its own
-`_median_or_none` (a local one-liner, not imported from
-`recompute_bootstrap.py`) specifically so mutation check #1 ("median ->
-mean in G1") can be a surgical, single-line edit inside THIS file, never
-touching the shared v1 helper other endpoints (H1/H2/E1 in `recompute.py`)
+-- the task-1 brief is explicit that "E1 is v1's, not copied." This module
+owns its own `_median_or_none` (a local one-liner, not imported) so
+mutation check #1 ("median -> mean in G1") is a surgical, single-line edit
+here, never touching the shared v1 helper `recompute.py`'s own H1/H2/E1
 still depend on.
 
-**G1's floor-saturation clause is a judgment call, flagged here (task-3/
-task-4 judgment-call precedent).** Design spec §4's kill-criteria only
-states the floor-saturation PRINCIPLE ("if median differences sit under
-the band's resolution because the cost distribution is floor-saturated,
-the verdict is UNMEASURABLE, not PASS") without restating v1 E1's exact
-one-sided `headroom = median_C,p2 - min_C,p2 < delta_min` formula, because
-E1's formula is inherently directional (only the REFERENCE arm's headroom
-matters for a one-sided "M beats C by delta_min" test) and G1 is a
-SYMMETRIC two-sided equivalence test with no reference arm. Resolved here
-by generalizing headroom to BOTH arms: `headroom_x = median_x,p2 -
-min_x,p2` for x in {m_prime, r}; if EITHER arm's headroom is under the
-band, that arm's distribution cannot express a real difference of the
-band's own size, so the verdict is UNMEASURABLE rather than a PASS granted
-by compression instead of earned by resolution.
+**G1's floor-saturation clause is a judgment call.** Design spec §4's
+kill-criteria states the floor-saturation PRINCIPLE without restating v1
+E1's one-sided `headroom = median_C,p2 - min_C,p2 < delta_min` formula,
+because E1's formula is directional (checks only the reference arm) and
+G1 is a SYMMETRIC equivalence test with no reference arm. Resolved by
+generalizing headroom to BOTH arms: `headroom_x = median_x,p2 - min_x,p2`
+for x in {m_prime, r}; if EITHER is under the band, the verdict is
+UNMEASURABLE rather than a PASS granted by compression instead of earned
+by resolution.
 
-**RNG consumption order** (one seeded `random.Random(seed)` instance,
-created fresh inside `recompute_v2()`, never module-level, never reseeded
-mid-call -- same determinism discipline as `recompute.py`): H2 first, G1
-second -- design spec §4's own ordering ("Hygiene ... computed before any
-gate is read"). No other endpoint in this module touches the RNG (A1 is
-advisory arithmetic only, per design spec §4: "advisory, never gates" --
-no SE/band is computed for it).
+**RNG order**: one seeded `random.Random(seed)` instance, created fresh
+inside `recompute_v2()`. H2 first, G1 second (design spec §4: "Hygiene ...
+computed before any gate is read"). Nothing else touches it -- A1 is
+advisory arithmetic only, no SE/band.
 
-Python 3 stdlib only (`argparse`, `json`, `random`, `statistics`, `sys`);
-no GPU access, no clock reads -- every number derives from journal/ledger/
-manifest bytes already on disk, exactly like `recompute.py`.
+**CLI enforces, library stays permissive** (review findings CRITICAL +
+IMPORTANT-1, v1's I3 precedent): `recompute_v2()` always COMPUTES
+`completeness` and `lens["identity"]` but never raises or forces a verdict
+on their violation -- `main()`'s `_cli_fatal_checks` is the layer that
+turns either violation into a hard, pre-JSON, nonzero-exit failure.
+
+Python 3 stdlib only; no GPU access, no clock reads -- every number
+derives from journal/ledger/manifest bytes already on disk.
 """
 
 from __future__ import annotations
@@ -96,6 +83,7 @@ from tools.memory_battery.recompute_bootstrap import (
     HYGIENE_SE_MULTIPLIER,
     INFRA_RATE_CEILING,
     _bootstrap_diff_independent,
+    _check_arm_completeness,
     _check_identity,
 )
 from tools.memory_battery.recompute_join import _load_arm
@@ -127,6 +115,15 @@ FORBIDDEN_ARM_LABELS = frozenset({"C", "M"})
 FORBIDDEN_REFALSIFY_SPELLINGS = frozenset({"passed", "failed"})
 NO_PROBE_SPELLING_KEY = "none"  # JSON-safe stand-in for a `None` refalsify.
 
+# Design spec §4, stamp audit, quoted verbatim: "inconclusive (probe
+# timeout/spawn) and skipped_ungranted expected 0; tolerated within H3's
+# infra budget, counted and named individually." Review finding
+# IMPORTANT-2: these two spellings are TOLERATED on an injected stamp --
+# counted, but never themselves an `premise_held_complete` violation (only
+# a genuinely offending spelling -- premise_gone, a forbidden v1 spelling,
+# or an unexpected None -- counts as offending).
+TOLERATED_NON_PREMISE_HELD_SPELLINGS = frozenset({"inconclusive", "skipped_ungranted"})
+
 
 def _median_or_none(values: Sequence[float]) -> float | None:
     """Local, NOT imported from `recompute_bootstrap.py` -- see module
@@ -135,9 +132,7 @@ def _median_or_none(values: Sequence[float]) -> float | None:
     return statistics.median(values) if values else None
 
 
-# ---------------------------------------------------------------------------
 # Per-task detail join (refalsify spelling + wall_ms), name-keyed.
-# ---------------------------------------------------------------------------
 
 
 def _arm_task_details(
@@ -146,22 +141,15 @@ def _arm_task_details(
     """One arm's (phase, task name) -> {"refalsify", "wall_ms"} detail,
     restricted to exactly the non-dropped, joined task-halves `_load_arm`
     already decided are valid (`arm_result["view"]["modes"][phase]`'s own
-    keys) -- this function never re-derives drop/join validity itself
-    (that stays exclusively `_measure_arm`'s job, in the v1-immutable
-    `recompute_join.py`).
-
-    `MemoryStamp`'s `refalsify` field and per-agent wall (`TaskStep.
-    duration_ms` summed) are the two things `_load_arm`'s own view does
-    NOT expose name-keyed (`view["wall_ms"]` is a flat, unkeyed list; no
-    view field carries `refalsify` at all) -- reads the ledger + the
-    arm's own `tasks_journal_rows` (both already returned by `_load_arm`
-    or trivially re-readable via `recompute_journal.py`'s reused row
-    parsers) to fill that gap, independent of `_measure_arm`'s own join.
+    keys) -- never re-derives drop/join validity itself (`_measure_arm`'s
+    job, in v1-immutable `recompute_join.py`). Fills a gap `_load_arm`'s
+    view leaves open: `refalsify` isn't exposed at all, and `wall_ms` is
+    only a flat unkeyed list -- re-reads the ledger + the arm's own
+    `tasks_journal_rows` via `recompute_journal.py`'s reused row parsers.
 
     **Mutation check #2 lives here**: `stamp.get("id")` (the AGENT id,
     the correct key into `step_walls`) versus `task_id` (the ledger's
-    task-half id, the WRONG field) -- see this module's own mutation
-    record for the swap and its kill."""
+    task-half id, the WRONG field)."""
     ledger_task_halves, _identity_rows = _read_ledger(Path(ledger_path))
     stamps_by_task_id = _index_memory_stamps(arm_result["tasks_journal_rows"])
     step_walls = _task_step_duration_by_agent(arm_result["tasks_journal_rows"])
@@ -180,9 +168,7 @@ def _arm_task_details(
     return details
 
 
-# ---------------------------------------------------------------------------
 # Arm-label honesty (design spec §5; task-1 brief's `expected_arm_labels`).
-# ---------------------------------------------------------------------------
 
 
 def _check_arm_labels(
@@ -219,9 +205,7 @@ def _check_arm_labels(
         raise ValueError("recompute_v2: arm-label check failed: " + "; ".join(problems))
 
 
-# ---------------------------------------------------------------------------
 # G1 -- token preservation (equivalence gate, design spec §4).
-# ---------------------------------------------------------------------------
 
 
 def _g1_token_preservation(
@@ -235,14 +219,18 @@ def _g1_token_preservation(
     generalization of v1 E1's one-sided headroom formula)."""
     costs_m_prime_p2 = list(view_m_prime["costs"][2].values())
     costs_r_p2 = list(view_r["costs"][2].values())
-    n_m_prime, n_r = len(costs_m_prime_p2), len(costs_r_p2)
     median_m_prime = _median_or_none(costs_m_prime_p2)
     median_r = _median_or_none(costs_r_p2)
+    base = {
+        "median_m_prime_p2": median_m_prime,
+        "median_r_p2": median_r,
+        "n_m_prime_p2": len(costs_m_prime_p2),
+        "n_r_p2": len(costs_r_p2),
+    }
 
     if median_m_prime is None or median_r is None:
         return {
-            "median_m_prime_p2": median_m_prime,
-            "median_r_p2": median_r,
+            **base,
             "diff": None,
             "se_boot": None,
             "band": None,
@@ -250,8 +238,6 @@ def _g1_token_preservation(
             "headroom_r": None,
             "verdict": "UNMEASURABLE",
             "reason": "G1 unmeasurable: no non-dropped phase-2 tasks in one or both arms",
-            "n_m_prime_p2": n_m_prime,
-            "n_r_p2": n_r,
         }
 
     diff = median_r - median_m_prime
@@ -259,48 +245,27 @@ def _g1_token_preservation(
     band = HYGIENE_SE_MULTIPLIER * se_boot
     headroom_m_prime = median_m_prime - min(costs_m_prime_p2)
     headroom_r = median_r - min(costs_r_p2)
+    base.update(
+        {"diff": diff, "se_boot": se_boot, "band": band, "headroom_m_prime": headroom_m_prime, "headroom_r": headroom_r}
+    )
 
     if headroom_m_prime < band or headroom_r < band:
         return {
-            "median_m_prime_p2": median_m_prime,
-            "median_r_p2": median_r,
-            "diff": diff,
-            "se_boot": se_boot,
-            "band": band,
-            "headroom_m_prime": headroom_m_prime,
-            "headroom_r": headroom_r,
+            **base,
             "verdict": "UNMEASURABLE",
             "reason": (
                 f"G1 unmeasurable: floor-saturation headroom clause (module docstring judgment "
                 f"call) -- headroom_m_prime={headroom_m_prime}, headroom_r={headroom_r}, both "
                 f"must be >= band={band}"
             ),
-            "n_m_prime_p2": n_m_prime,
-            "n_r_p2": n_r,
         }
 
     verdict = "PASS" if abs(diff) <= band else "FAIL"
-    reason = None
-    if verdict == "FAIL":
-        reason = f"G1 FAIL: |median_R,p2 - median_M',p2| = {abs(diff)} > band = {band}"
-    return {
-        "median_m_prime_p2": median_m_prime,
-        "median_r_p2": median_r,
-        "diff": diff,
-        "se_boot": se_boot,
-        "band": band,
-        "headroom_m_prime": headroom_m_prime,
-        "headroom_r": headroom_r,
-        "verdict": verdict,
-        "reason": reason,
-        "n_m_prime_p2": n_m_prime,
-        "n_r_p2": n_r,
-    }
+    reason = None if verdict == "PASS" else f"G1 FAIL: |median_R,p2 - median_M',p2| = {abs(diff)} > band = {band}"
+    return {**base, "verdict": verdict, "reason": reason}
 
 
-# ---------------------------------------------------------------------------
 # G2 -- injection preservation (exact-count gate, design spec §4).
-# ---------------------------------------------------------------------------
 
 
 def _g2_injection_preservation(view_m_prime: dict[str, Any], view_r: dict[str, Any]) -> dict[str, Any]:
@@ -335,9 +300,7 @@ def _g2_injection_preservation(view_m_prime: dict[str, Any], view_r: dict[str, A
     }
 
 
-# ---------------------------------------------------------------------------
 # Stamp audit (design spec §4, "gating, instrument honesty").
-# ---------------------------------------------------------------------------
 
 
 def _stamp_audit(
@@ -353,7 +316,14 @@ def _stamp_audit(
     "premise_gone expected count: 0" (`premise_gone_zero`) -- any
     occurrence "is an instrument alarm, not task data," scoped here across
     BOTH arms/phases (a workspace-reset failure is not arm-specific by
-    construction)."""
+    construction).
+
+    **`premise_held_complete`'s exact rule (review finding IMPORTANT-2).**
+    Spec §4's next sentence names `inconclusive`/`skipped_ungranted` as
+    "tolerated ... counted and named individually" -- NOT as a
+    `premise_held_complete` violation. An injected stamp whose refalsify
+    is in `TOLERATED_NON_PREMISE_HELD_SPELLINGS` is excluded from
+    `offending_premise_held`; both are still tallied into `counts`."""
     counts: dict[str, dict[int, dict[str, int]]] = {
         "m_prime": {1: {}, 2: {}},
         "r": {1: {}, 2: {}},
@@ -371,7 +341,9 @@ def _stamp_audit(
     offending_premise_held = [
         {"task": name, "mode": view_r["modes"][2].get(name), "refalsify": info["refalsify"]}
         for name, info in sorted(details_r[2].items())
-        if view_r["modes"][2].get(name) == "injected" and info["refalsify"] != "premise_held"
+        if view_r["modes"][2].get(name) == "injected"
+        and info["refalsify"] != "premise_held"
+        and info["refalsify"] not in TOLERATED_NON_PREMISE_HELD_SPELLINGS
     ]
     premise_held_complete = not offending_premise_held
 
@@ -413,9 +385,7 @@ def _stamp_audit(
     }
 
 
-# ---------------------------------------------------------------------------
 # H2 -- first-exposure equivalence (hygiene, design spec §4).
-# ---------------------------------------------------------------------------
 
 
 def _h2_p1_equivalence(
@@ -429,21 +399,23 @@ def _h2_p1_equivalence(
     which is G1's own gate-specific clause)."""
     costs_m_prime_p1 = list(view_m_prime["costs"][1].values())
     costs_r_p1 = list(view_r["costs"][1].values())
-    n_m_prime, n_r = len(costs_m_prime_p1), len(costs_r_p1)
     median_m_prime = _median_or_none(costs_m_prime_p1)
     median_r = _median_or_none(costs_r_p1)
+    base = {
+        "median_m_prime_p1": median_m_prime,
+        "median_r_p1": median_r,
+        "n_m_prime_p1": len(costs_m_prime_p1),
+        "n_r_p1": len(costs_r_p1),
+    }
 
     if median_m_prime is None or median_r is None:
         return {
-            "median_m_prime_p1": median_m_prime,
-            "median_r_p1": median_r,
+            **base,
             "diff": None,
             "se_boot": None,
             "band": None,
             "violated": True,
             "reason": "H2: insufficient non-dropped phase-1 tasks in one or both arms",
-            "n_m_prime_p1": n_m_prime,
-            "n_r_p1": n_r,
         }
 
     diff = median_r - median_m_prime
@@ -456,22 +428,10 @@ def _h2_p1_equivalence(
             f"H2 first-exposure-equivalence violation: |median_M',p1 - median_R,p1| = {abs(diff)} "
             f"> 2*SE_boot = {band}"
         )
-    return {
-        "median_m_prime_p1": median_m_prime,
-        "median_r_p1": median_r,
-        "diff": diff,
-        "se_boot": se_boot,
-        "band": band,
-        "violated": violated,
-        "reason": reason,
-        "n_m_prime_p1": n_m_prime,
-        "n_r_p1": n_r,
-    }
+    return {**base, "diff": diff, "se_boot": se_boot, "band": band, "violated": violated, "reason": reason}
 
 
-# ---------------------------------------------------------------------------
 # H3 -- infra rate (hygiene, design spec §4).
-# ---------------------------------------------------------------------------
 
 
 def _h3_infra(dropped_m_prime: list[dict[str, Any]], dropped_r: list[dict[str, Any]], n: int) -> dict[str, Any]:
@@ -505,9 +465,7 @@ def _h3_infra(dropped_m_prime: list[dict[str, Any]], dropped_r: list[dict[str, A
     }
 
 
-# ---------------------------------------------------------------------------
 # H4 -- advisory mint/retrieval rates, per arm (design spec §4).
-# ---------------------------------------------------------------------------
 
 
 def _h4_advisory(
@@ -560,9 +518,7 @@ def _h4_advisory(
     }
 
 
-# ---------------------------------------------------------------------------
 # A1 -- the purchased number (advisory, never gates -- design spec §4).
-# ---------------------------------------------------------------------------
 
 
 def _a1_wall(
@@ -628,9 +584,7 @@ def _a1_wall(
     }
 
 
-# ---------------------------------------------------------------------------
 # recompute_v2 -- the pinned entry point (task-1 brief).
-# ---------------------------------------------------------------------------
 
 
 def recompute_v2(
@@ -645,13 +599,23 @@ def recompute_v2(
     b: int = B_V2,
     expected_arm_labels: tuple[str, str] = (ARM_LABEL_M_PRIME, ARM_LABEL_R),
 ) -> dict[str, Any]:
-    """Task-1 brief's pinned entry point. Output dict keys (exact, task-1
-    brief): `g1`, `g2`, `stamp_audit`, `a1_wall`, `h2_p1_equivalence`,
-    `h3_infra`, `h4_advisory`, `dropped`, `corpus_sha`, `lens`.
+    """Task-1 brief's pinned entry point. Output dict keys: the brief's own
+    exact list (`g1`, `g2`, `stamp_audit`, `a1_wall`, `h2_p1_equivalence`,
+    `h3_infra`, `h4_advisory`, `dropped`, `corpus_sha`, `lens`) PLUS
+    `completeness` (review finding IMPORTANT-1 -- v2 analogue of v1's
+    `_check_arm_completeness`/C2; additive since the brief didn't name it,
+    but without it a truncated arm has no explicit "never finished" fact,
+    only an inference from `h3_infra`'s rate).
 
     Every value in the return is a plain JSON-native type -- round-trips
     through `json.dumps`/`json.loads` unchanged, same invariant
-    `recompute.py`'s own entry point holds itself to."""
+    `recompute.py`'s own entry point holds itself to.
+
+    **The library stays permissive** (review finding CRITICAL, v1's I3
+    precedent): `completeness`/`lens["identity"]` are always computed and
+    returned, never enforced here (no exception, no verdict forced to
+    INVALID) -- enforcement is `main()`'s job, mirroring v1's CLI/library
+    split (`_cli_fatal_checks`, below)."""
     corpus_dir = Path(corpus_dir)
     manifest = json.loads((corpus_dir / "manifest.json").read_text(encoding="utf-8"))
     manifest_tasks = manifest["tasks"]
@@ -659,6 +623,13 @@ def recompute_v2(
 
     arm_m_prime = _load_arm(Path(arm_m_prime_dir), Path(ledger_m_prime), manifest_tasks)
     arm_r = _load_arm(Path(arm_r_dir), Path(ledger_r), manifest_tasks)
+
+    # Review finding IMPORTANT-1 (v1 C2 port): checked first -- whether a
+    # run is even complete enough to trust is logically prior to anything
+    # else. Label-agnostic (`arm_label` is caller-supplied text), same
+    # reuse precedent as `_check_identity` above.
+    completeness_m_prime = _check_arm_completeness(ARM_LABEL_M_PRIME, arm_m_prime["ledger_task_half_count"], n)
+    completeness_r = _check_arm_completeness(ARM_LABEL_R, arm_r["ledger_task_half_count"], n)
 
     _check_arm_labels(arm_m_prime["ledger_arm_labels"], arm_r["ledger_arm_labels"], expected_arm_labels)
 
@@ -725,10 +696,51 @@ def recompute_v2(
         "h2_p1_equivalence": h2,
         "h3_infra": h3,
         "h4_advisory": h4,
+        "completeness": {
+            "m_prime": completeness_m_prime,
+            "r": completeness_r,
+            "violated": completeness_m_prime["violated"] or completeness_r["violated"],
+        },
         "dropped": {"m_prime": arm_m_prime["dropped"], "r": arm_r["dropped"]},
         "corpus_sha": corpus_sha,
         "lens": lens,
     }
+
+
+def _cli_fatal_checks(result: dict[str, Any], expected_digest: str) -> list[str]:
+    """Review findings CRITICAL + IMPORTANT-1: CLI-layer enforcement only
+    (library stays permissive) -- a real gate run must never silently pass
+    a truncated arm or a served-identity mismatch (v1 I3 CLI/library
+    split; this module's own `_check_arm_labels` hard-fail precedent).
+    Checked in v1's priority order: completeness first (a truncated arm's
+    numbers aren't trustworthy enough to check identity on), then per-arm
+    identity -- both arms checked for both, since either arm's violation
+    invalidates the whole run (v1 prereg §6: "either arm's mismatch makes
+    the whole run INVALID"). Returns FATAL message(s) for stderr; empty =
+    nothing to enforce."""
+    fatals: list[str] = []
+
+    completeness = result["completeness"]
+    for arm_label in (ARM_LABEL_M_PRIME, ARM_LABEL_R):
+        arm_completeness = completeness[arm_label]
+        if arm_completeness["violated"]:
+            fatals.append(
+                f"memory_battery.recompute_v2: FATAL: arm {arm_label!r} is incomplete -- "
+                f"{arm_completeness['actual_task_halves']} task-half row(s), expected "
+                f"{arm_completeness['expected_task_halves']} -- {arm_completeness['reason']}"
+            )
+
+    identity = result["lens"]["identity"]
+    for arm_label in (ARM_LABEL_M_PRIME, ARM_LABEL_R):
+        arm_identity = identity[arm_label]
+        if arm_identity["violated"]:
+            fatals.append(
+                f"memory_battery.recompute_v2: FATAL: identity mismatch on arm {arm_label!r} -- "
+                f"phase1_digest={arm_identity['phase1_digest']!r} "
+                f"phase2_digest={arm_identity['phase2_digest']!r} expected={expected_digest!r}"
+            )
+
+    return fatals
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -767,6 +779,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     except Exception as exc:  # noqa: BLE001 -- last-resort net, house pattern (recompute.py/driver.py)
         print(f"memory_battery.recompute_v2: FATAL: {exc!r}", file=sys.stderr)
+        return 1
+
+    # Review findings CRITICAL + IMPORTANT-1: enforced HERE, at the CLI
+    # layer, BEFORE any JSON is printed -- a real gate run must never
+    # silently pass a truncated arm or a served-identity mismatch.
+    fatals = _cli_fatal_checks(result, args.expected_digest)
+    if fatals:
+        for message in fatals:
+            print(message, file=sys.stderr)
         return 1
 
     print(json.dumps(result, indent=2, sort_keys=True))

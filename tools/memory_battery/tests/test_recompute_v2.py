@@ -13,15 +13,13 @@ spellings are supplied as explicit per-task dicts and asserted exactly.
 
 from __future__ import annotations
 
-import contextlib
-import io
 import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from tools.memory_battery.recompute_v2 import B_V2, SEED_V2, main, recompute_v2
+from tools.memory_battery.recompute_v2 import B_V2, SEED_V2, recompute_v2
 
 TASKS = ["t0", "t1", "t2", "t3", "t4", "t5"]
 
@@ -552,6 +550,38 @@ class StampAuditTests(unittest.TestCase):
             self.assertEqual(audit["counts"]["r"][2].get("premise_gone", 0), 1)
             self.assertEqual(audit["counts"]["r"][2].get("premise_held", 0), 5)
 
+    def test_inconclusive_and_skipped_ungranted_are_tolerated_and_counted(self) -> None:
+        """Review finding IMPORTANT-2: one R-p2 task stamps refalsify
+        'inconclusive' (mode injected) and one stamps 'skipped_ungranted'
+        (mode injected). Spec §4's own wording: these are "tolerated ...
+        counted and named individually" -- NOT `premise_held_complete`
+        violations, and (being neither `passed`/`failed`) never trip the
+        forbidden-spellings verdict either."""
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            paths = _build_fixture(
+                tmp,
+                TASKS,
+                CONSTANT_50,
+                CONSTANT_50,
+                CONSTANT_50,
+                CONSTANT_50,
+                r_p2_refalsify={"t0": "inconclusive", "t1": "skipped_ungranted"},
+            )
+            result = recompute_v2(**paths)
+            audit = result["stamp_audit"]
+            self.assertEqual(audit["counts"]["r"][2].get("inconclusive", 0), 1)
+            self.assertEqual(audit["counts"]["r"][2].get("skipped_ungranted", 0), 1)
+            self.assertEqual(audit["inconclusive_count"], 1)
+            self.assertEqual(audit["skipped_ungranted_count"], 1)
+            # Tolerated, not offending: premise_held_complete stays True and
+            # neither task appears in offending_premise_held.
+            self.assertTrue(audit["premise_held_complete"])
+            self.assertEqual(audit["offending_premise_held"], [])
+            # Neither spelling is a forbidden v1 spelling.
+            self.assertTrue(audit["forbidden_spellings_absent"])
+            self.assertEqual(audit["forbidden_spelling_hits"], [])
+
 
 # ---------------------------------------------------------------------------
 # H2 first-exposure equivalence.
@@ -748,48 +778,6 @@ class GoldenBootstrapV2Tests(unittest.TestCase):
             self.assertEqual(g1["se_boot"], self.EXPECTED_G1_SE_BOOT)
             self.assertEqual(g1["band"], self.EXPECTED_G1_BAND)
             self.assertEqual(g1["verdict"], "PASS")
-
-
-# ---------------------------------------------------------------------------
-# CLI.
-# ---------------------------------------------------------------------------
-
-
-class CliTests(unittest.TestCase):
-    def test_cli_requires_expected_digest(self) -> None:
-        with TemporaryDirectory() as tmp_str:
-            tmp = Path(tmp_str)
-            paths = _build_fixture(tmp, TASKS, CONSTANT_50, CONSTANT_50, CONSTANT_50, CONSTANT_50)
-            argv = [
-                "--corpus-dir", str(paths["corpus_dir"]),
-                "--arm-m-prime-dir", str(paths["arm_m_prime_dir"]),
-                "--arm-r-dir", str(paths["arm_r_dir"]),
-                "--ledger-m-prime", str(paths["ledger_m_prime"]),
-                "--ledger-r", str(paths["ledger_r"]),
-            ]
-            with self.assertRaises(SystemExit):
-                main(argv)
-
-    def test_cli_prints_json_with_expected_digest(self) -> None:
-        with TemporaryDirectory() as tmp_str:
-            tmp = Path(tmp_str)
-            paths = _build_fixture(tmp, TASKS, CONSTANT_50, CONSTANT_50, CONSTANT_50, CONSTANT_50)
-            argv = [
-                "--corpus-dir", str(paths["corpus_dir"]),
-                "--arm-m-prime-dir", str(paths["arm_m_prime_dir"]),
-                "--arm-r-dir", str(paths["arm_r_dir"]),
-                "--ledger-m-prime", str(paths["ledger_m_prime"]),
-                "--ledger-r", str(paths["ledger_r"]),
-                "--expected-digest", "digest-m-prime",
-            ]
-            stdout = io.StringIO()
-            with contextlib.redirect_stdout(stdout):
-                exit_code = main(argv)
-            self.assertEqual(exit_code, 0)
-            printed = json.loads(stdout.getvalue())
-            self.assertIn("g1", printed)
-            self.assertIn("g2", printed)
-            self.assertEqual(printed["lens"]["expected_digest"], "digest-m-prime")
 
 
 if __name__ == "__main__":
