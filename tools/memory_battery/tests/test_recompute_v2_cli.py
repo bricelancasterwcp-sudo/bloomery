@@ -137,6 +137,81 @@ class CliTests(unittest.TestCase):
             self.assertIn("g2", printed)
             self.assertEqual(printed["lens"]["expected_digest"], "shared-digest")
 
+    def test_cli_expected_arm_labels_override_accepts_dry_ledgers(self) -> None:
+        # Task-2 brief's dry shakedown drives the daemon with
+        # `--arm M_PRIME_DRY`/`--arm R_DRY` (never the real run's
+        # `m_prime`/`r`, so a DRY ledger is never mistaken for a real one).
+        # The CLI must expose the library's already-tested
+        # `expected_arm_labels` kwarg (`test_dry_shakedown_labels_parse_via_
+        # expected_arm_labels` in test_recompute_v2.py) so a dry invocation
+        # can actually reach it end-to-end.
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            paths = _build_fixture(
+                tmp,
+                TASKS,
+                CONSTANT_50,
+                CONSTANT_50,
+                CONSTANT_50,
+                CONSTANT_50,
+                ledger_label_m_prime="M_PRIME_DRY",
+                ledger_label_r="R_DRY",
+                digest_m_prime=("shared-digest", "shared-digest"),
+                digest_r=("shared-digest", "shared-digest"),
+            )
+            argv = [
+                "--corpus-dir", str(paths["corpus_dir"]),
+                "--arm-m-prime-dir", str(paths["arm_m_prime_dir"]),
+                "--arm-r-dir", str(paths["arm_r_dir"]),
+                "--ledger-m-prime", str(paths["ledger_m_prime"]),
+                "--ledger-r", str(paths["ledger_r"]),
+                "--expected-digest", "shared-digest",
+                "--expected-arm-labels", "M_PRIME_DRY", "R_DRY",
+            ]
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                exit_code = main(argv)
+            self.assertEqual(exit_code, 0, stderr.getvalue())
+            printed = json.loads(stdout.getvalue())
+            self.assertEqual(printed["lens"]["arm_labels"], {"m_prime": "M_PRIME_DRY", "r": "R_DRY"})
+
+    def test_cli_expected_arm_labels_defaults_to_m_prime_r_when_omitted(self) -> None:
+        # Mutation-catching partner to the override test above: DRY-labeled
+        # ledgers, but the flag is OMITTED -- the CLI's default must still be
+        # the real-run labels ('m_prime', 'r'), so this must FATAL (proving
+        # the default isn't silently permissive / the flag isn't ignored).
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            paths = _build_fixture(
+                tmp,
+                TASKS,
+                CONSTANT_50,
+                CONSTANT_50,
+                CONSTANT_50,
+                CONSTANT_50,
+                ledger_label_m_prime="M_PRIME_DRY",
+                ledger_label_r="R_DRY",
+                digest_m_prime=("shared-digest", "shared-digest"),
+                digest_r=("shared-digest", "shared-digest"),
+            )
+            argv = [
+                "--corpus-dir", str(paths["corpus_dir"]),
+                "--arm-m-prime-dir", str(paths["arm_m_prime_dir"]),
+                "--arm-r-dir", str(paths["arm_r_dir"]),
+                "--ledger-m-prime", str(paths["ledger_m_prime"]),
+                "--ledger-r", str(paths["ledger_r"]),
+                "--expected-digest", "shared-digest",
+            ]
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                exit_code = main(argv)
+            self.assertNotEqual(exit_code, 0)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertIn("FATAL", stderr.getvalue())
+            self.assertIn("arm-label check failed", stderr.getvalue())
+
     def test_cli_fatal_and_nonzero_on_incomplete_arm(self) -> None:
         # Review finding IMPORTANT-1: a truncated arm must FATAL the CLI,
         # even when digests match cleanly.

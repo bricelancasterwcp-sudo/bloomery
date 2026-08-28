@@ -766,6 +766,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             "identity can omit it, matching v1's `recompute()` CLI/library split."
         ),
     )
+    parser.add_argument(
+        "--expected-arm-labels",
+        nargs=2,
+        metavar=("M_PRIME_LABEL", "R_LABEL"),
+        default=(ARM_LABEL_M_PRIME, ARM_LABEL_R),
+        help=(
+            "Two literal ledger `--arm` labels this run's ledgers must carry, in "
+            "(m_prime, r) order. Defaults to the real-run labels ('m_prime', 'r') -- a real "
+            "gate invocation never needs this flag. Task-2 brief's dry shakedown drives the "
+            "daemon with `--arm M_PRIME_DRY`/`--arm R_DRY` (so a DRY ledger can never be "
+            "mistaken for a real one at a glance); this flag is what lets the CLI check "
+            "against those DRY labels instead of the default -- the library `recompute_v2()` "
+            "kwarg of the same name already supported this (see "
+            "`test_dry_shakedown_labels_parse_via_expected_arm_labels`); this CLI plumbing was "
+            "the missing wire-up. `_check_arm_labels`'s v1-label rejection (FORBIDDEN_ARM_LABELS) "
+            "applies unconditionally regardless of what is passed here."
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -776,6 +794,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.ledger_m_prime,
             args.ledger_r,
             expected_digest=args.expected_digest,
+            expected_arm_labels=tuple(args.expected_arm_labels),
         )
     except Exception as exc:  # noqa: BLE001 -- last-resort net, house pattern (recompute.py/driver.py)
         print(f"memory_battery.recompute_v2: FATAL: {exc!r}", file=sys.stderr)
