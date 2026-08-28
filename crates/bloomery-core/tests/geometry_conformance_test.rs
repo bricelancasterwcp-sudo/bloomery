@@ -1,16 +1,16 @@
-//! gguf-geometry contract (vector set v2) conformance for bloomery-core.
+//! gguf-geometry contract (vector set v3) conformance for bloomery-core.
 //!
-//! The vectors under `tests/data/gguf_geometry_v2/` are a byte-exact vendored
-//! copy of `gguf-geometry/vectors/v2/`, vendored 2026-08-27 from gguf-geometry
-//! master `7f858c8` (verified with `cmp` file-by-file and by sha256 against the
-//! published `MANIFEST.json`). That repo holds no implementation: its expected
-//! values come from committed assay/bloomery evidence, never from code. The
-//! rules are R1-R8 in its `SPEC.md`; each assertion below names the rule it
-//! proves.
+//! The vectors under `tests/data/gguf_geometry_v3/` are a byte-exact vendored
+//! copy of `gguf-geometry/vectors/v3/`, vendored 2026-08-28 from gguf-geometry
+//! master `84f042b` (public CI green, run 33163833319; verified with `cmp`
+//! file-by-file and by sha256 against the published `MANIFEST.json`). That
+//! repo holds no implementation: its expected values come from committed
+//! assay/bloomery evidence, never from code. The rules are R1-R9 in its
+//! `SPEC.md`; each assertion below names the rule it proves.
 //!
-//! Per that repo's consumer model, exactly one set is vendored at a time: v2
-//! replaced the previously vendored v1 here, and `tests/data/gguf_geometry_v1/`
-//! was deleted rather than kept alongside. `vectors/v1/` stays frozen upstream.
+//! Per that repo's consumer model, exactly one set is vendored at a time: v3
+//! replaced the previously vendored v2 here, and `tests/data/gguf_geometry_v2/`
+//! was deleted rather than kept alongside. `vectors/v2/` stays frozen upstream.
 //!
 //! # Honest scope
 //!
@@ -73,6 +73,41 @@
 //! `resolve_attention_layers` -> `resolve_recurrent_state_bytes` computes, and
 //! it conformed through bloomery's own reader on the first run of this
 //! re-vendor with no production change.
+//!
+//! # Divergence found and resolved (2026-08-28, against set v2)
+//!
+//! Task 9 (commit `3e326c6`, same branch) landed R9 — `kv_bytes_per_token`
+//! now reads `GgufMeta.value_length` and, when it is stated and differs from
+//! `head_dim`, replaces the dense "2x head_dim" factor with the explicit K+V
+//! sum. That flipped the still-v2-vendored deepseek vector from passing to
+//! RED: its pinned `expected.kv_bytes_per_token` was 331,776 (`key_length`
+//! 192 charged for both K and V — R2 arithmetic applied to stated metadata,
+//! never an observed allocation), but R9 now computes 276,480 from the same
+//! vector's `metadata` (`key_length` 192, `value_length` 128) through
+//! `parse_gguf_meta`. The vector bit through the reader exactly as designed:
+//! a real production change made a real pinned value wrong, and the test
+//! caught it before this re-vendor closed the gap.
+//!
+//! # What v3 changes (2026-08-28)
+//!
+//! Ten of the eleven vectors carry forward byte-for-byte (identical shas
+//! across v2 and v3). Only `deepseek-coder-v2-16b-lite-instruct-q5_K_M`
+//! moves, and only its `expected`/`must_not_equal` blocks — its `metadata`
+//! (`key_length` 192, `value_length` 128) is unchanged from v2, so R9 was
+//! already exercising both keys through `parse_gguf_meta` before this
+//! re-vendor; what changes is which answer the vector calls correct.
+//! `expected.kv_bytes_per_token` is re-pinned from 331,776 to 276,480 — the
+//! measured KV allocation (assay `docs/superpowers/evidence/mla-kv-2026-08-27/`,
+//! ollama 0.32.13 llama runner, non-FA lens, exact and identical at all three
+//! measured ctx points, verdict H-b), not a recomputation of the old value.
+//! `must_not_equal.kv_bytes_per_token` grows to four disproved candidates:
+//! the pre-R1 formula (221,184), the pre-R9 k-width-for-both pin this vector
+//! carried through v1 and v2 (331,776), and two MLA-latent guesses disproved
+//! by the same measurement (31,104 and 62,208) — see gguf-geometry SPEC.md R9
+//! and `docs/upstream-errata/2026-08-27-assay-deepseek-mla-kv-overcharge.md`.
+//! `tests/data/gguf_geometry_v2/` is deleted in the same commit per the
+//! one-set consumer model described above; `vectors/v2/` stays frozen
+//! upstream.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -86,17 +121,18 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 /// sha256 of the vendored `MANIFEST.json`, computed at vendoring time
-/// (2026-08-27) from `gguf-geometry/vectors/v2/MANIFEST.json` at master
-/// `7f858c8`. The manifest in turn pins every vector file, so this single
+/// (2026-08-28) from `gguf-geometry/vectors/v3/MANIFEST.json` at master
+/// `84f042b`. The manifest in turn pins every vector file, so this single
 /// constant pins the whole set: a vendored copy that has drifted from the
 /// published contract cannot be read by any test in this file.
 ///
 /// Set history: v1's manifest hashed
-/// `44f8af208d4bd79055cdaa9e0b9c4e9fa81f305d5f81ab6e87457de6c3fa470a`. A new
-/// set is a visible diff here, which is the point of the pin.
-const MANIFEST_SHA256: &str = "06da801b5dc57fedbfd42555c377c1cd3b6b8fb3c549cd2d367396447fc15116";
+/// `44f8af208d4bd79055cdaa9e0b9c4e9fa81f305d5f81ab6e87457de6c3fa470a`; v2's
+/// hashed `06da801b5dc57fedbfd42555c377c1cd3b6b8fb3c549cd2d367396447fc15116`.
+/// A new set is a visible diff here, which is the point of the pin.
+const MANIFEST_SHA256: &str = "c4d5c22d99e658e21d7197fffe915969a9a1d1fe62683a9c3e7d85b884798e4b";
 
-const SET_VERSION: &str = "v2";
+const SET_VERSION: &str = "v3";
 
 /// Every vector id in the set, each with a `#[test]` of its own below. The
 /// `all_vectors_have_a_named_test` guard fails if the set grows a vector this
@@ -120,7 +156,7 @@ const VECTOR_IDS: &[&str] = &[
 // ---------------------------------------------------------------------------
 
 fn data_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/gguf_geometry_v2")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/gguf_geometry_v3")
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -145,7 +181,7 @@ fn manifest() -> Value {
         sha256_hex(&bytes),
         MANIFEST_SHA256,
         "vendored MANIFEST.json does not match the pinned sha256 — the vendored \
-         copy has drifted from gguf-geometry vectors/v2 (re-vendor byte-exact, \
+         copy has drifted from gguf-geometry vectors/v3 (re-vendor byte-exact, \
          do not re-pin)"
     );
     serde_json::from_slice(&bytes).expect("MANIFEST.json is valid JSON")
@@ -224,7 +260,7 @@ fn write_vector_gguf(vector: &Value) -> PathBuf {
     // synthesise the same vector, so the file name carries a per-call serial:
     // a shared path would let one thread truncate the file another is reading.
     static SERIAL: AtomicU32 = AtomicU32::new(0);
-    let dir = std::env::temp_dir().join("bloomery-geometry-conformance-v2");
+    let dir = std::env::temp_dir().join("bloomery-geometry-conformance-v3");
     fs::create_dir_all(&dir).expect("create temp dir");
     let path = dir.join(format!(
         "{}.{}.gguf",
@@ -452,7 +488,7 @@ fn vendored_vector_set_matches_its_pinned_manifest() {
         assert_eq!(
             &sha256_hex(&bytes),
             sha.as_str().expect("sha is a string"),
-            "vendored {name} differs from the published v2 bytes"
+            "vendored {name} differs from the published v3 bytes"
         );
     }
 
@@ -486,7 +522,7 @@ fn all_vectors_have_a_named_test() {
     let covered: BTreeSet<String> = VECTOR_IDS.iter().map(|s| s.to_string()).collect();
     assert_eq!(
         listed, covered,
-        "every v2 vector needs its own #[test] in this file"
+        "every v3 vector needs its own #[test] in this file"
     );
 }
 
@@ -570,6 +606,20 @@ fn codegemma_7b_instruct_q8_0() {
     check_vector("codegemma-7b-instruct-q8_0");
 }
 
+/// The v3 headline: the MLA case R9 was written for. `metadata` states
+/// `key_length` 192 and `value_length` 128 — unchanged since v2 — and
+/// `check_vector` writes both into the synthetic GGUF header and drives them
+/// through `parse_gguf_meta` like every other vector, so `kv_bytes_per_token`
+/// takes R9's K+V-sum branch (`value_length != head_dim`) rather than the
+/// dense "2x head_dim" formula. `expected.kv_bytes_per_token` is now 276,480
+/// (the measured allocation) instead of the v1/v2 pin of 331,776 (R2
+/// arithmetic on `key_length` alone, applied to both K and V, never
+/// observed); see the module doc's "What v3 changes" section for the full
+/// story. `must_not_equal` bans that old pin alongside the pre-R1 formula and
+/// two disproved MLA-latent guesses — all four checked against bloomery's
+/// own computed value via `check_vector`'s generic `banned_u64` loop, the
+/// same ban-held-via-real-computation pattern the mtp-trap and qwen3.8-27b
+/// vectors already use above.
 #[test]
 fn deepseek_coder_v2_16b_lite_instruct_q5_k_m() {
     check_vector("deepseek-coder-v2-16b-lite-instruct-q5_K_M");
@@ -736,5 +786,52 @@ fn qwen3_6_35b_a3b_reap48_mtp_trap_r6_conformance_is_pinned() {
         meta.recurrent_state_bytes, 65_863_680,
         "30 recurrent layers charged, not 31 — the 2_195_456 B per-context \
          over-charge is gone"
+    );
+}
+
+/// The v3 headline conformance, pinned as literals rather than read from the
+/// vector's `expected` block — the same belt-and-braces shape as
+/// `qwen3_8_27b_r3_r4_r6_conformance_is_pinned`, so a regression in R9 (the
+/// K+V-sum branch of `kv_bytes_per_token`) is caught here even if the
+/// vendored vector ever moves. Until Task 9 (commit `3e326c6`) implemented
+/// R9, this same vector's v2 pin of 331,776 held through
+/// `check_vector`; R9 landing flipped it RED (331,776 is now a banned
+/// candidate, not the expected value) before this re-vendor closed the gap
+/// with the measured figure.
+#[test]
+fn deepseek_coder_v2_16b_lite_instruct_q5_k_m_r9_conformance_is_pinned() {
+    let vector = load_vector("deepseek-coder-v2-16b-lite-instruct-q5_K_M");
+    let meta = parse_vector(&vector);
+
+    // The stated K/V widths, read verbatim by parse_gguf_meta — the two keys
+    // R9 needs to tell an MLA model from a dense one.
+    assert_eq!(meta.head_dim, 192, "key_length, read verbatim (R1)");
+    assert_eq!(
+        meta.value_length,
+        Some(128),
+        "value_length, read verbatim and distinct from head_dim (R9's trigger)"
+    );
+
+    // R9: K+V sum, not the dense 2x head_dim factor. attention_layers 27,
+    // kv_heads 16: 27 * 16 * (192 + 128) * 2 == 276,480.
+    assert_eq!(
+        kv_bytes_per_token(&meta),
+        276_480,
+        "R9: MLA separate-widths formula on the measured allocation"
+    );
+
+    // Every disproved candidate stays banned against the real computation,
+    // not just against the vector's own `must_not_equal` list.
+    for banned in [221_184_u64, 331_776, 31_104, 62_208] {
+        assert_ne!(
+            kv_bytes_per_token(&meta),
+            banned,
+            "disproved MLA/dense candidate {banned} stays banned"
+        );
+    }
+    assert_eq!(
+        banned_u64(&vector, "kv_bytes_per_token"),
+        vec![221_184, 331_776, 31_104, 62_208],
+        "the vector's own must_not_equal list matches what this test pins"
     );
 }
