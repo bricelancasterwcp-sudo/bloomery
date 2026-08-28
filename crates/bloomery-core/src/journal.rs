@@ -381,7 +381,14 @@ pub enum Event {
         /// "inconclusive")` when a hit was probed or skipped. Additive —
         /// absent-key rows replay as `None`, which is the truth of every
         /// pre-refalsify stamp. A `"failed"` stamp is always accompanied by
-        /// an ordinary [`Event::MemoryContradicted`] citing the same task.
+        /// an ordinary [`Event::MemoryContradicted`] citing the same task,
+        /// with exactly one exception (spec §4, amended): an operator's
+        /// `DELETE /memory/{id}` landing between the retrieval and the mark
+        /// leaves `mark_contradicted` nothing to mark (`Ok(false)`), so the
+        /// `failed` stamp stands alone rather than journaling a status
+        /// transition that never happened. The task runs memory-silent
+        /// either way — the probe's evidence is not undone by the episode's
+        /// disappearance.
         #[serde(default)]
         refalsify: Option<String>,
     },

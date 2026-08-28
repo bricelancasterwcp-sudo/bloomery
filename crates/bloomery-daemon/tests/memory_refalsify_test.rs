@@ -53,11 +53,15 @@ use std::sync::{Arc, Mutex};
 use bloomery_core::action::PatchCodec;
 use bloomery_core::gguf::GgufMeta;
 use bloomery_core::grant::Grant;
-use bloomery_core::journal::{replay, Event, Journal};
+use bloomery_core::journal::{replay, sha256_hex_bytes, Event, Journal};
 use bloomery_daemon::agents::ImageStore;
 use bloomery_daemon::config::EnvelopeLens;
+use bloomery_daemon::memory::record::{
+    episode_id, goal_hash, CitedFile, EpisodeRecord, Fingerprint, RunEvidence, StoredPatch,
+};
+use bloomery_daemon::memory::render::render_memory_block;
 use bloomery_daemon::memory::store::MemoryStore;
-use bloomery_daemon::memory::MemoryContext;
+use bloomery_daemon::memory::{MemoryContext, MEMORY_BLOCK_MAX_BYTES};
 use bloomery_daemon::pager::Pager;
 use bloomery_daemon::task::{ExecBounds, TaskRegistry, TaskResult, TaskSpec, TaskStatus};
 use bloomery_substrate::fake::FakeSubstrate;
@@ -356,6 +360,50 @@ fn mint_ids(events: &[Event]) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Every `Degraded` reason on the journal — how an operator-visible skip
+/// names itself, and here how "silenced by the oversize rule" is told apart
+/// from "silenced by a fingerprint miss", which stamp identically.
+fn degraded_reasons(events: &[Event]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Degraded { reason } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The `verb` of every `TaskStep` row on the journal, in append order.
+///
+/// `Event::TaskStep` carries an `AgentId` but no `task_id`, so "how many
+/// steps did THIS task journal" is necessarily read as a delta across the
+/// task under test. That is sound in this file and nowhere near a general
+/// rule: every test here drives its tasks strictly one at a time (module
+/// docs), so nothing else can be appending steps in the window.
+fn task_step_verbs(events: &[Event]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::TaskStep { verb, .. } => Some(verb.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Lines in the store FILE — deliberately not `MemoryStore::episodes()`'s
+/// count. The store is append-only with last-writer-wins per `episode_id`
+/// (`memory/store.rs`), so a re-appended row for an episode already present
+/// leaves the live map exactly as it was and is invisible to any
+/// id-counting assertion. The line count is the only honest way to say
+/// "nothing was written", which is what spec §2.3's no-re-append claims.
+fn store_rows(dir: &Path) -> usize {
+    std::fs::read_to_string(store_path(dir))
+        .expect("the store file exists once something has been minted")
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .count()
+}
+
 fn contradicted_ids(events: &[Event]) -> Vec<(String, String)> {
     events
         .iter()
@@ -478,6 +526,11 @@ struct Probed {
     /// `(status, contradicted_by)` of the minted episode, re-read from the
     /// store FILE at the probe moment.
     stored: (String, Option<String>),
+    /// Rows in the store file at the probe moment — see [`store_rows`].
+    /// Taken in the same locked window as `stored`, and for the same reason:
+    /// after the task finishes, passive falsification may have appended a row
+    /// of its own, and a count taken then could not tell the two apart.
+    store_rows: usize,
     /// The `MemoryContradicted` rows on the journal at the probe moment.
     contradicted: Vec<(String, String)>,
 }
@@ -513,6 +566,7 @@ fn probe(m: &Minted, dir: &Path, spec: TaskSpec, ctx: Arc<MemoryContext>) -> Pro
     // pager lock this thread holds.
     let stamp = await_stamp(&m.journal_path, &task_id);
     let stored = stored_status(dir, &m.episode_id);
+    let store_rows = store_rows(dir);
     let contradicted = contradicted_ids(&replay(&m.journal_path).unwrap());
     drop(guard);
 
@@ -522,6 +576,7 @@ fn probe(m: &Minted, dir: &Path, spec: TaskSpec, ctx: Arc<MemoryContext>) -> Pro
         result,
         stamp,
         stored,
+        store_rows,
         contradicted,
     }
 }
@@ -560,9 +615,12 @@ fn flag_off_injects_without_probing_and_stamps_none() {
         ("injected".to_string(), Some(m.episode_id.clone()), 1, None),
         "flag-off keeps today's behavior and stamps no verdict"
     );
-    assert!(
-        memory_prompts(&dir) > 0,
-        "the injected task's prompt must carry the rendered block"
+    assert_eq!(
+        memory_prompts(&dir),
+        1,
+        "the injected task's prompt must carry the rendered block — exactly \
+         one prompt can, the probed task having exactly one turn and the \
+         minting task having retrieved from an empty store"
     );
     assert!(
         !canary_exists(&m.sb),
@@ -578,10 +636,34 @@ fn flag_off_injects_without_probing_and_stamps_none() {
 ///
 /// The canary reappearing is the positive half of the same observation the
 /// flag-off test uses negatively: the probe really ran a real subprocess.
+///
+/// Two further properties of "the record is untouched" are pinned here
+/// rather than in tests of their own, because this is the one path where a
+/// probe both executes and lets the injection through — the only place a
+/// stray write could hide:
+///
+/// - **No `TaskStep`.** The probe is not a model action (spec §2), so the
+///   receiving task journals exactly its own one `done` step and no more. A
+///   probe that ever rendered itself as a step would put an action in the
+///   transcript the model never chose.
+/// - **No re-append.** A pass is recorded by the stamp alone (spec §2.3):
+///   the store file gains no row, not even an identical re-mint, which
+///   [`store_rows`] can see and an `episodes()` count could not.
 #[test]
 fn a_passing_probe_injects_and_stamps_passed() {
     let dir = fresh_dir("passed");
     let m = mint(&dir, CANARY_SCRIPT, 1);
+
+    // The fixture's own baseline: one minting task, one minted row, its four
+    // real steps. Both later assertions are deltas against these.
+    let rows_after_mint = store_rows(&dir);
+    assert_eq!(rows_after_mint, 1, "the mint appended exactly one row");
+    let steps_after_mint = task_step_verbs(&replay(&m.journal_path).unwrap());
+    assert_eq!(
+        steps_after_mint,
+        ["read", "patch", "run", "done"],
+        "the minting task's own four steps are the baseline"
+    );
 
     let p = probe(
         &m,
@@ -599,15 +681,29 @@ fn a_passing_probe_injects_and_stamps_passed() {
             Some("passed".to_string())
         ),
     );
-    assert!(
-        memory_prompts(&dir) > 0,
-        "a passing probe injects — the prompt must carry the block"
+    assert_eq!(
+        memory_prompts(&dir),
+        1,
+        "a passing probe injects — the ONE probed turn's prompt carries the \
+         block, and the minting task (which retrieved from an empty store) \
+         carries none"
     );
     assert!(
         canary_exists(&m.sb),
         "the probe must have really executed the episode's stored command"
     );
     assert_eq!(p.stored, untouched(), "a pass changes no record");
+    assert_eq!(
+        p.store_rows, rows_after_mint,
+        "a passing probe appends nothing to the store (spec §2.3): the stamp \
+         is the durable evidence"
+    );
+    assert_eq!(
+        task_step_verbs(&replay(&m.journal_path).unwrap()),
+        ["read", "patch", "run", "done", "done"],
+        "the probed task journals exactly one TaskStep — its own `done` — and \
+         the probe, which ran a real subprocess, journals none"
+    );
     assert!(p.contradicted.is_empty(), "{:?}", p.contradicted);
 }
 
@@ -736,9 +832,10 @@ fn an_ungranted_command_skips_and_injects() {
             Some("skipped_ungranted".to_string())
         ),
     );
-    assert!(
-        memory_prompts(&dir) > 0,
-        "an unprobed episode still injects"
+    assert_eq!(
+        memory_prompts(&dir),
+        1,
+        "an unprobed episode still injects — into the probed task's one turn"
     );
     assert!(
         !canary_exists(&m.sb),
@@ -786,7 +883,11 @@ fn a_demoted_task_skips_even_with_a_covering_grant() {
             Some("skipped_ungranted".to_string())
         ),
     );
-    assert!(memory_prompts(&dir) > 0, "a demoted task still receives");
+    assert_eq!(
+        memory_prompts(&dir),
+        1,
+        "a demoted task still receives — into its one turn"
+    );
     assert!(
         !canary_exists(&m.sb),
         "a demoted task has no commands executed at its moment"
@@ -829,8 +930,9 @@ fn a_timed_out_probe_is_inconclusive_and_injects() {
             Some("inconclusive".to_string())
         ),
     );
-    assert!(
-        memory_prompts(&dir) > 0,
+    assert_eq!(
+        memory_prompts(&dir),
+        1,
         "an inconclusive probe never costs the task its injection"
     );
     assert_eq!(
@@ -876,11 +978,151 @@ fn classify_probe_calls_signal_death_inconclusive() {
         ),
         "a signal death is not a nonzero exit and must never contradict"
     );
-    assert!(memory_prompts(&dir) > 0);
+    assert_eq!(memory_prompts(&dir), 1);
     assert_eq!(
         p.stored,
         untouched(),
         "the episode STANDS — nothing measured it wrong"
     );
     assert!(p.contradicted.is_empty(), "{:?}", p.contradicted);
+}
+
+/// **Oversize outranks the probe (refalsify spec §2, as amended).** The
+/// implemented order is retrieve → render → oversize gate → probe, and the
+/// amendment states the behavioral consequence: *an episode the oversize rule
+/// has already turned silent is never executed.* With `[memory] refalsify`
+/// ON, a covering grant, and a stored command that would leave a trace, the
+/// stamp is `("silent", None, refalsify: None)` and the canary stays gone.
+///
+/// The canary is what makes this a behavioral test rather than a restatement
+/// of the stamp. `refalsify: None` alone is weak evidence — the oversize
+/// return hardcodes it, so a probe hoisted above that gate would still stamp
+/// `None` while having spent a subprocess. The file's absence is the only
+/// observation that says *nothing ran*.
+///
+/// **Why the `Degraded` assertion is load-bearing, not decoration.** A
+/// fingerprint miss stamps `("silent", None, 1, None)` too, and would leave
+/// the canary equally absent — so without proof that the oversize branch is
+/// the one that fired, this test could pass for a reason that has nothing to
+/// do with the probe order. The degraded row naming the episode and the
+/// injection bound is that proof.
+///
+/// The oversized episode is hand-minted straight into the store, mirroring
+/// `memory_task_test.rs`'s `an_oversized_memory_block_is_skipped_and_stamped_silent`
+/// and for its reason: the branch under test reads `render_memory_block`'s
+/// output length and nothing else, so driving a >16 KiB patch through the
+/// real executor would make the test slow and mostly about `exec_patch`.
+/// Everything retrieval gates on is real — the goal hash, the canonical
+/// cited path, the sha256 of the actual workspace bytes — and so is the
+/// stored argv, which is the fixture's `["sh","-c",CANARY_SCRIPT]` verbatim.
+#[test]
+fn an_oversized_episode_is_never_probed_even_with_the_flag_on() {
+    let dir = fresh_dir("oversize-flag-on");
+    let sb = sandbox(&dir);
+    let grant = grant_with(&sb, &[SH]);
+    let (pager, agent_id) = build_pager(&dir, vec![done_turn()]);
+    let pager = Arc::new(Mutex::new(pager));
+    let registry = TaskRegistry::new();
+    let journal_path = dir.join("tasks.jsonl");
+    let ctx = memory_ctx(&dir, true, true);
+
+    let cited_path = sb.join("a.py").display().to_string();
+    let cited = vec![CitedFile {
+        path: cited_path.clone(),
+        fingerprint: Fingerprint::Sha256(sha256_hex_bytes(BEFORE)),
+    }];
+    let hash = goal_hash(GOAL);
+    let argv: Vec<String> = vec![SH[0].into(), SH[1].into(), CANARY_SCRIPT.into()];
+    let record = EpisodeRecord {
+        episode_id: episode_id(&hash, &cited),
+        goal_hash: hash,
+        goal_text: GOAL.to_string(),
+        cited_files: cited,
+        // The one oversized field: a whole-file patch body well past the
+        // 16 KiB injection bound.
+        landed_patches: vec![StoredPatch {
+            path: cited_path,
+            codec: "whole_file".to_string(),
+            body: format!("x = {}", "9".repeat(20_000)),
+        }],
+        run_evidence: RunEvidence {
+            argv: argv.clone(),
+            outcome: "ran sh exit 0".into(),
+        },
+        trajectory: vec!["read".into(), "patch".into(), "run".into(), "done".into()],
+        minted_by_model: "m".into(),
+        minted_by_envelope: "V1".into(),
+        status: "verified".into(),
+        contradicted_by: None,
+        minted_at: 1,
+    };
+    let oversized_id = record.episode_id.clone();
+    let rendered = render_memory_block(&record).len();
+    assert!(
+        rendered > MEMORY_BLOCK_MAX_BYTES,
+        "the fixture must actually be oversized: {rendered} bytes"
+    );
+    // Nothing but the size may explain the skip: the grant covers the stored
+    // argv exactly, so `skipped_ungranted` is off the table, and the task is
+    // mutating, so the demotion boundary is too.
+    assert!(
+        grant.check_command(&argv).is_ok(),
+        "the grant must cover the stored argv, or a skip proves nothing"
+    );
+    {
+        let store = ctx
+            .store
+            .as_ref()
+            .expect("an operational organ has a store");
+        let mut store = store.lock().expect("the store mutex is healthy");
+        store.mint(record, 64).unwrap();
+    }
+    assert!(
+        !canary_exists(&sb),
+        "the fixture must start with no canary — nothing has run it yet"
+    );
+
+    let (task_id, result) = drive(
+        &registry,
+        &pager,
+        &agent_id,
+        spec_for(GOAL, &grant, &sb),
+        &journal_path,
+        Some(Arc::clone(&ctx)),
+    );
+
+    assert_eq!(result.status, TaskStatus::Done, "{result:?}");
+    let events = replay(&journal_path).unwrap();
+    assert_eq!(
+        stamp_for(&events, &task_id),
+        ("silent".to_string(), None, 1, None),
+        "an oversize skip stamps no verdict, because nothing was probed"
+    );
+    assert_eq!(
+        memory_prompts(&dir),
+        0,
+        "no prompt may carry a block the organ declined to inject"
+    );
+    let reasons = degraded_reasons(&events);
+    assert!(
+        reasons
+            .iter()
+            .any(|r| r.contains(&oversized_id) && r.contains("injection bound")),
+        "the size skip must be the branch that fired, and it must name itself: {reasons:?}"
+    );
+    assert!(
+        !canary_exists(&sb),
+        "an episode the oversize rule already silenced is NEVER executed \
+         (refalsify spec §2 amendment) — the canary would have reappeared"
+    );
+    assert_eq!(
+        stored_status(&dir, &oversized_id),
+        untouched(),
+        "an unprobed episode is accused of nothing"
+    );
+    assert!(
+        contradicted_ids(&events).is_empty(),
+        "{:?}",
+        contradicted_ids(&events)
+    );
 }
