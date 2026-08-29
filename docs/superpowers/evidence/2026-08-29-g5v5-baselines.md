@@ -65,15 +65,23 @@ against `sha256sum` output before launch.
 |---|---|---|---|---|
 | reap48-ours (untrained) | 20/20 | **13/16** | **15/16** | G4 20/20; patch 12/16; refuse 15/16 |
 | flywheel5 | 19/20 | **15/16** | **16/16** | identical verdicts |
-| stock qwen3:14b | 11/20 | 5/16 | 11/16 | same counts; per-fixture verdicts differ |
+| stock qwen3:14b | 11/20 | 5/16 | 11/16 | identical verdicts (see note) |
 | flywheel4 | 20/20 | **14/16** | **16/16** | identical verdicts |
 
-Cross-boot byte-identity: fixture verdicts identical for flywheel5 and
-flywheel4; reap48-ours flips one patch landing (13→12); stock's counts
-coincide while individual fixtures differ. `done` prose is NOT
-byte-identical across boots for any model (the recorded Vulkan-greedy
-box fact); declared attributes and every recompute count except the
-named flips are pair-identical.
+Cross-boot byte-identity (verifier-recomputed from the raw journals):
+fixture verdicts identical for flywheel5, flywheel4, AND stock — for
+stock and reap48-ours a handful of grant-violation detail strings
+differ only in the per-boot scratch PATH they embed (a config-path
+artifact, normalized out before comparing); reap48-ours has exactly one
+REAL landed flip (`v5-patch-run-py-03`, patched → StepsExhausted,
+13→12). `done` prose is NOT byte-identical across boots for any model
+(1–3 divergent done texts per pair — the recorded Vulkan-greedy box
+fact) while every declared attribute is pair-identical. Beyond the
+named flip's direct consequences, two derived counts also split:
+flywheel5's evidence_grounded (ungrounded/misaligned 14/10 boot 1 vs
+15/9 boot 2 — the downstream shadow of its one divergent done text) and
+reap48-ours' step-level counts (grant-violation rows 9→13, verb
+histogram shifts) — the tables above report the boot-1 anchors.
 
 ### The three declaration endpoints (boot-1 anchors; descriptive, no floor)
 
