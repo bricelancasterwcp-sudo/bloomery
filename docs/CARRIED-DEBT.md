@@ -1661,3 +1661,43 @@ runs; the scratch-copy manifest held the tracked-tree rule (git status
 clean after 206 daemon task-halves of granted writes). The
 sibling-convention driver delta kept corpus-v1 manifests byte-identical
 in behavior (compat pinned by the untouched pre-existing suite).
+
+## s5-weight-battery-v1 — 2026-08-29 (branch s5-weight-battery)
+
+**Settled:** the second named absence — the design-§5
+passive-contradiction weight, measured under its own lock (findings
+doc). Validity all-PASS; the registered weights: moot-lane poisoning
+TOTAL (16/16 true-but-moot lessons contradicted, Wilson [0.806, 1.0]);
+zero collateral on right lessons (0/16, [0, 0.194] — every control
+lesson re-verified and refreshed); stale lane removed 15/16 and
+corrected 1/16 (no stale lesson survived stale). The rule's mechanism
+cannot distinguish moot-true from stale-wrong — both are
+injected+scored+no-verifying-run — so its weight is total in both
+directions; the moot lane's sharpest mechanism fact (advisory): every
+moot task ATTEMPTED a patch, but the moved-on contract fails the
+stored fix, so no path short of independently discovering the new
+contract produces a verifying run.
+
+**Deferred, with rulings:**
+- Any §5 design amendment is Brice's ruling, now informed by measured
+  weights from both sides (this battery) plus the shield fact
+  (premise-gone battery: refalsify-on prevents the moot-lane injection
+  entirely). Candidate directions recorded for that ruling, NOT
+  proposed: a no-defect-found honest-completion signal that §5 treats
+  as unmeasured; scoping §5 to tasks whose own verification ran and
+  failed; or accepting the weight as-is given the refalsify-on default
+  shields the dominant false-positive lane.
+- Spec-flagged [judgment] calls for review: corpus seed 20260830,
+  floor 8 = 16/2, third-value perturbation constants.
+- Task-4 finding recorded as a dated spec V1 amendment: `_load_arm`
+  already drops Error halves (its own H3 rule) — the Error exclusion
+  lives at the join; H3 counts once; unscored-in-matched = INVALID.
+
+**Process lessons:** the entailment analysis at DESIGN time (spec §0)
+kept the code-entailed mint-xor-contradict totality out of the
+endpoints — it ran as validity gate V1 only; the registered product is
+the splits. Wilson intervals (no RNG) fit proportion endpoints cleaner
+than bootstrap and cost four independent hand-derived vectors to pin.
+Driver and dry_manifest needed ZERO changes for a three-lane per-task
+p2 corpus — the key-presence convention generalized; their shas in
+this prereg are byte-identical to the pg lock's pins.

@@ -1,0 +1,154 @@
+{
+  "a_advisory": {
+    "by_lane": {
+      "control": {
+        "p2_patch_attempt_tasks": 16,
+        "p2_terminal_status_counts": {
+          "Done": 16
+        },
+        "p2_token_median": 108.5,
+        "p2_wall_median_ms": 494.0
+      },
+      "moot": {
+        "p2_patch_attempt_tasks": 16,
+        "p2_terminal_status_counts": {
+          "Done": 16
+        },
+        "p2_token_median": 112.0,
+        "p2_wall_median_ms": 516.5
+      },
+      "stale": {
+        "p2_patch_attempt_tasks": 16,
+        "p2_terminal_status_counts": {
+          "Done": 16
+        },
+        "p2_token_median": 109.0,
+        "p2_wall_median_ms": 523.5
+      }
+    },
+    "mint_count_p1": 48,
+    "mint_rate_p1": 1.0,
+    "store_final_status_counts": {
+      "contradicted": 31,
+      "verified": 17
+    }
+  },
+  "completeness": {
+    "actual_task_halves": 96,
+    "expected_task_halves": 96,
+    "reason": null,
+    "violated": false
+  },
+  "corpus_sha": "f7c75e1c6c66b433ee13d6ff9a64a3107f5be0c0f608b2c641b2e96872cb2d30",
+  "dropped": [],
+  "h3_infra": {
+    "ceiling": 0.05,
+    "dropped_halves": 0,
+    "infra_count": 0,
+    "infra_rate": 0.0,
+    "task_halves": 96,
+    "violated": false
+  },
+  "lens": {
+    "arm_label": "s5_off",
+    "expected_digest": "7020b925c07c5a3808e1155700ca707598cb4f6d6089bb6daff4147b4d6b00bd",
+    "floor": 8,
+    "identity": {
+      "agree": true,
+      "matches_expected": true,
+      "phase1_digest": "7020b925c07c5a3808e1155700ca707598cb4f6d6089bb6daff4147b4d6b00bd",
+      "phase2_digest": "7020b925c07c5a3808e1155700ca707598cb4f6d6089bb6daff4147b4d6b00bd",
+      "reason": null,
+      "violated": false
+    },
+    "instrument": "s5-weight-battery-v1",
+    "n": 48,
+    "n_per_lane": 16,
+    "source_paths": {
+      "arm_dir": "/home/brice/workspace/bloomery/.superpowers/sdd/2026-08-28-s5-weight-battery/real/runs/arm/data",
+      "corpus_dir": "tools/memory_battery/corpus-s5-v1",
+      "ledger": "/home/brice/workspace/bloomery/.superpowers/sdd/2026-08-28-s5-weight-battery/real/runs/arm/ledger.jsonl"
+    },
+    "wilson_z": 1.959963984540054
+  },
+  "v1_conformance": {
+    "both_event_names": [],
+    "degraded_explained_names": [],
+    "neither_event_names": [],
+    "reason": null,
+    "unscored_in_matched_names": [],
+    "verdict": "PASS"
+  },
+  "v2_stamp_audit": {
+    "forbidden_spelling_hits": [],
+    "injected_p1_count": 0,
+    "non_none_spellings": [],
+    "oversize_degraded_count": 0,
+    "refalsify_all_none": true,
+    "violated": false
+  },
+  "v3_floors": {
+    "floor": 8,
+    "lanes_under_floor": [],
+    "matched_by_lane": {
+      "control": 16,
+      "moot": 16,
+      "stale": 16
+    },
+    "reason": null,
+    "verdict": "PASS"
+  },
+  "weights": {
+    "control": {
+      "contradicted": 0,
+      "denominator": 16,
+      "matched": 16,
+      "minted": 16,
+      "neither": 0,
+      "rate_contradicted": 0.0,
+      "rate_minted": 1.0,
+      "wilson_contradicted": [
+        0.0,
+        0.1936076805344365
+      ],
+      "wilson_minted": [
+        0.8063923194655636,
+        1.0000000000000002
+      ]
+    },
+    "moot": {
+      "contradicted": 16,
+      "denominator": 16,
+      "matched": 16,
+      "minted": 0,
+      "neither": 0,
+      "rate_contradicted": 1.0,
+      "rate_minted": 0.0,
+      "wilson_contradicted": [
+        0.8063923194655636,
+        1.0000000000000002
+      ],
+      "wilson_minted": [
+        0.0,
+        0.1936076805344365
+      ]
+    },
+    "stale": {
+      "contradicted": 15,
+      "denominator": 16,
+      "matched": 16,
+      "minted": 1,
+      "neither": 0,
+      "rate_contradicted": 0.9375,
+      "rate_minted": 0.0625,
+      "wilson_contradicted": [
+        0.7167126242970107,
+        0.9888806552353575
+      ],
+      "wilson_minted": [
+        0.011119344764642517,
+        0.2832873757029894
+      ]
+    }
+  }
+}
