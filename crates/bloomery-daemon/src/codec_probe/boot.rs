@@ -36,9 +36,11 @@ use std::sync::Mutex;
 use bloomery_substrate::Substrate;
 
 use super::fixtures::{
-    shipped_fixture_set, shipped_fixture_set_v4_mixed, V4_MIXED_PLACEHOLDER_SET_NAME,
+    shipped_fixture_set, shipped_fixture_set_v4_mixed, shipped_fixture_set_v5_mixed, FixtureSet,
+    V4_MIXED_PLACEHOLDER_SET_NAME, V5_MIXED_PLACEHOLDER_SET_NAME,
 };
 use super::{run_codec_probe, run_refusal_probe, ProbeAborted};
+use crate::config::EnvelopeLens;
 use crate::pager::{Pager, PagerError};
 
 /// The decision table's first line, as a pure boolean: the probe runs only
@@ -198,29 +200,96 @@ pub fn g5_probe_aborted_reason(model: &str, reason: &str) -> String {
 /// journal line): no model opted in, so there is nothing to skip or run.
 pub fn run_boot_g5_probe<S: Substrate + Send + 'static>(
     pager: &Mutex<Pager<S>>,
-    g5_models: &[String],
+    g5_models: &[(String, EnvelopeLens)],
     scratch_dir: &Path,
 ) -> Result<(), PagerError> {
     if g5_models.is_empty() {
         return Ok(());
     }
-    let set = match shipped_fixture_set_v4_mixed() {
-        Ok(set) => set,
-        Err(e) => return journal_degraded(pager, fixture_set_unparseable_reason(&e)),
-    };
-    if set.set == V4_MIXED_PLACEHOLDER_SET_NAME {
-        return journal_degraded(pager, g5_placeholder_skip_reason(&set.set));
-    }
+    // Turn-6 spec §5.1: the instrument travels with the ENVELOPE — a
+    // `done_declares()` (v5) model is measured against codec-tasks-v5-mixed;
+    // every other opted-in model keeps codec-tasks-v4-mixed, exactly the
+    // set this function has driven since turn 4. Grouped here rather than
+    // per-model so each set is parsed (and placeholder-guarded) once.
+    let (v4_group, v5_group) = split_g5_models(g5_models);
     // A distinct scratch subtree from G4's: the two engines' fixture NAMES
     // are never guaranteed disjoint (different fixture sets, authored
     // independently), and `materialize`'s directory is keyed by fixture
     // name alone under the model's dir — nesting under `g5/` keeps a G5
     // fixture from ever colliding with a same-named G4 one.
     let g5_scratch = scratch_dir.join("g5");
-    for model in g5_models {
-        if let Err(ProbeAborted { reason }) = run_refusal_probe(pager, model, &set, &g5_scratch) {
-            journal_degraded(pager, g5_probe_aborted_reason(model, &reason))?;
+    for (group, load, placeholder_name) in [
+        (
+            &v4_group,
+            shipped_fixture_set_v4_mixed as fn() -> Result<FixtureSet, String>,
+            V4_MIXED_PLACEHOLDER_SET_NAME,
+        ),
+        (
+            &v5_group,
+            shipped_fixture_set_v5_mixed as fn() -> Result<FixtureSet, String>,
+            V5_MIXED_PLACEHOLDER_SET_NAME,
+        ),
+    ] {
+        if group.is_empty() {
+            continue;
+        }
+        let set = match load() {
+            Ok(set) => set,
+            Err(e) => {
+                journal_degraded(pager, fixture_set_unparseable_reason(&e))?;
+                continue;
+            }
+        };
+        if set.set == placeholder_name {
+            journal_degraded(pager, g5_placeholder_skip_reason(&set.set))?;
+            continue;
+        }
+        for model in group {
+            if let Err(ProbeAborted { reason }) = run_refusal_probe(pager, model, &set, &g5_scratch)
+            {
+                journal_degraded(pager, g5_probe_aborted_reason(model, &reason))?;
+            }
         }
     }
     Ok(())
+}
+
+/// The per-envelope G5 grouping (turn-6 spec §5.1), extracted pure so the
+/// selection rule is unit-testable: `(v4-instrument models, v5-instrument
+/// models)`, in input order. The rule is `done_declares()`, never an
+/// envelope-name comparison — a future lens that declares its `done`
+/// belongs with the declared instrument by construction.
+pub(crate) fn split_g5_models(models: &[(String, EnvelopeLens)]) -> (Vec<String>, Vec<String>) {
+    let mut v4 = Vec::new();
+    let mut v5 = Vec::new();
+    for (name, lens) in models {
+        if lens.done_declares() {
+            v5.push(name.clone());
+        } else {
+            v4.push(name.clone());
+        }
+    }
+    (v4, v5)
+}
+
+#[cfg(test)]
+mod g5_split_tests {
+    use super::split_g5_models;
+    use crate::config::EnvelopeLens;
+
+    /// Turn-6 spec §5.1: the instrument travels with the envelope —
+    /// `done_declares()` models go to the v5 group, everything else stays
+    /// on the v4 instrument, input order preserved within each group.
+    #[test]
+    fn split_routes_by_done_declares_only() {
+        let models = vec![
+            ("a".to_string(), EnvelopeLens::V4),
+            ("b".to_string(), EnvelopeLens::V5),
+            ("c".to_string(), EnvelopeLens::V1),
+            ("d".to_string(), EnvelopeLens::V5),
+        ];
+        let (v4, v5) = split_g5_models(&models);
+        assert_eq!(v4, vec!["a".to_string(), "c".to_string()]);
+        assert_eq!(v5, vec!["b".to_string(), "d".to_string()]);
+    }
 }

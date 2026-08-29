@@ -1556,7 +1556,7 @@ fn run_boot_g5_probe_runs_the_real_shipped_set_not_a_placeholder_skip() {
     let mut pager = Pager::new(fake, journal, images, Box::new(|| Some(1024 * 1024 * 1024)));
     pager.set_task_journal_path(dir.join("tasks.jsonl"));
     let pager = Mutex::new(pager);
-    let g5_models = vec![MODEL.to_string()];
+    let g5_models = vec![(MODEL.to_string(), bloomery_daemon::config::EnvelopeLens::V4)];
 
     run_boot_g5_probe(&pager, &g5_models, &dir.join("scratch"))
         .expect("an aborted probe is a clean boot, not a journal failure");

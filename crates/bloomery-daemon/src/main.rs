@@ -268,11 +268,20 @@ fn run(config: Config, journal: Journal) -> ! {
         // G5 (docs/superpowers/evidence/2026-08-16-g5-protocol.md §1):
         // per-model opt-in, computed the same way `models` above is — every
         // configured name whose spec has `g5_probe = true`.
-        let g5_models: Vec<String> = config
+        // Each opted-in model travels with its envelope lens (turn-6 spec
+        // §5.1): the G5 probe selects the instrument per envelope. An
+        // unparseable envelope value is a config error and fails the boot
+        // here, exactly as the pager's own registration path would.
+        let g5_models: Vec<(String, bloomery_daemon::config::EnvelopeLens)> = config
             .models
             .iter()
             .filter(|(_, spec)| spec.g5_probe())
-            .map(|(name, _)| name.clone())
+            .map(|(name, spec)| {
+                let lens = spec
+                    .envelope_lens()
+                    .unwrap_or_else(|e| fail(format!("model {name:?}: {e}")));
+                (name.clone(), lens)
+            })
             .collect();
         let tier = config.tier.clone();
         let python = config.assay.python.clone();

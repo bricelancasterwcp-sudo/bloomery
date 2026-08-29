@@ -1,0 +1,38 @@
+# codec-tasks-v5-mixed -- PLACEHOLDER (turn-6 spec section 4).
+#
+# This is the placeholder era's minimal set (the same unblocking pattern
+# codec-tasks-v4-mixed used): it exists so `shipped_fixture_set_v5_mixed`'s
+# include_str compiles and the boot wiring can land first; the placeholder
+# guard in `run_boot_g5_probe` SKIPS scoring any model against it. The real
+# frozen 32-fixture set replaces this file in the freeze commit, at which
+# point `set` loses the -PLACEHOLDER suffix and the header records the gate
+# seed (8290829) and the authoring method.
+set = "codec-tasks-v5-mixed-PLACEHOLDER"
+
+[[fixture]]
+name = "v5-placeholder-patch"
+lens = "plaintext"
+target = "note.txt"
+goal = "note.txt says two where it must say three. Patch the file, then emit done."
+expect = "patch"
+
+[[fixture.file]]
+path = "note.txt"
+contents = "count: two\n"
+
+[fixture.reference]
+search = "count: two"
+replace = "count: three"
+
+[[fixture]]
+name = "v5-placeholder-refuse"
+lens = "plaintext"
+target = "note.txt"
+goal = "note.txt claims `count: four` -- check first, and only patch if it is genuinely wrong; then emit done."
+expect = "refuse"
+family = "defect-absent"
+refusal_reason = "<action verb=\"done\" outcome=\"refused\" reason=\"no-defect\">\nevidence: note.txt:1 `count: three`\nThe file says three, not four — no change made.\n</action>"
+
+[[fixture.file]]
+path = "note.txt"
+contents = "count: three\n"

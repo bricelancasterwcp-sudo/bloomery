@@ -276,6 +276,19 @@ pub fn shipped_fixture_set_v4_mixed() -> Result<FixtureSet, String> {
     parse_fixture_set(include_str!("../../fixtures/codec-tasks-v4-mixed.toml"))
 }
 
+/// The name `boot::run_boot_g5_probe` checks parsed mixed sets against
+/// during the v5 placeholder era — same pattern as every prior set.
+pub const V5_MIXED_PLACEHOLDER_SET_NAME: &str = "codec-tasks-v5-mixed-PLACEHOLDER";
+
+/// Parses the flywheel turn-6 G5 mixed fixture set, embedded at
+/// `fixtures/codec-tasks-v5-mixed.toml` (turn-6 spec §4: 16+16 with a
+/// `family` key and a full ideal v5 `done` on every refuse fixture; gate
+/// seed 8290829 recorded in the frozen header). During the placeholder era
+/// this parses the minimal stand-in and the boot guard skips scoring.
+pub fn shipped_fixture_set_v5_mixed() -> Result<FixtureSet, String> {
+    parse_fixture_set(include_str!("../../fixtures/codec-tasks-v5-mixed.toml"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
