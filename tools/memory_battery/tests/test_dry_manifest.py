@@ -274,3 +274,33 @@ class CliTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PristineP2CarryTests(unittest.TestCase):
+    """premise-gone-battery plan Task 5: a task carrying `pristine_p2`
+    gets that tree scratch-copied beside `workspace/`+`pristine/`, and
+    the output manifest's key names the scratch copy; tasks without the
+    key are untouched (the rest of this file, unmodified, pins that)."""
+
+    def test_pristine_p2_is_scratch_copied_and_the_key_rewritten(self) -> None:
+        from tools.memory_battery.corpus_pg import generate_corpus_pg
+
+        with TemporaryDirectory() as tmp:
+            corpus_dir = Path(tmp) / "corpus"
+            generate_corpus_pg(1, 2, corpus_dir)
+            out_path = Path(tmp) / "run" / "manifest.json"
+
+            frozen_before = _sha_tree(corpus_dir)
+            run_manifest = generate_run_manifest(corpus_dir, out_path, real=True)
+            self.assertEqual(_sha_tree(corpus_dir), frozen_before)
+
+            for task in run_manifest["tasks"]:
+                scratch_p2 = out_path.parent / task["pristine_p2"]
+                frozen_p2 = corpus_dir / "tasks" / task["name"] / "pristine_p2"
+                self.assertTrue(scratch_p2.is_dir())
+                # Sibling convention the driver resolves by.
+                self.assertEqual(scratch_p2.parent.name, task["name"])
+                self.assertEqual(scratch_p2.name, "pristine_p2")
+                self.assertEqual(_sha_tree(scratch_p2), _sha_tree(frozen_p2))
+                # The scratch p2 tree is outside the frozen corpus.
+                self.assertNotIn(str(corpus_dir), str(scratch_p2.resolve()))

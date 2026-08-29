@@ -152,6 +152,24 @@ def generate_run_manifest(
         run_task["grant"] = dict(task["grant"])
         run_task["grant"]["read_roots"] = [workspace_abs]
         run_task["grant"]["write_roots"] = [workspace_abs]
+
+        # premise-gone corpora (plan Task 5): a task carrying a
+        # `pristine_p2` phase-2 source gets it scratch-copied beside
+        # `workspace/`/`pristine/` under the SAME sibling convention the
+        # driver resolves by, and the key rewritten to the scratch copy --
+        # the frozen tree stays untouchable by construction, exactly as
+        # for the other two trees. Fail-loud on a manifest/filesystem
+        # mismatch, same as above.
+        if "pristine_p2" in task:
+            src_p2 = corpus_dir / "tasks" / name / "pristine_p2"
+            if not src_p2.is_dir():
+                raise FileNotFoundError(f"dry_manifest: {src_p2} does not exist for task {name!r}")
+            dst_p2 = scratch_tasks_root / name / "pristine_p2"
+            if dst_p2.exists():
+                shutil.rmtree(dst_p2)
+            shutil.copytree(src_p2, dst_p2)
+            run_task["pristine_p2"] = str(dst_p2.relative_to(out_path.parent))
+
         run_tasks.append(run_task)
 
     run_manifest: dict[str, Any] = dict(manifest)
