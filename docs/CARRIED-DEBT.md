@@ -1731,3 +1731,18 @@ registration (revisit only if a ms-level number becomes
 decision-relevant). The three spec-flagged [judgment] items (seeds,
 floors, perturbation constants) remain standing review flags,
 unobjected.
+
+## turn-6 Phase B review notes — 2026-08-29 (branch turn6-envelope-v5)
+
+Settled at review: the reason_matches_family patch-class silent-drop
+(CRITICAL — undeclared reasons vanished from the patch buckets exactly
+on the undeclared-dominance axis §5.6 predicts; fixed with a third
+bucket + sum-invariant regression test); the mixed grounded+misaligned
+evidence row-bucket rule DECIDED as "misaligned" (nothing fabricated,
+at least one citation off; never diluted into a grounded-looking
+bucket) and pinned by test. Deferred: a mixed v4+v5 model-list
+integration test through run_boot_g5_probe (the grouping is unit-pinned;
+the loop was hand-traced at review); v4's cross-class shape-sharing
+floor test deliberately not carried to v5 (zero sharing in the frozen
+set; rationale in the diversity file's header); the find-witness
+threshold note (8→6 chars, documented in the rules test).
