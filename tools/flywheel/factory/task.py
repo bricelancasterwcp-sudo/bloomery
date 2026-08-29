@@ -332,6 +332,28 @@ def done_v5(*, outcome: str, reason: str, evidence_lines: list[str], prose: str)
     return f'<action verb="done" outcome="{outcome}" reason="{reason}">\n{evidence}\n{prose}\n</action>'
 
 
+def evidence_line_of(files: dict[str, str], path: str, quote: str) -> tuple[str, int, str]:
+    """One evidence ground-truth triple (path, 1-based line, verbatim
+    quote), derived — never hand-counted — from the generated file itself
+    (turn-7 spec §2.2). The quote must be non-empty, occur in
+    `files[path]`, and sit on EXACTLY one line: a template whose quote is
+    ambiguous (or drifts out of its own file) fails loudly at draw time,
+    which is the whole point of deriving the line number here rather than
+    trusting a template to count."""
+    if not quote.strip():
+        raise ValueError(f"evidence_line_of: empty quote for {path!r}")
+    contents = files.get(path)
+    if contents is None:
+        raise ValueError(f"evidence_line_of: {path!r} is not among files {sorted(files)}")
+    hits = [i + 1 for i, line in enumerate(contents.splitlines()) if quote in line]
+    if len(hits) != 1:
+        raise ValueError(
+            f"evidence_line_of: quote {quote!r} occurs on {len(hits)} line(s) of {path!r}, "
+            f"need exactly 1 -- pick a longer, unambiguous quote"
+        )
+    return (path, hits[0], quote)
+
+
 class RefusalTask(NamedTuple):
     """One generated refusal task (G5 design doc §5; turn-3 design doc §2
     for the third family). `target_missing` separates the missing-target
@@ -341,7 +363,16 @@ class RefusalTask(NamedTuple):
     really IS broken, but in a different way than the goal reports);
     `True` means `target` is NOT in `files` (missing-target — `files`
     still holds >= 1 real sibling so the directory is not suspiciously
-    empty). Immutable, same reasoning as `Task`."""
+    empty). Immutable, same reasoning as `Task`.
+
+    Turn 7 adds `evidence`, defaulted, superseding turn 3's "the
+    NamedTuple deliberately gains no Y field" for exactly one consumer:
+    the v5 ideal assembler (`generate_envelope_v5.py`) is a RUNTIME
+    consumer of the ground truth the templates hold, so the ground truth
+    becomes a field — (path, 1-based line, verbatim quote) triples built
+    via `evidence_line_of`, populated by every target-present template
+    (missing-target's `evidence: <target> absent` line is mechanical and
+    needs none)."""
 
     name: str
     lens: str  # "python" | "plaintext"
@@ -351,6 +382,7 @@ class RefusalTask(NamedTuple):
     files: dict[str, str]
     goal: str
     refusal_reason: str
+    evidence: tuple[tuple[str, int, str], ...] = ()
 
 
 def validate_refusal_task(task: RefusalTask) -> list[str]:
@@ -423,5 +455,33 @@ def validate_refusal_task(task: RefusalTask) -> list[str]:
 
     if not task.refusal_reason.strip():
         violations.append("refusal_reason is empty")
+
+    # Turn 7: evidence triples, when carried, must be re-derivable from the
+    # task's own files — the same exactly-one-line rule `evidence_line_of`
+    # enforces at construction, re-checked here so a triple built by hand
+    # (or gone stale against an edited template file) can never survive
+    # validation. And a target-present task must CARRY its ground truth:
+    # the v5 ideal's evidence line comes from `task.evidence` (missing-
+    # target's `absent` line is mechanical and needs none), so a
+    # target-present template that never populated it would ship a refusal
+    # the assembler cannot ground.
+    if task.family in TARGET_PRESENT_FAMILIES and not any(
+        path == task.target for path, _line_no, _quote in task.evidence
+    ):
+        violations.append(
+            f"target-present family {task.family!r} carries no evidence triple whose path is the "
+            f"target {task.target!r} -- populate evidence via evidence_line_of (turn-7 spec §2.2)"
+        )
+    for path, line_no, quote in task.evidence:
+        contents = task.files.get(path)
+        if contents is None:
+            violations.append(f"evidence triple names {path!r}, which is not among files {sorted(task.files)}")
+            continue
+        file_lines = contents.splitlines()
+        if not (1 <= line_no <= len(file_lines)) or quote not in file_lines[line_no - 1]:
+            violations.append(
+                f"evidence quote {quote!r} is not on line {line_no} of {path!r} -- triples must "
+                f"be built with evidence_line_of, never hand-counted"
+            )
 
     return violations

@@ -48,8 +48,12 @@ from tools.flywheel.factory.task import (
 # A prompt change is a new envelope under the lens-travels-with-verdict
 # rule, so every turn-4 measurement is per-(model, v4) — which is exactly
 # why this is a single constant stamped onto every request rather than a
-# per-shape default.
+# per-shape default. Turn 7 makes the stamp a PARAMETER with this constant
+# as its default (still one stamp site): omitting `--envelope` stays
+# byte-identical to every prior turn, and `--envelope v5` renders the
+# declared-`done` envelope (turn-7 spec §2.2).
 ENVELOPE = "v4"
+V5_ENVELOPE = "v5"
 PATCH_CODEC = "search_replace"
 
 AnyTask = Union[Task, RefusalTask]
@@ -98,7 +102,7 @@ def _patch_request(task: Task) -> dict:
     return request
 
 
-def build_trajectory_request(task: AnyTask) -> dict:
+def build_trajectory_request(task: AnyTask, envelope: str = ENVELOPE) -> dict:
     """The one function that builds every request of either class, and
     therefore the one place `envelope` and `commands` are stamped (see this
     module's docstring). A refuse task has no `commands` field at all —
@@ -110,7 +114,7 @@ def build_trajectory_request(task: AnyTask) -> dict:
     else:
         request = _patch_request(task)
         commands = task.commands
-    request["envelope"] = ENVELOPE
+    request["envelope"] = envelope
     request["commands"] = [list(prefix) for prefix in commands]
     return request
 
@@ -121,15 +125,25 @@ def expected_pair_names(task: AnyTask) -> tuple[str, ...]:
     return PAIR_NAMES[task.trajectory]
 
 
-def row_meta(task_id: str, task: AnyTask, pair_name: str) -> dict:
+def row_meta(task_id: str, task: AnyTask, pair_name: str, envelope: str = ENVELOPE) -> dict:
     """One corpus row's `meta`. `files` covers every file the task carries
     (not just the target) because the post-hoc contamination guard can only
     screen siblings through this key; `trajectory` is what makes the
     pre-registered slice counts (design doc §2/§5) readable straight off
     the corpus, and lets the per-shape pair pins say WHICH shape a row's
-    sequence should match."""
+    sequence should match.
+
+    Under v5 ONLY (turn-7 spec §2.2; v4 meta stays byte-identical), three
+    additive keys for `check_corpus_v5.py`: `envelope`, `replace` on patch
+    rows (the checker's post-patch bytes), and `family` on refuse rows
+    (the checker never infers family from a template name — the same rule
+    the declaration endpoint enforces for fixtures)."""
     if isinstance(task, RefusalTask):
-        return generate_refusal.refusal_row_meta(task_id, task, pair_name)
+        meta = generate_refusal.refusal_row_meta(task_id, task, pair_name)
+        if envelope == V5_ENVELOPE:
+            meta["envelope"] = envelope
+            meta["family"] = task.family
+        return meta
     meta = {
         "task_id": task_id,
         "template": task.name,
@@ -149,4 +163,7 @@ def row_meta(task_id: str, task: AnyTask, pair_name: str) -> dict:
         meta["find_pattern"] = task.find_pattern
     elif task.trajectory == RUN_TRAJECTORY:
         meta["run_argv"] = list(task.run_argv)
+    if envelope == V5_ENVELOPE:
+        meta["envelope"] = envelope
+        meta["replace"] = task.replace
     return meta

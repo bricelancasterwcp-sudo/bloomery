@@ -81,6 +81,7 @@ from pathlib import Path
 
 from tools.flywheel.factory import (
     gate_sampling,
+    generate_envelope_v5,
     generate_refusal,
     generate_request,
     generate_slices,
@@ -140,7 +141,9 @@ def dedup_tasks(tasks: list[Task]) -> tuple[list[Task], int]:
     return unique, dropped
 
 
-def _verify_and_build_rows(assigned: list[tuple[str, AnyTask]], tool_path: Path) -> tuple[list[dict], int]:
+def _verify_and_build_rows(
+    assigned: list[tuple[str, AnyTask]], tool_path: Path, envelope: str
+) -> tuple[list[dict], int]:
     """Rule 4, extended additively for refuse tasks: every task goes
     through flywheel-tool `trajectory`, patch and refuse alike, over ONE
     long-lived subprocess for the whole run (Task 1's report). A patch
@@ -149,12 +152,25 @@ def _verify_and_build_rows(assigned: list[tuple[str, AnyTask]], tool_path: Path)
     contract: `landed` is trivially `true` for refuse) — instead, a
     response missing `verified: "refusal"` ABORTS the same way, since that
     is the only signal that the tool actually exercised the refuse path
-    rather than a vacuous success."""
+    rather than a vacuous success.
+
+    Turn 7: under `--envelope v5` every task's `done` ideal is swapped for
+    the full declared v5 block HERE (`generate_envelope_v5.to_v5_task`) —
+    after validation, dedup, and gate screening (all envelope-independent,
+    reading goal/files only), immediately before the wire request. A
+    factory bug in the swap (missing template ground truth, blank patched
+    line) raises and is routed through `fail`, the same
+    abort-with-the-task-printed posture as every other factory bug."""
     rows: list[dict] = []
     total_pairs = 0
     with ToolClient(tool_path) as client:
         for task_id, task in assigned:
-            request = generate_request.build_trajectory_request(task)
+            if envelope == generate_request.V5_ENVELOPE:
+                try:
+                    task = generate_envelope_v5.to_v5_task(task)
+                except ValueError as exc:
+                    fail(f"v5 ideal assembly failed for task {task_id} ({task.name}): {exc}")
+            request = generate_request.build_trajectory_request(task, envelope)
             response = client.trajectory(request)
 
             if "error" in response:
@@ -187,7 +203,7 @@ def _verify_and_build_rows(assigned: list[tuple[str, AnyTask]], tool_path: Path)
                     {
                         "prompt": pair["prompt"],
                         "completion": pair["completion"],
-                        "meta": generate_request.row_meta(task_id, task, pair_name),
+                        "meta": generate_request.row_meta(task_id, task, pair_name, envelope),
                     }
                 )
                 total_pairs += 1
@@ -232,6 +248,18 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
             "from the same seeded stream, never silently kept and never silently under-filling "
             "the requested count. Omitting this flag reproduces prior-turn behavior byte-for-"
             "byte: zero screening, zero extra rng draws."
+        ),
+    )
+    parser.add_argument(
+        "--envelope",
+        choices=(generate_request.ENVELOPE, generate_request.V5_ENVELOPE),
+        default=generate_request.ENVELOPE,
+        help=(
+            "Envelope the corpus is rendered under (turn-7 spec §2.2). Omitting this flag — or "
+            "passing v4 — reproduces prior-turn behavior byte-for-byte (corpus AND fingerprint). "
+            "v5 renders the declared-`done` envelope: every task's done ideal is swapped for the "
+            "full declared block (generate_envelope_v5.to_v5_task), the wire request is stamped "
+            "v5, and row meta gains envelope/replace/family for check_corpus_v5.py."
         ),
     )
     parser.add_argument("--tool", type=Path, required=True, help="Path to the flywheel-tool binary (or a stub).")
@@ -295,7 +323,7 @@ def main(argv: list[str] | None = None) -> int:
         for rule, n in rejections.items():
             gate_rejections[rule] = gate_rejections.get(rule, 0) + n
 
-    rows, total_pairs = _verify_and_build_rows(assigned, args.tool)
+    rows, total_pairs = _verify_and_build_rows(assigned, args.tool, args.envelope)
 
     sorted_ids = sorted(task_id for task_id, _task in assigned)
     val_split_ids = _validation_split(rng, sorted_ids)
@@ -331,6 +359,10 @@ def main(argv: list[str] | None = None) -> int:
         "gates_sha256": _gates_sha256(gate_paths),
         "gate_rejections": dict(sorted(gate_rejections.items())),
     }
+    # Recorded only under v5 so a v4 run's fingerprint stays byte-identical
+    # to every prior turn's (the --envelope flag's own promise).
+    if args.envelope == generate_request.V5_ENVELOPE:
+        fingerprint["envelope"] = args.envelope
     args.report.write_text(json.dumps(fingerprint, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     print(

@@ -13,6 +13,7 @@ import json
 import unittest
 from pathlib import Path
 
+from tools.flywheel.factory import generate_request
 from tools.flywheel.tests.test_generate import STUB_TOOL, run_generate
 
 
@@ -164,7 +165,7 @@ class RefusalVerificationUnitTest(unittest.TestCase):
             refusal_reason="No change needed.",
         )
         with self.assertRaises(SystemExit):
-            generate._verify_and_build_rows([("t1", task)], STUB_TOOL)
+            generate._verify_and_build_rows([("t1", task)], STUB_TOOL, generate_request.ENVELOPE)
 
 
 if __name__ == "__main__":

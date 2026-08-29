@@ -174,7 +174,7 @@ class LandingFailureAbortsEveryShapeTest(unittest.TestCase):
         self.assertEqual(len(response["pairs"]), 3)
         self.assertIn("landing_detail", response)
         with self.assertRaises(SystemExit):
-            generate._verify_and_build_rows([("t1", task)], STUB_TOOL)
+            generate._verify_and_build_rows([("t1", task)], STUB_TOOL, generate_request.ENVELOPE)
 
     def test_run_shape_returns_two_pairs_so_far_and_aborts_the_run(self):
         task = self._task(
@@ -188,7 +188,7 @@ class LandingFailureAbortsEveryShapeTest(unittest.TestCase):
         self.assertEqual(len(response["pairs"]), 2)
         self.assertIn("landing_detail", response)
         with self.assertRaises(SystemExit):
-            generate._verify_and_build_rows([("t1", task)], STUB_TOOL)
+            generate._verify_and_build_rows([("t1", task)], STUB_TOOL, generate_request.ENVELOPE)
 
 
 @unittest.skipUnless(
