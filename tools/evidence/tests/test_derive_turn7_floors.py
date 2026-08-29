@@ -11,6 +11,7 @@ Hand vector (z = 1.959963984540054, fixed denominators per spec §4.2):
   F7: wilson95(5,5).lower   = 0.565518 -> min k with k/5 >= that = 3
 """
 
+import json
 import unittest
 from pathlib import Path
 
@@ -76,6 +77,91 @@ class FloorRuleMechanicsTest(unittest.TestCase):
             forged.write_bytes(FIXTURES.read_bytes() + b"\n# tampered\n")
             with self.assertRaises(SystemExit):
                 derive(BASELINE, forged)
+
+
+class BaselineIdentityTest(unittest.TestCase):
+    """F-2 (adversarial review, 2026-08-29): the comparator's identity is
+    pinned like the instrument's -- a wrong --baseline must be a hard
+    error, never silently different floors."""
+
+    def test_a_wrong_baseline_file_is_a_hard_error(self):
+        wrong = REPO / "docs/superpowers/evidence/2026-08-29-g5v5-stock14b-boot1-recompute.json"
+        with self.assertRaises(SystemExit):
+            derive(wrong, FIXTURES)
+
+    def test_a_saturated_baseline_is_a_named_error_not_a_bare_stopiteration(self):
+        with self.assertRaises(ValueError) as ctx:
+            improvement_floor(32, 32)
+        self.assertIn("saturated", str(ctx.exception))
+
+
+class EvaluateModeTest(unittest.TestCase):
+    """The battery's mechanical floor verdict: floors read from the
+    derivation report, subject refused unless its instrument-row binding
+    is clean, no human arithmetic at verdict time."""
+
+    @staticmethod
+    def _subject(**mutations):
+        subject = {
+            "instrument_rows": {"expected": 32, "seen": 32, "duplicates": [], "unknown": [], "missing": []},
+            "join": {"violations": []},
+            "g4": {"landed": 20, "n": 20},
+            "g5": {"patch": {"landed": 15, "n": 16}, "refuse": {"landed": 16, "n": 16}},
+            "declarations": {
+                "outcome_consistent": {"consistent": 31},
+                "evidence_grounded": {"grounded": 20},
+                "reason_matches_family": {"by_family": {
+                    "symptom-mismatch": {"match": 4},
+                    "defect-absent": {"match": 5},
+                    "missing-target": {"match": 5},
+                }},
+            },
+        }
+        subject.update(mutations)
+        return subject
+
+    def _evaluate(self, subject):
+        import tempfile
+
+        from tools.evidence.derive_turn7_floors import evaluate
+
+        report = derive(BASELINE, FIXTURES)
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "subject.json"
+            path.write_text(json.dumps(subject), encoding="utf-8")
+            return evaluate(report, path)
+
+    def test_a_passing_subject_passes_every_floor(self):
+        evaluation = self._evaluate(self._subject())
+        self.assertTrue(evaluation["all_pass"])
+        self.assertEqual({k: v["pass"] for k, v in evaluation["checks"].items()},
+                         {k: True for k in evaluation["checks"]})
+
+    def test_one_floor_miss_fails_the_whole_verdict(self):
+        subject = self._subject()
+        subject["declarations"]["reason_matches_family"]["by_family"]["symptom-mismatch"]["match"] = 2
+        evaluation = self._evaluate(subject)
+        self.assertFalse(evaluation["all_pass"])
+        self.assertFalse(evaluation["checks"]["F4_symptom_mismatch_match"]["pass"])
+        self.assertTrue(evaluation["checks"]["F5_evidence_grounded"]["pass"])
+
+    def test_a_wrong_leg_denominator_fails_its_floor(self):
+        subject = self._subject(g4={"landed": 19, "n": 19})
+        evaluation = self._evaluate(subject)
+        self.assertFalse(evaluation["checks"]["F1_g4"]["pass"])
+
+    def test_a_duplicated_instrument_row_refuses_the_verdict(self):
+        subject = self._subject()
+        subject["instrument_rows"] = {"expected": 32, "seen": 33,
+                                      "duplicates": ["v5-patch-find-py-01"], "unknown": [], "missing": []}
+        with self.assertRaises(SystemExit):
+            self._evaluate(subject)
+
+    def test_a_subject_without_the_binding_is_refused(self):
+        subject = self._subject()
+        del subject["instrument_rows"]
+        with self.assertRaises(SystemExit):
+            self._evaluate(subject)
 
 
 if __name__ == "__main__":

@@ -77,6 +77,22 @@ def load_fixture_files(toml_path: Path) -> dict[str, dict]:
     return {fx["name"]: fx for fx in doc["fixture"]}
 
 
+def instrument_row_check(row_fixture_names: list[str], expected_names: set[str]) -> dict:
+    """The instrument's rows, bound at EVAL time (turn-7 adversarial review
+    F-1, 2026-08-29): every fixed-denominator numerator upstream of the
+    turn-7 floors counts journal ROWS, so a duplicated or unknown fixture
+    row inflates them while every join validation stays green. Duplicates
+    and unknowns are integrity violations for the caller to fold into its
+    exit code; missing fixtures only shrink numerators (conservative) and
+    are reported, never fatal here."""
+    counts = Counter(row_fixture_names)
+    duplicates = sorted(name for name, c in counts.items() if c > 1)
+    unknown = sorted(name for name in counts if name not in expected_names)
+    missing = sorted(name for name in expected_names if name not in counts)
+    return {"expected": len(expected_names), "seen": len(row_fixture_names),
+            "duplicates": duplicates, "unknown": unknown, "missing": missing}
+
+
 def reason_grounding(rows: list[Joined], fixtures: dict[str, dict]) -> dict:
     eligible = [j for j in rows if j.fixture.get("expect") == "refuse"
                 and "missing-target" not in j.fixture["fixture"]]

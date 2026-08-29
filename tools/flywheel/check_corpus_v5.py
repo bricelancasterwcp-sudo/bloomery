@@ -183,14 +183,29 @@ def _iter_rows(path: str, violations: list[str]) -> Iterator[tuple[int, dict]]:
                 violations.append(f"row {number}: not valid JSON ({exc})")
 
 
-def _register_task(tasks: dict[str, dict], meta: dict) -> None:
+def _register_task(tasks: dict[str, dict], meta: dict, label: str, violations: list[str]) -> None:
+    """Rule 6 (adversarial review F-4, 2026-08-29): task identity binds.
+    A row with no task_id, a duplicated (task_id, pair) row, or two rows
+    of one task_id disagreeing on expect/family/trajectory would silently
+    corrupt the quotable composition counts — each is a violation, never a
+    first-wins merge."""
     task_id = meta.get("task_id")
     if task_id is None:
+        violations.append(f"{label}: rule 6 -- row carries no task_id")
         return
-    info = tasks.setdefault(task_id, {})
+    info = tasks.setdefault(task_id, {"pairs": []})
+    pair = meta.get("pair")
+    if pair in info["pairs"]:
+        violations.append(f"{label}: rule 6 -- duplicate pair {pair!r} for this task_id")
+    info["pairs"].append(pair)
     for key in ("expect", "family", "trajectory"):
-        if key in meta and key not in info:
-            info[key] = meta[key]
+        if key in meta:
+            if key in info and info[key] != meta[key]:
+                violations.append(
+                    f"{label}: rule 6 -- rows of one task_id disagree on {key} "
+                    f"({info[key]!r} vs {meta[key]!r})"
+                )
+            info.setdefault(key, meta[key])
 
 
 def _summary(rows: int, done_rows: int, tasks: dict[str, dict], violations: list[str]) -> dict:
@@ -217,10 +232,17 @@ def _summary(rows: int, done_rows: int, tasks: dict[str, dict], violations: list
     }
 
 
-def check_corpus(path: str) -> dict:
-    """All five rules over every row of `path`, violations collected (never
+def check_corpus(path: str, expect_patch: int | None = None, expect_refuse: int | None = None) -> dict:
+    """All rules over every row of `path`, violations collected (never
     fail-fast: the report shows the corpus's whole failure surface, bounded
-    to `MAX_REPORTED` verbatim entries, all counted)."""
+    to `MAX_REPORTED` verbatim entries, all counted).
+
+    Rule 7 (adversarial review F-3, 2026-08-29): composition binds. An
+    empty corpus is never a passing corpus, and when the caller states the
+    pre-registered post-dedup task counts (`--expect-patch`/
+    `--expect-refuse`, quoted in the pre-registration beside the
+    fingerprint), the corpus must carry exactly those — the printed counts
+    stop relying on a human reading them."""
     violations: list[str] = []
     tasks: dict[str, dict] = {}
     row_count = 0
@@ -231,8 +253,8 @@ def check_corpus(path: str) -> dict:
         if not isinstance(meta, dict):
             violations.append(f"row {number}: no meta object")
             continue
-        _register_task(tasks, meta)
         label = f"row {number} (task {meta.get('task_id')!r}, pair {meta.get('pair')!r})"
+        _register_task(tasks, meta, label, violations)
         if meta.get("envelope") != V5:
             violations.append(
                 f"{label}: rule 1 -- meta.envelope is {meta.get('envelope')!r}, "
@@ -248,6 +270,19 @@ def check_corpus(path: str) -> dict:
             continue
         done_rows += 1
         _check_done_row(label, meta, completion, violations)
+    if row_count == 0:
+        violations.append("rule 7 -- the corpus is empty: zero rows is never a passing corpus")
+    by_expect = Counter(info.get("expect") for info in tasks.values())
+    if expect_patch is not None and by_expect.get("patch", 0) != expect_patch:
+        violations.append(
+            f"rule 7 -- {by_expect.get('patch', 0)} patch task(s), pre-registered expectation "
+            f"is {expect_patch}"
+        )
+    if expect_refuse is not None and by_expect.get("refuse", 0) != expect_refuse:
+        violations.append(
+            f"rule 7 -- {by_expect.get('refuse', 0)} refuse task(s), pre-registered expectation "
+            f"is {expect_refuse}"
+        )
     return _summary(row_count, done_rows, tasks, violations)
 
 
@@ -259,8 +294,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--corpus", required=True, metavar="PATH", help="corpus.jsonl to check")
     parser.add_argument("--json", metavar="OUT", help="also write the JSON summary to this file")
+    parser.add_argument(
+        "--expect-patch", type=int, default=None, metavar="N",
+        help="rule 7: exact post-dedup patch task count the corpus must carry",
+    )
+    parser.add_argument(
+        "--expect-refuse", type=int, default=None, metavar="N",
+        help="rule 7: exact post-dedup refuse task count the corpus must carry",
+    )
     args = parser.parse_args(argv)
-    summary = check_corpus(args.corpus)
+    summary = check_corpus(args.corpus, args.expect_patch, args.expect_refuse)
     rendered = json.dumps(summary, indent=2, sort_keys=True)
     print(rendered)
     if args.json:

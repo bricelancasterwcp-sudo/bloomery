@@ -119,9 +119,27 @@ class PatchEvidenceTest(unittest.TestCase):
         )
         self.assertEqual(gev5.patch_evidence(task), ("meter.py", 3, "    return x + 1"))
 
-    def test_trailing_deletion_falls_back_to_the_regions_first_line(self):
-        task = _patch_task(files={"meter.py": "a\nb\nc\n"}, search="b\nc", replace="b")
-        self.assertEqual(gev5.patch_evidence(task), ("meter.py", 2, "b"))
+    def test_a_line_count_changing_patch_is_refused_loudly(self):
+        # The same-index walk is only a valid pre/post correspondence at
+        # equal region line counts (contract review, 2026-08-29): growing
+        # and shrinking patches must fail LOUDLY, never quote a
+        # real-but-untouched line as "the fix".
+        growing = _patch_task(files={"meter.py": "a\nb\n"}, search="b\n", replace="b\nc\n")
+        shrinking = _patch_task(files={"meter.py": "a\nb\nc\n"}, search="b\nc", replace="b")
+        for task in (growing, shrinking):
+            with self.assertRaises(ValueError):
+                gev5.patch_evidence(task)
+
+    def test_equal_count_multi_line_region_with_a_shifted_collision_is_still_exact(self):
+        # The collision shape the review demonstrated for unequal counts,
+        # rebuilt at equal counts: the changed line is found by position,
+        # never confused by an identical line elsewhere in the region.
+        task = _patch_task(
+            files={"meter.py": "start\nkeep\nEND\nEND\n"},
+            search="keep\nEND",
+            replace="kept\nEND",
+        )
+        self.assertEqual(gev5.patch_evidence(task), ("meter.py", 2, "kept"))
 
     def test_a_blank_only_change_is_a_factory_bug(self):
         task = _patch_task(files={"meter.py": "a\nx\n"}, search="x", replace="")
@@ -226,6 +244,34 @@ class V5RowMetaTest(unittest.TestCase):
             generate_request.build_trajectory_request(task, generate_request.V5_ENVELOPE)["envelope"],
             "v5",
         )
+
+
+class EvidenceStaysInsideScreenedContentTest(unittest.TestCase):
+    """The spec-§5 vocabulary promise, made concrete: every v5 evidence
+    quote is a verbatim substring of content the contamination guard
+    already screens (task files) or template-owned patch text (`replace`,
+    drawn from the same wordlists whose gate disjointness is asserted at
+    import) — so v5 ideals can never leak gate vocabulary that the
+    existing screens would miss."""
+
+    def test_every_drawn_evidence_quote_is_inside_screened_content(self):
+        import random
+
+        from tools.flywheel.factory import generate_refusal, generate_slices
+
+        rng = random.Random(20260829)
+        for fn in generate_slices.family_functions(18):
+            task = fn(rng)
+            _path, _line, quote = gev5.patch_evidence(task)
+            # Post-patch bytes are, by construction, screened file bytes
+            # with template-owned `replace` text spliced in — quoting from
+            # them can only surface content one of those two screens owns.
+            post = task.files[task.target].replace(task.search, task.replace, 1)
+            self.assertIn(quote, post)
+        for fn in generate_refusal.refusal_family_functions(18):
+            task = fn(rng)
+            for path, _line, quote in task.evidence:
+                self.assertIn(quote, task.files[path])
 
 
 @unittest.skipUnless(REAL_TOOL is not None, "flywheel-tool binary not built; run cargo build -p bloomery-daemon --bin flywheel-tool")

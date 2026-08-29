@@ -107,7 +107,7 @@ def _row(rows, task_id, pair):
     return match
 
 
-def _run(rows):
+def _run(rows, extra=()):
     """Writes `rows` to a temp jsonl, runs the checker's real CLI entry
     (with --json), returns (exit code, summary dict, stdout text)."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -118,7 +118,7 @@ def _run(rows):
         out = Path(tmpdir) / "summary.json"
         stdout = io.StringIO()
         with redirect_stdout(stdout):
-            code = check_corpus_v5.main(["--corpus", str(corpus), "--json", str(out)])
+            code = check_corpus_v5.main(["--corpus", str(corpus), "--json", str(out), *extra])
         summary = json.loads(out.read_text(encoding="utf-8"))
     return code, summary, stdout.getvalue()
 
@@ -228,3 +228,46 @@ class CheckCorpusV5Test(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TaskIdentityAndCompositionTest(unittest.TestCase):
+    """Rules 6-7 (adversarial review F-3/F-4, 2026-08-29): task identity
+    and composition bind — the quotable summary counts can no longer be
+    silently wrong at exit 0."""
+
+    def test_clean_corpus_with_matching_expectations_passes(self):
+        code, summary, _ = _run(_clean_rows(), ("--expect-patch", "1", "--expect-refuse", "1"))
+        self.assertEqual(code, 0)
+        self.assertEqual(summary["violations"], 0)
+
+    def test_an_empty_corpus_is_a_violation(self):
+        code, summary, _ = _run([])
+        self.assertEqual(code, 2)
+        self.assertTrue(any("rule 7" in v and "empty" in v for v in summary["violations_reported"]))
+
+    def test_a_missing_task_is_caught_by_the_expectation(self):
+        rows = [r for r in _clean_rows() if r["meta"]["expect"] != "refuse"]
+        code, summary, _ = _run(rows, ("--expect-patch", "1", "--expect-refuse", "1"))
+        self.assertEqual(code, 2)
+        self.assertTrue(any("rule 7" in v and "refuse" in v for v in summary["violations_reported"]))
+
+    def test_a_duplicated_pair_row_is_a_violation(self):
+        rows = _clean_rows()
+        rows.append(copy.deepcopy(_row(rows, "0001", "done")))
+        code, summary, _ = _run(rows)
+        self.assertEqual(code, 2)
+        self.assertTrue(any("rule 6" in v and "duplicate pair" in v for v in summary["violations_reported"]))
+
+    def test_conflicting_expect_across_one_task_id_is_a_violation(self):
+        rows = _clean_rows()
+        _row(rows, "0001", "read")["meta"]["expect"] = "refuse"
+        code, summary, _ = _run(rows)
+        self.assertEqual(code, 2)
+        self.assertTrue(any("rule 6" in v and "disagree on expect" in v for v in summary["violations_reported"]))
+
+    def test_a_row_without_task_id_is_a_violation(self):
+        rows = _clean_rows()
+        del _row(rows, "0001", "read")["meta"]["task_id"]
+        code, summary, _ = _run(rows)
+        self.assertEqual(code, 2)
+        self.assertTrue(any("rule 6" in v and "no task_id" in v for v in summary["violations_reported"]))

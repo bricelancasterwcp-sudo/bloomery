@@ -50,6 +50,18 @@ def recompute(journal: Path, tasks: Path, g5_fixtures: Path | None, g4_set: str 
     g5_rows = [j for j in joined if g5_set and j.fixture["fixture_set"] == g5_set]
     if g5_rows:
         fx = ep.load_fixture_files(g5_fixtures)
+        # Eval-time instrument binding (turn-7 adversarial review F-1): a
+        # duplicated or unknown fixture row inflates every row-counting
+        # endpoint below while the keyed join stays green, so both are
+        # folded into `join.violations` (exit 2); missing rows only shrink
+        # numerators and are reported.
+        rows_check = ep.instrument_row_check([j.fixture["fixture"] for j in g5_rows], set(fx))
+        report["instrument_rows"] = rows_check
+        if rows_check["duplicates"] or rows_check["unknown"]:
+            report["join"]["violations"] = list(report["join"]["violations"]) + [
+                f"instrument rows: duplicates={rows_check['duplicates']} "
+                f"unknown={rows_check['unknown']} for {g5_set}"
+            ]
         patch = [j for j in g5_rows if j.fixture.get("expect") == "patch"]
         refuse = [j for j in g5_rows if j.fixture.get("expect") == "refuse"]
         g5 = {"set": g5_set,

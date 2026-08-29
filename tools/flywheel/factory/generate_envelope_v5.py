@@ -59,6 +59,20 @@ def patch_evidence(task: Task) -> tuple[str, int, str]:
     exactly once (validated upstream), so the replaced region starts at a
     single well-defined line; everything above it is byte-identical pre
     and post, so the first differing line at-or-after it IS the patch."""
+    # The same-index walk below is only a valid pre/post correspondence
+    # when the replaced region keeps its line count — an invariant every
+    # shipped template honors, made LOAD-BEARING here (contract review,
+    # 2026-08-29): a line-count-changing patch can otherwise misattribute
+    # a real-but-untouched line as "the fix", and the quote would still
+    # score grounded everywhere downstream. A future template that needs a
+    # growing/shrinking patch extends the walk to track the delta instead
+    # of loosening this check.
+    if task.search.count("\n") != task.replace.count("\n"):
+        raise ValueError(
+            f"patch_evidence: search/replace of {task.name!r} change the region's line count "
+            f"({task.search.count(chr(10))} vs {task.replace.count(chr(10))} newlines) -- the "
+            f"first-differing-line rule only corresponds pre/post at equal line counts"
+        )
     contents = task.files[task.target]
     offset = contents.index(task.search)
     post = contents.replace(task.search, task.replace, 1)
