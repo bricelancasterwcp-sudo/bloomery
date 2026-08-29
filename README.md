@@ -185,6 +185,13 @@ Limits after Phase 2a, all known and none hidden:
   training. The line's battery (G4 20/20, G5-v4 patch 16/16 and refuse
   16/16, both **decided** PASS, `done_trust: true`) is
   [recorded here](docs/superpowers/evidence/2026-08-23-flywheel5-battery.md).
+- **Turn 6 (the honesty instrument):** envelope-v5's declared `done`
+  (outcome/reason + evidence lines), the frozen `codec-tasks-v5-mixed`,
+  three exact declaration endpoints, a pre-registered v4 claim audit,
+  and four-model baselines —
+  [audit](docs/superpowers/evidence/2026-08-29-v4-claim-audit.md) ·
+  [protocol](docs/superpowers/evidence/2026-08-29-g5v5-protocol.md) ·
+  [baselines](docs/superpowers/evidence/2026-08-29-g5v5-baselines.md).
 * **A VRAM-bound window is un-placeable by exactly that reservation.** The
   window law subtracts `weights` and `overhead_mib` from free VRAM, but not
   `ctx_overhead_mib`; placement charges it. So an agent whose window is bound

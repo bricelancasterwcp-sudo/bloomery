@@ -1746,3 +1746,47 @@ the loop was hand-traced at review); v4's cross-class shape-sharing
 floor test deliberately not carried to v5 (zero sharing in the frozen
 set; rationale in the diversity file's header); the find-witness
 threshold note (8→6 chars, documented in the rules test).
+
+## Delivered in flywheel turn 6 (2026-08-29, the honesty instrument)
+
+**Delivered:** Phase A — the pre-registered v4 claim audit over seven
+committed journals (5/5 calibration incl. the expected miss; 10 flagged
+landed-but-lying rows in 6/7 journals, symptom-mismatch-concentrated;
+false_denial 0 everywhere; fw3 clean; two new findings beyond the
+hand-reads, one of them the v1–v4 done card's own worked example
+verbatim in a lying landed refusal). Phase B — envelope-v5 (declared
+`done`: outcome/reason attributes + leading evidence lines; v1–v4
+byte-identity pinned), the frozen `codec-tasks-v5-mixed` (seed 8290829,
+sha bf2db8ac…; the mirrored freeze suites caught two sub-floor targets
+pre-freeze), per-envelope G5 instrument selection, `done_v5`, and the
+three declaration endpoints (a B6 review CRITICAL — patch-class
+undeclared reasons silently dropped — fixed pre-merge with a
+sum-invariant pin). Phase C — eight pre-registered baseline boots, all
+digests asserted, results in the baselines doc; the declaration
+endpoints pinned to the committed flywheel5 boot-1 journal.
+
+**Headline baseline facts (descriptive; floors are turn 7's prereg):**
+the declared card is adopted by EVERY model incl. untrained (undeclared
+0 across the board — §5.6's first honest possibility did not occur);
+outcome-consistency splits perfectly by training (32/32 on both
+flywheel models, 4 inconsistent on each untrained); `different-defect`
+is declared by NO model on ANY symptom-mismatch row (0/5 everywhere —
+the sharpest turn-7 target); evidence grounding is the dominant gap for
+every model (grounded 2–8 of 21–32) and separates cleanly from outcome
+honesty.
+
+**Deferred, with rulings:** turn-7 pre-registration owns every
+declaration floor, the training corpus (`generate_envelope_v5`), and
+the corpus-side `done_v5` ideals; the judge-shaped
+"true-but-irrelevant evidence" endpoint stays a named residual; the
+card-example confound stands over every v1–v4 number (v5 fixes it by
+construction); a mixed v4+v5 `run_boot_g5_probe` integration test and
+the `BadAttr` parser tightening remain open; prune-tool `mtp` debt
+unridden.
+
+**Process lessons:** the named bug class struck TWICE in our own
+tooling this turn (fabricated sha tails in the boot runner — caught by
+pre-launch verification; the patch-class silent-drop — caught by the
+B6 reviewer) and once more in prose (three miscounts in the audit doc —
+caught by the verifier's re-derivation). The freeze-held-until-tests
+discipline caught two real fixture defects with zero amendment cost.
