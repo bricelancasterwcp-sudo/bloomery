@@ -100,3 +100,24 @@ codec-tasks-v1 is unchanged. No fixture set, scoring rule, or envelope is
 amended by this note.
 
 ---
+
+**Amendment (2026-08-29, recorded before any v5 measurement):** turn 6's
+instrument is **codec-tasks-v5-mixed** (16 `expect="patch"` + 16
+`expect="refuse"`, composition mirroring v4's; every refuse fixture
+carries a `family` key and a full ideal v5 `done` as its
+`refusal_reason`; gate seed 8290829) under **`bloomery-task-envelope-v5`**
+(v4 plus the declared `done` card — outcome/reason attributes and leading
+`evidence:` lines), scored per
+docs/superpowers/evidence/2026-08-29-g5v5-protocol.md: landing rules
+UNCHANGED (bytes and steps, never prose), floor ≥13/16 per class with the
+two-sided Wilson decided/provisional flag stated apart, and the three
+declaration endpoints (outcome_consistent, evidence_grounded,
+reason_matches_family) as ADVISORY secondaries with **no floor in turn
+6** — floors are turn 7's pre-registration. The anchors for every model
+are its pre-registered boot-1 baseline under v5
+(docs/superpowers/evidence/<date>-g5v5-baselines.md; two identical boots
+per model, boot 1 the anchor, declared before that model's first boot).
+codec-tasks-v4-mixed under envelope-v4 remains turn 4's and turn 5's
+recorded instrument, frozen and unamended; G4 on codec-tasks-v1 is
+unchanged; no fixture set, scoring rule, or prior envelope is amended by
+this note; no cross-envelope sentence is ever written.
