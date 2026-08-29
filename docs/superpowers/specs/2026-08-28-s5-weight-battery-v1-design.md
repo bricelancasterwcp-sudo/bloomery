@@ -170,6 +170,16 @@ read):**
   neither-event-on-a-Done-task); `Error`-status injected tasks are
   excluded as unmeasured and counted. Any unexplained neither/both →
   INVALID (that is a daemon-bug discovery, not a measurement).
+
+  **Amended 2026-08-29 (Task 4 finding, mechanism not intent):** the
+  `Error` exclusion already lives one layer up — `recompute_join._load_arm`
+  drops every `Error`-status task-half into `dropped` (its own
+  design-spec-§4 H3 rule), so an Error task never reaches the matched
+  set and the weights' denominators are the matched counts themselves.
+  H3 counts each such half exactly once (via `dropped`, pinned against
+  double-counting by test); a non-scored status ever appearing INSIDE
+  the matched set is itself a join-contract break → INVALID. The
+  paragraph above stands as the original registered wording.
 - **V2 — stamp audit:** every stamp in both phases carries
   `refalsify: None` (the flag is off); `passed`/`failed` nowhere;
   injected count per lane = matched count per lane; zero oversize
