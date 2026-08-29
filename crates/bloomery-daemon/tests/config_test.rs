@@ -737,3 +737,33 @@ refalsify = false
     // The opt-out is orthogonal to retention — `max_episodes` still defaults.
     assert_eq!(config.memory.max_episodes, 256);
 }
+
+// ---------------------------------------------------------------------------
+// envelope-v5 (turn-6 spec §3.1)
+// ---------------------------------------------------------------------------
+
+/// `"v5"` parses; `done_declares()` is true for V5 ONLY; the three carried
+/// predicates hold (v5 = v4 + the declared done); the lens name is pinned.
+#[test]
+fn envelope_v5_parses_and_declares_done() {
+    let toml = r#"
+port = 9000
+data_dir = "/tmp/bloomery-daemon-test-data"
+tier = { name = "enthusiast-16gb", emulated = false }
+assay = { enabled = false, python = "python3" }
+
+[models.m]
+path = "/models/m.gguf"
+envelope = "v5"
+"#;
+    let path = write_temp_toml("envelope-v5.toml", toml);
+    let config = load_config(&path).unwrap();
+    let lens = config.models.get("m").unwrap().envelope_lens().unwrap();
+    assert_eq!(lens, EnvelopeLens::V5);
+    assert_eq!(lens.lens_name(), "bloomery-task-envelope-v5");
+    assert!(lens.think_preseed() && lens.action_stop() && lens.grant_line());
+    assert!(lens.done_declares());
+    for other in [EnvelopeLens::V1, EnvelopeLens::V2, EnvelopeLens::V3, EnvelopeLens::V4] {
+        assert!(!other.done_declares(), "{other:?}");
+    }
+}

@@ -253,7 +253,7 @@ fn assert_second_prompt_matches_tool_path(envelope: EnvelopeLens, commands: &[Ve
     // with any mutation of it), so deleting the render branch fails here
     // even though both sides of the equality above would lose the line
     // together.
-    if envelope == EnvelopeLens::V4 {
+    if envelope.grant_line() {
         let expected_line = if commands.is_empty() {
             "Granted commands: none — run is not available in this task".to_string()
         } else {
@@ -273,6 +273,7 @@ fn envelope_tag(envelope: EnvelopeLens) -> &'static str {
         EnvelopeLens::V2 => "v2",
         EnvelopeLens::V3 => "v3",
         EnvelopeLens::V4 => "v4",
+        EnvelopeLens::V5 => "v5",
     }
 }
 
@@ -308,6 +309,18 @@ fn anti_drift_pin_matches_real_second_prompt_under_v4_with_no_granted_command() 
 #[test]
 fn anti_drift_pin_matches_real_second_prompt_under_v4_with_a_granted_command() {
     assert_second_prompt_matches_tool_path(EnvelopeLens::V4, &unittest_commands());
+}
+
+// Turn-6 spec §3.1/§6: the tool path gets v5 for FREE through the one
+// prompt renderer — pinned the same way v1-v4 are, both grant shapes.
+#[test]
+fn anti_drift_pin_matches_real_second_prompt_under_v5_with_no_granted_command() {
+    assert_second_prompt_matches_tool_path(EnvelopeLens::V5, &[]);
+}
+
+#[test]
+fn anti_drift_pin_matches_real_second_prompt_under_v5_with_a_granted_command() {
+    assert_second_prompt_matches_tool_path(EnvelopeLens::V5, &unittest_commands());
 }
 
 // ---------------------------------------------------------------------------

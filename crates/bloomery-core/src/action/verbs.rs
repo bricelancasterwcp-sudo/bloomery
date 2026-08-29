@@ -115,7 +115,23 @@ pub fn validate_done(raw: &RawAction) -> Result<Action, ActionError> {
         });
     }
 
+    // Turn-6 spec §3.3: the optional declaration attributes and the
+    // leading `evidence:` lines. Declarations are optional at parse time
+    // and never a re-ask — an absent attribute is `None`, an unknown value
+    // is kept verbatim; scoring lives in the evidence tools, never here.
+    // A body that is only evidence lines is NOT empty (the declaration is
+    // content) — the emptiness check above ran on the whole body already.
+    let evidence: Vec<String> = trimmed
+        .lines()
+        .map(str::trim)
+        .take_while(|line| line.starts_with("evidence:"))
+        .map(str::to_string)
+        .collect();
+
     Ok(Action::Done {
         summary: trimmed.to_string(),
+        outcome: raw.attrs.get("outcome").cloned(),
+        reason: raw.attrs.get("reason").cloned(),
+        evidence,
     })
 }

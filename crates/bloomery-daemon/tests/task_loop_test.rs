@@ -1006,3 +1006,35 @@ fn under_v1_and_v2_the_infer_call_never_carries_a_stop_sequence() {
 
     assert_eq!(pager.substrate().infer_stops(), &[None]);
 }
+
+/// Turn-6 spec §3.4: a declared `done`'s attributes land in
+/// `TaskStep.args` as `["outcome=<v>", "reason=<v>"]` (present attributes
+/// only); an undeclared `done` keeps today's empty args (pinned by the
+/// existing args-per-verb test above).
+#[test]
+fn task_step_args_carry_done_declarations() {
+    let dir = fresh_dir("args-done-declared");
+    let (sb, g) = sandbox(&dir);
+    let (mut pager, agent_id) = fixture(
+        &dir,
+        1_000_000,
+        vec![scripted(
+            "<action verb=\"done\" outcome=\"refused\" reason=\"no-defect\">\n\
+             evidence: file.txt:1 `hello`\n\
+             The goal describes a defect that is not present.\n</action>",
+        )],
+    );
+    let task_journal_path = dir.join("task.jsonl");
+    let mut task_journal = Journal::open(&task_journal_path).unwrap();
+    let spec = spec(g, sb, 5);
+
+    let result = run_task(&mut pager, &agent_id, &spec, &mut task_journal);
+
+    assert_eq!(result.status, TaskStatus::Done);
+    assert_eq!(result.steps.len(), 1);
+    assert_eq!(result.steps[0].verb, "done");
+    assert_eq!(
+        result.steps[0].args,
+        vec!["outcome=refused".to_string(), "reason=no-defect".to_string()]
+    );
+}

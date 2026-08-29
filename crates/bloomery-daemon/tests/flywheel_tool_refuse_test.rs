@@ -105,6 +105,7 @@ fn envelope_tag(envelope: EnvelopeLens) -> &'static str {
         EnvelopeLens::V2 => "v2",
         EnvelopeLens::V3 => "v3",
         EnvelopeLens::V4 => "v4",
+        EnvelopeLens::V5 => "v5",
     }
 }
 

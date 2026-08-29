@@ -22,7 +22,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use bloomery_core::action::{
-    parse_action_with_codec, verb_card_for, Action, PatchBody, PatchCodec,
+    parse_action_with_codec, verb_card_for, Action, DoneCard, PatchBody, PatchCodec,
 };
 use bloomery_core::grant::Grant;
 use bloomery_core::journal::{Event, Journal};
@@ -279,7 +279,18 @@ fn action_args(action: &Action) -> Vec<String> {
         Action::Find { pattern, path } => vec![pattern.clone(), path.clone()],
         Action::Patch { path, .. } => vec![path.clone()],
         Action::Run { argv } => argv.clone(),
-        Action::Done { .. } => Vec::new(),
+        // Turn-6 spec §3.4: a declared done's attributes, keyed, in a
+        // fixed order; an undeclared done keeps today's empty args.
+        Action::Done { outcome, reason, .. } => {
+            let mut args = Vec::new();
+            if let Some(o) = outcome {
+                args.push(format!("outcome={o}"));
+            }
+            if let Some(r) = reason {
+                args.push(format!("reason={r}"));
+            }
+            args
+        }
     }
 }
 
@@ -507,9 +518,14 @@ fn render_prompt_from(goal: &str, inputs: RenderInputs<'_>, transcript: &str) ->
     } else {
         String::new()
     };
+    let done_card = if inputs.envelope.done_declares() {
+        DoneCard::Declared
+    } else {
+        DoneCard::Summary
+    };
     let prompt = format!(
         "{goal}\n\n{memory_section}{grant_section}{}\n\n{transcript}",
-        verb_card_for(inputs.patch_codec, inputs.mutating_verbs)
+        verb_card_for(inputs.patch_codec, inputs.mutating_verbs, done_card)
     );
     if inputs.envelope.think_preseed() {
         format!("{prompt}{THINK_PRESEED}")
@@ -781,14 +797,17 @@ pub fn run_task<S: Substrate>(
                 }
             };
 
-        if let Action::Done { summary } = &action {
+        if let Action::Done { summary, .. } = &action {
             let report = StepReport {
                 verb: "done",
                 outcome: summary,
                 content: summary,
                 duration_ms: propose_duration_ms,
                 failed: false,
-                args: Vec::new(),
+                // Turn-6 spec §3.4: a declared done's attributes travel in
+                // the same keyed `args` every other verb uses; an
+                // undeclared done keeps its historical empty args.
+                args: action_args(&action),
                 rung,
             };
             if let Err(msg) = record_step(journal, agent_id, &mut state, step, report) {

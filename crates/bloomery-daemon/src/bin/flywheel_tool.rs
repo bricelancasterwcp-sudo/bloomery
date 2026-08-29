@@ -265,8 +265,9 @@ fn parse_envelope(raw: &str) -> Result<EnvelopeLens, String> {
         "v2" => Ok(EnvelopeLens::V2),
         "v3" => Ok(EnvelopeLens::V3),
         "v4" => Ok(EnvelopeLens::V4),
+        "v5" => Ok(EnvelopeLens::V5),
         other => Err(format!(
-            "unknown envelope {other:?}: valid values are \"v1\", \"v2\", \"v3\", \"v4\""
+            "unknown envelope {other:?}: valid values are \"v1\", \"v2\", \"v3\", \"v4\", \"v5\""
         )),
     }
 }

@@ -15,7 +15,7 @@ pub mod lens;
 pub mod patch;
 pub mod verbs;
 
-pub use card::{verb_card, verb_card_for};
+pub use card::{verb_card, verb_card_for, DoneCard};
 pub use envelope::{scan_envelope, RawAction};
 pub use verbs::{validate_done, validate_find, validate_read, validate_run};
 
@@ -39,7 +39,19 @@ pub enum Action {
         argv: Vec<String>,
     },
     Done {
+        /// The full trimmed body, evidence lines included (unchanged
+        /// meaning: "the body").
         summary: String,
+        /// Raw `outcome` attribute value, if present — optional at parse
+        /// time, never a re-ask; unknown values kept verbatim (turn-6 spec
+        /// §3.3: the parser enumerates nothing, the recompute tool scores
+        /// undeclared / invalid-value).
+        outcome: Option<String>,
+        /// Raw `reason` attribute value, if present — same contract.
+        reason: Option<String>,
+        /// The leading body lines that begin with `evidence:` (after
+        /// trimming) — a parsed VIEW of `summary`, never removed from it.
+        evidence: Vec<String>,
     },
 }
 

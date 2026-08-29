@@ -46,6 +46,7 @@ pub enum EnvelopeLens {
     V2,
     V3,
     V4,
+    V5,
 }
 
 impl EnvelopeLens {
@@ -60,6 +61,7 @@ impl EnvelopeLens {
             EnvelopeLens::V2 => "bloomery-task-envelope-v2",
             EnvelopeLens::V3 => "bloomery-task-envelope-v3",
             EnvelopeLens::V4 => "bloomery-task-envelope-v4",
+            EnvelopeLens::V5 => "bloomery-task-envelope-v5",
         }
     }
 
@@ -68,7 +70,10 @@ impl EnvelopeLens {
     /// `V3` and `V4` all do (`V3` = `V2` + the action stop; `V4` = `V3` +
     /// the grant line).
     pub const fn think_preseed(&self) -> bool {
-        matches!(self, EnvelopeLens::V2 | EnvelopeLens::V3 | EnvelopeLens::V4)
+        matches!(
+            self,
+            EnvelopeLens::V2 | EnvelopeLens::V3 | EnvelopeLens::V4 | EnvelopeLens::V5
+        )
     }
 
     /// Whether this lens stops task-loop generation at the first
@@ -77,7 +82,7 @@ impl EnvelopeLens {
     /// only delta is the rendered line, so dropping the stop here would be
     /// a silent regression against the lens turn 4 succeeds).
     pub const fn action_stop(&self) -> bool {
-        matches!(self, EnvelopeLens::V3 | EnvelopeLens::V4)
+        matches!(self, EnvelopeLens::V3 | EnvelopeLens::V4 | EnvelopeLens::V5)
     }
 
     /// Whether this lens renders the grant line
@@ -86,10 +91,18 @@ impl EnvelopeLens {
     /// branches on, so "which lenses show the grant" is stated here rather
     /// than spelled out at the render site.
     pub const fn grant_line(&self) -> bool {
-        matches!(self, EnvelopeLens::V4)
+        matches!(self, EnvelopeLens::V4 | EnvelopeLens::V5)
     }
 
-    /// Parses the TOML `envelope = "v1" | "v2" | "v3" | "v4"` string value.
+    /// Whether the `done` verb card is the DECLARED card (outcome/reason
+    /// attributes + leading `evidence:` lines) — `V5` only (turn-6 spec
+    /// §3.1). `false` for v1–v4, whose prompts and cards stay
+    /// byte-identical to what they always rendered.
+    pub const fn done_declares(&self) -> bool {
+        matches!(self, EnvelopeLens::V5)
+    }
+
+    /// Parses the TOML `envelope = "v1" | "v2" | "v3" | "v4" | "v5"` string value.
     /// Any other value is a named config error listing the valid set —
     /// never a silent fallback to a default.
     fn parse(raw: &str) -> Result<EnvelopeLens, String> {
@@ -98,8 +111,9 @@ impl EnvelopeLens {
             "v2" => Ok(EnvelopeLens::V2),
             "v3" => Ok(EnvelopeLens::V3),
             "v4" => Ok(EnvelopeLens::V4),
+            "v5" => Ok(EnvelopeLens::V5),
             other => Err(format!(
-                "invalid envelope {other:?}: valid values are \"v1\", \"v2\", \"v3\", \"v4\""
+                "invalid envelope {other:?}: valid values are \"v1\", \"v2\", \"v3\", \"v4\", \"v5\""
             )),
         }
     }
