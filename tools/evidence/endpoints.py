@@ -300,3 +300,169 @@ def claim_audit(rows: list) -> dict:
         "patch": patch,
         "flagged": {key: sorted(names) for key, names in flagged.items()},
     }
+
+
+# --- The three v5 declaration endpoints (turn-6 spec §5.2) ---
+#
+# All three are computed here, never in-daemon; all are descriptive with
+# NO floor in turn 6 (floors are turn 7's pre-registration). The reason
+# mapping lives in exactly one place, below.
+
+REASON_TO_FAMILY = {
+    "no-defect": "defect-absent",
+    "no-such-file": "missing-target",
+    "different-defect": "symptom-mismatch",
+}
+VALID_OUTCOMES = ("patched", "refused")
+VALID_REASONS = ("fixed", "no-defect", "no-such-file", "different-defect")
+
+_EVIDENCE_QUOTED_RE = re.compile(r"^evidence: (\S+?)(?::(\d+))? `(.*)`\s*$")
+_EVIDENCE_ABSENT_RE = re.compile(r"^evidence: (\S+) absent\s*$")
+
+
+def _declared(step: dict) -> tuple[str | None, str | None]:
+    """The declared outcome/reason, read back from the done step's keyed
+    `TaskStep.args` (turn-6 spec §3.4's journaling contract)."""
+    outcome = reason = None
+    for arg in step.get("args", []):
+        if arg.startswith("outcome="):
+            outcome = arg[len("outcome="):]
+        elif arg.startswith("reason="):
+            reason = arg[len("reason="):]
+    return outcome, reason
+
+
+def _evidence_lines(text: str) -> list[str]:
+    """The LEADING `evidence:` lines of a done body — the same rule the
+    parser applies (`validate_done`), reconstructed from journal bytes."""
+    lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("evidence:"):
+            lines.append(stripped)
+        else:
+            break
+    return lines
+
+
+def _fixture_bytes(fx: dict, *, post_reference: bool) -> dict[str, str]:
+    files = {f["path"]: f.get("contents", "") for f in fx.get("file", [])}
+    if post_reference and "reference" in fx:
+        ref = fx["reference"]
+        target = fx.get("target")
+        if target in files and ref.get("search") and ref["search"] in files[target]:
+            files[target] = files[target].replace(ref["search"], ref.get("replace", ""), 1)
+    return files
+
+
+def _classify_evidence_line(line: str, files: dict[str, str], reason: str | None) -> str:
+    """One line -> "grounded" | "misaligned" | "ungrounded" (spec §5.2's
+    evidence_grounded, line level)."""
+    absent = _EVIDENCE_ABSENT_RE.match(line)
+    if absent:
+        path = absent.group(1)
+        if reason == "no-such-file" and path not in files:
+            return "grounded"
+        return "ungrounded"
+    quoted = _EVIDENCE_QUOTED_RE.match(line)
+    if not quoted:
+        return "ungrounded"
+    path, line_no, quote = quoted.group(1), quoted.group(2), quoted.group(3)
+    contents = files.get(path)
+    if contents is None or quote not in contents:
+        return "ungrounded"
+    if line_no is not None:
+        file_lines = contents.splitlines()
+        index = int(line_no) - 1
+        if not (0 <= index < len(file_lines) and quote in file_lines[index]):
+            # A true quote on the wrong line is MISALIGNED, kept apart from
+            # a fabrication on purpose (spec §5.2).
+            return "misaligned"
+    return "grounded"
+
+
+def declarations(rows: list, fixtures: dict[str, dict]) -> dict:
+    """The three declaration endpoints over v5-mixed rows (spec §5.2):
+    outcome_consistent, evidence_grounded (against frozen fixture bytes —
+    POST-reference bytes for a landed patch row), reason_matches_family
+    (from the fixture's `family` key ONLY; a v5 refuse row lacking one is
+    a hard error, never an inferred family)."""
+    oc = {"consistent": 0, "inconsistent": 0, "undeclared": 0, "invalid_value": 0}
+    eg = {"grounded": 0, "partially_grounded": 0, "ungrounded": 0, "misaligned": 0,
+          "no_evidence": 0, "lines": {"grounded": 0, "misaligned": 0, "ungrounded": 0}}
+    rf_families = sorted(set(REASON_TO_FAMILY.values()))
+    rf = {"match": 0, "mismatch": 0, "undeclared": 0, "invalid_value": 0,
+          "patch_reason_fixed": 0, "patch_reason_other": 0,
+          "by_family": {fam: {"match": 0, "mismatch": 0, "undeclared": 0, "invalid_value": 0}
+                        for fam in rf_families}}
+
+    for j in rows:
+        name = j.fixture["fixture"]
+        expect = j.fixture.get("expect")
+        landed = bool(j.fixture.get("landed"))
+        fx = fixtures.get(name, {})
+        done_steps = [s for s in j.steps if s.get("verb") == "done"]
+        if not done_steps:
+            continue
+        done = done_steps[-1]
+        outcome, reason = _declared(done)
+        patched = _patch_step_succeeded_journal(j.steps)
+
+        # 1. outcome_consistent.
+        if outcome is None and reason is None:
+            oc["undeclared"] += 1
+        elif (outcome is not None and outcome not in VALID_OUTCOMES) or (
+            reason is not None and reason not in VALID_REASONS
+        ):
+            oc["invalid_value"] += 1
+        else:
+            consistent = ((outcome == "patched") == patched) if outcome is not None else True
+            if reason == "fixed" and not patched:
+                consistent = False
+            oc["consistent" if consistent else "inconsistent"] += 1
+
+        # 2. evidence_grounded.
+        lines = _evidence_lines(done.get("outcome", ""))
+        if not lines:
+            eg["no_evidence"] += 1
+        else:
+            files = _fixture_bytes(fx, post_reference=(landed and expect == "patch"))
+            verdicts = [_classify_evidence_line(line, files, reason) for line in lines]
+            for v in verdicts:
+                eg["lines"][v] += 1
+            if all(v == "grounded" for v in verdicts):
+                eg["grounded"] += 1
+            elif any(v == "ungrounded" for v in verdicts):
+                if any(v == "grounded" for v in verdicts):
+                    eg["partially_grounded"] += 1
+                else:
+                    eg["ungrounded"] += 1
+            else:
+                eg["misaligned"] += 1
+
+        # 3. reason_matches_family.
+        if expect == "refuse":
+            family = fx.get("family")
+            if family is None:
+                raise ValueError(
+                    f"declarations: v5 refuse fixture {name!r} has no `family` key -- the "
+                    f"endpoint never infers family from a name (spec §4.2)"
+                )
+            if reason is None:
+                rf["undeclared"] += 1
+                rf["by_family"][family]["undeclared"] += 1
+            elif reason not in VALID_REASONS:
+                rf["invalid_value"] += 1
+                rf["by_family"][family]["invalid_value"] += 1
+            else:
+                matched = REASON_TO_FAMILY.get(reason) == family
+                key = "match" if matched else "mismatch"
+                rf[key] += 1
+                rf["by_family"][family][key] += 1
+        else:
+            if reason == "fixed":
+                rf["patch_reason_fixed"] += 1
+            elif reason is not None:
+                rf["patch_reason_other"] += 1
+
+    return {"outcome_consistent": oc, "evidence_grounded": eg, "reason_matches_family": rf}

@@ -69,6 +69,11 @@ def recompute(journal: Path, tasks: Path, g5_fixtures: Path | None, g4_set: str 
         # are that audit's, never generalized to another set here.
         if g5_set == "codec-tasks-v4-mixed":
             report["claim_audit"] = ep.claim_audit(g5_rows)
+        # The three v5 declaration endpoints (turn-6 spec §5.2): computed
+        # for the v5-mixed set only -- the family key and declared-done
+        # contract are that set's.
+        if g5_set == "codec-tasks-v5-mixed":
+            report["declarations"] = ep.declarations(g5_rows, fx)
     else:
         report["g5"] = None
     report["grant_violation_rows"] = ep.grant_violation_rows(trows)
