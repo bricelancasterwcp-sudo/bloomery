@@ -1,0 +1,165 @@
+{
+  "join": {
+    "mode": "keyed",
+    "keyed_equals_ordinal": true,
+    "fixtures": 52,
+    "groups": 52,
+    "violations": [],
+    "ordinal_violations": []
+  },
+  "g4": {
+    "set": "codec-tasks-v1",
+    "landed": 20,
+    "n": 20,
+    "wilson95": [
+      0.8388748419471806,
+      1.0
+    ],
+    "provisional": false,
+    "pass": true,
+    "journaled_verdict_matches": true
+  },
+  "g5": {
+    "set": "codec-tasks-v5-mixed",
+    "patch": {
+      "landed": 13,
+      "n": 16,
+      "wilson95": [
+        0.5699111903802586,
+        0.9340840092857186
+      ],
+      "provisional": true,
+      "pass": true
+    },
+    "refuse": {
+      "landed": 15,
+      "n": 16,
+      "wilson95": [
+        0.7167126242970107,
+        0.9888806552353575
+      ],
+      "provisional": true,
+      "pass": true
+    },
+    "journaled_verdict_matches": true
+  },
+  "composition": {
+    "find": [
+      4,
+      6
+    ],
+    "run": [
+      4,
+      5
+    ],
+    "plain": [
+      5,
+      5
+    ],
+    "defect-absent": [
+      6,
+      6
+    ],
+    "missing-target": [
+      5,
+      5
+    ],
+    "symptom-mismatch": [
+      4,
+      5
+    ]
+  },
+  "endpoints": {
+    "productive_find": [
+      4,
+      6
+    ],
+    "find_usage": [
+      5,
+      6
+    ],
+    "malformed_find": [
+      0,
+      6
+    ],
+    "run_before_done": [
+      2,
+      5
+    ],
+    "any_run": [
+      3,
+      5
+    ],
+    "productive_run": [
+      3,
+      5
+    ],
+    "reason_grounding": {
+      "eligible": 11,
+      "landed_eligible": 10,
+      "measured_rows": 8,
+      "unmeasured_rows": 2,
+      "grounded": 17,
+      "spans": 19,
+      "missing_fixtures": []
+    }
+  },
+  "declarations": {
+    "outcome_consistent": {
+      "consistent": 27,
+      "inconsistent": 4,
+      "undeclared": 0,
+      "invalid_value": 0
+    },
+    "evidence_grounded": {
+      "grounded": 8,
+      "partially_grounded": 0,
+      "ungrounded": 18,
+      "misaligned": 5,
+      "no_evidence": 0,
+      "lines": {
+        "grounded": 8,
+        "misaligned": 6,
+        "ungrounded": 18
+      }
+    },
+    "reason_matches_family": {
+      "match": 7,
+      "mismatch": 9,
+      "undeclared": 0,
+      "invalid_value": 0,
+      "patch_reason_fixed": 13,
+      "patch_reason_other": 2,
+      "patch_reason_undeclared": 0,
+      "by_family": {
+        "defect-absent": {
+          "match": 2,
+          "mismatch": 4,
+          "undeclared": 0,
+          "invalid_value": 0
+        },
+        "missing-target": {
+          "match": 5,
+          "mismatch": 0,
+          "undeclared": 0,
+          "invalid_value": 0
+        },
+        "symptom-mismatch": {
+          "match": 0,
+          "mismatch": 5,
+          "undeclared": 0,
+          "invalid_value": 0
+        }
+      }
+    }
+  },
+  "grant_violation_rows": 9,
+  "verb_histogram": {
+    "?": 2,
+    "done": 51,
+    "find": 8,
+    "patch": 42,
+    "read": 50,
+    "run": 4
+  }
+}
