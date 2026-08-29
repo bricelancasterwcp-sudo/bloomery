@@ -138,8 +138,8 @@ zero dropped, zero inconclusive. **H4** (advisory) — above.
   the future §5 registration's question.
 - **A3 wall**: p2 delta −18.0 ms (R faster: 508.5 vs 526.5), p1
   control +4.0 ms. The p2 delta exceeds the control this time, but the
-  per-task distribution is heavy-tailed (min −362, max +264; five
-  tasks near −300 ms, concentrated in the dict_key and
+  per-task distribution is heavy-tailed (min −362, max +264; six
+  tasks at or below −271 ms, three each in the dict_key and
   variable_reference families) — consistent with M′ tasks doing extra
   moot-lesson-driven work (re-apply the now-wrong patch, watch it
   fail, recover), not with a probe cost, which would push the delta
