@@ -295,6 +295,43 @@ def symptom_mismatch_reason(*, claimed: str, target: str, factual: str, found: s
     )
 
 
+# The v5 `done` declaration vocabulary (turn-6 spec §3.2): operator-facing
+# reasons, mapped to the factory families by the evidence tools (one table,
+# in the recompute tool) — the assembler only enforces the pairing shape.
+DONE_V5_OUTCOMES = {
+    "patched": ("fixed",),
+    "refused": ("no-defect", "no-such-file", "different-defect"),
+}
+
+
+def done_v5(*, outcome: str, reason: str, evidence_lines: list[str], prose: str) -> str:
+    """The canonical v5 `done` action text (turn-6 spec §4.3) — the fixture
+    `refusal_reason` contract now and turn 7's training-signal contract.
+    Canonical HERE, beside `symptom_mismatch_reason`, for the same
+    single-home reason: the wording and shape are a contract, and two
+    hand-concatenated copies drift the moment one is edited.
+
+    Every part is validated structurally: a known outcome/reason pairing,
+    at least one `evidence:` line (each starting with that literal), and
+    non-empty prose. Ground truth (paths, line numbers, quotes) is the
+    CALLER's — templates and fixture authoring pass what they hold; this
+    function never guesses."""
+    reasons = DONE_V5_OUTCOMES.get(outcome)
+    if reasons is None:
+        raise ValueError(f"done_v5: unknown outcome {outcome!r} (valid: {sorted(DONE_V5_OUTCOMES)})")
+    if reason not in reasons:
+        raise ValueError(f"done_v5: reason {reason!r} is not valid for outcome {outcome!r} (valid: {reasons})")
+    if not evidence_lines:
+        raise ValueError("done_v5: at least one evidence line is required")
+    for line in evidence_lines:
+        if not line.startswith("evidence: "):
+            raise ValueError(f"done_v5: evidence line does not start with 'evidence: ': {line!r}")
+    if not prose.strip():
+        raise ValueError("done_v5: prose must be non-empty")
+    evidence = "\n".join(evidence_lines)
+    return f'<action verb="done" outcome="{outcome}" reason="{reason}">\n{evidence}\n{prose}\n</action>'
+
+
 class RefusalTask(NamedTuple):
     """One generated refusal task (G5 design doc §5; turn-3 design doc §2
     for the third family). `target_missing` separates the missing-target
