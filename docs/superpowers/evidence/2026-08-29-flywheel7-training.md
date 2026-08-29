@@ -54,14 +54,16 @@ deleted before the full run.
 
 **Stop-rule check (pre-registered):** the smoke's own 5-step figure
 carries warmup, so the projection used the full run's measured steady
-state — **9.03–9.07 s/optimizer-step at step 97/1084**, tqdm ETA 2:28:30
+state — **9.03–9.07 s/optimizer-step over steps 95–97 of 1084**, tqdm ETA 2:28:30
 → projected turn total ≈ $5.7 < $10 cap → run continued. (Turn 5's full
 run paced 7–10 s/step; same shape.)
 
 ## 4. Training run — COMPLETE
 
-Launched 14:47:10Z via `setsid nohup train-wrapper.sh`; `train.DONE` +
-`train.EXIT = 0` at ≈17:43Z. From `trainer_state.json` (committed with
+Launched 14:47:10Z (the pod's `date -u` printed at launch, recorded
+live — an ops timestamp, not an artifact; internally consistent:
+14:47:10 + 10,573.5 s = 17:43:24) via `setsid nohup train-wrapper.sh`;
+`train.DONE` + `train.EXIT = 0` at ≈17:43Z. From `trainer_state.json` (committed with
 the adapter artifacts at `~/flywheel7/`): **epoch 2.0, global_step 1084,
 train_runtime 10,573.501 s (2.937 h), train_loss 0.012006**. Eval curve
 (all points in `trainer_state.json`): 0.007249 @ 100 → 0.000502 @ 300 →
@@ -82,7 +84,11 @@ rate is (header).
 `posttrain.EXIT = 0`. Merge (peft `merge_and_unload`, CPU, bf16) 18:03:35Z
 → `merged ok`; convert `--outtype bf16 --no-mtp` (turn-5 deviation 5
 baked in — **no failed first attempt this time**) → 38,382,368,832 B
-bf16 GGUF; `llama-quantize Q4_K_M` → `quant size = 11200.56 MiB
+bf16 GGUF (**provenance note**: byte count read live from the pod's `ls`
+during the run and recorded here; `posttrain.log` carries only `38.4G`,
+so this exact figure is observed, not artifact-backed — the same
+class of note as turn 5's smoke-VRAM gap); `llama-quantize Q4_K_M` →
+`quant size = 11200.56 MiB
 (4.90 BPW)`, **11,755,624,192 B** — byte-identical size to fw5's Q4_K_M.
 **`qwen35moe.block_count = 40`** (the 41-is-STOP rule untriggered);
 **`nextn`/`mtp` keys: none** (GGUFReader over all kv fields). Scratch on
