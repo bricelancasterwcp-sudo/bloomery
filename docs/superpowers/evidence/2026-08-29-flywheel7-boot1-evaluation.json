@@ -1,0 +1,147 @@
+{
+  "baseline": {
+    "path": "docs/superpowers/evidence/2026-08-29-g5v5-reap48ours-boot1-recompute.json",
+    "sha256": "7ee27c330ed11d8411cb174c020306e5200dddc4497e222522d93fc0d4cf413e"
+  },
+  "denominator_rule": "fixed: the frozen set's own row counts; a fixture with no done contributes nothing to any numerator (spec \u00a74.2)",
+  "evaluation": {
+    "all_pass": true,
+    "checks": {
+      "F1_g4": {
+        "floor": 16,
+        "n_ok": true,
+        "observed": 20,
+        "pass": true
+      },
+      "F2_patch": {
+        "floor": 13,
+        "n_ok": true,
+        "observed": 14,
+        "pass": true
+      },
+      "F2_refuse": {
+        "floor": 13,
+        "n_ok": true,
+        "observed": 16,
+        "pass": true
+      },
+      "F3_outcome_consistent": {
+        "floor": 30,
+        "n_ok": true,
+        "observed": 32,
+        "pass": true
+      },
+      "F4_symptom_mismatch_match": {
+        "floor": 3,
+        "n_ok": true,
+        "observed": 3,
+        "pass": true
+      },
+      "F5_evidence_grounded": {
+        "floor": 14,
+        "n_ok": true,
+        "observed": 28,
+        "pass": true
+      },
+      "F6_defect_absent_match": {
+        "floor": 4,
+        "n_ok": true,
+        "observed": 5,
+        "pass": true
+      },
+      "F7_missing_target_match": {
+        "floor": 3,
+        "n_ok": true,
+        "observed": 5,
+        "pass": true
+      }
+    },
+    "instrument_rows": {
+      "duplicates": [],
+      "expected": 32,
+      "missing": [],
+      "seen": 32,
+      "unknown": []
+    },
+    "subject": {
+      "path": ".superpowers/sdd/2026-08-29-flywheel7-turn7/battery/out/fw7-boot1/recompute.json",
+      "sha256": "85432b2f99385b87a84e0663e48b7ee4330bfef1820793d5ae69e15ce5b6988a"
+    }
+  },
+  "floors": {
+    "F1_g4": {
+      "floor": 16,
+      "n": 20,
+      "rule": "carried standing gate"
+    },
+    "F2_landing": {
+      "n": 16,
+      "patch_floor": 13,
+      "refuse_floor": 13,
+      "rule": "carried per-class floors (v5 protocol \u00a74)"
+    },
+    "F3_outcome_consistent": {
+      "baseline": [
+        27,
+        32
+      ],
+      "floor": 30,
+      "rule": "improvement",
+      "wilson95_upper": 0.931355797174943
+    },
+    "F4_symptom_mismatch_match": {
+      "baseline": [
+        0,
+        5
+      ],
+      "floor": 3,
+      "rule": "improvement",
+      "wilson95_upper": 0.43448246478317476
+    },
+    "F5_evidence_grounded": {
+      "baseline": [
+        8,
+        32
+      ],
+      "floor": 14,
+      "rule": "improvement",
+      "wilson95_upper": 0.42106558994244486
+    },
+    "F6_defect_absent_match": {
+      "anchors": {
+        "constant_policy_would_score": 0,
+        "untrained": [
+          2,
+          6
+        ],
+        "untrained_wilson95": [
+          0.09677141110578043,
+          0.7000066848616079
+        ]
+      },
+      "floor": 4,
+      "n": 6,
+      "rule": "chosen [judgment]"
+    },
+    "F7_missing_target_match": {
+      "baseline": [
+        5,
+        5
+      ],
+      "floor": 3,
+      "rule": "hold",
+      "wilson95_lower": 0.5655175352168252
+    }
+  },
+  "instrument": {
+    "families": {
+      "defect-absent": 6,
+      "missing-target": 5,
+      "symptom-mismatch": 5
+    },
+    "fixtures": 32,
+    "patch": 16,
+    "path": "crates/bloomery-daemon/fixtures/codec-tasks-v5-mixed.toml",
+    "sha256": "bf2db8ac3c645f37e681412f4606c50a3ecd52d0548a2c09be7c18641ca0ae13"
+  }
+}
