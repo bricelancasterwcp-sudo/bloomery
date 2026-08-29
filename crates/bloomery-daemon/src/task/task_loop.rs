@@ -388,7 +388,7 @@ const ACTION_STOP: &str = "</action>";
 /// and up), the literal [`THINK_PRESEED`] appended at the very end, after
 /// the transcript, with nothing after it.
 ///
-/// Under `spec.envelope.grant_line()` (envelope-v4 only, turn-4 spec §2) one
+/// Under `spec.envelope.grant_line()` (envelope-v4 and v5, turn-4 spec §2 / turn-6 spec §3.1) one
 /// more thing goes in: [`grant_line`] rendered from **`spec.grant`, the very
 /// grant `run_task` enforces**, placed between the goal and the verb card
 /// with the same blank-line separation the card already uses. Same source of

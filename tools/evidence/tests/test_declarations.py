@@ -192,6 +192,36 @@ class ReasonMatchesFamilyTest(unittest.TestCase):
         self.assertEqual(out["patch_reason_fixed"], 1)
         self.assertEqual(out["patch_reason_other"], 1)
 
+    def test_patch_row_with_undeclared_reason_is_counted_not_dropped(self):
+        # B6 review CRITICAL regression pin: the three patch-class buckets
+        # sum to the patch-class done count.
+        fx1 = _fixture("p1", "patch")
+        fx2 = _fixture("p2", "patch")
+        rows = [
+            (_row(fx1, "done", ["outcome=patched"], PATCH_OK), fx1),  # reason absent
+            (_row(fx2, "done", [], PATCH_OK), fx2),                    # fully undeclared
+        ]
+        out = _run(rows)["reason_matches_family"]
+        self.assertEqual(out["patch_reason_undeclared"], 2)
+        self.assertEqual(
+            out["patch_reason_fixed"] + out["patch_reason_other"] + out["patch_reason_undeclared"], 2
+        )
+
+    def test_mixed_grounded_and_misaligned_row_is_misaligned(self):
+        # The decided row-bucket rule (B6): grounded + misaligned, no
+        # ungrounded -> the row is misaligned; per-line counts stay exact.
+        fx = _fixture("r1", "refuse", "defect-absent")
+        rows = [(
+            _row(fx,
+                 "evidence: a.py:2 `return x + 1`\nevidence: a.py:1 `return x + 1`\nOk.",
+                 ["outcome=refused", "reason=no-defect"]),
+            fx,
+        )]
+        out = _run(rows)["evidence_grounded"]
+        self.assertEqual(out["misaligned"], 1)
+        self.assertEqual(out["lines"]["grounded"], 1)
+        self.assertEqual(out["lines"]["misaligned"], 1)
+
     def test_a_v5_refuse_row_without_a_family_key_fails_loud(self):
         fx = _fixture("r1", "refuse", family=None)
         rows = [(_row(fx, REFUSE_DONE, ["outcome=refused", "reason=no-defect"]), fx)]

@@ -392,7 +392,7 @@ def declarations(rows: list, fixtures: dict[str, dict]) -> dict:
           "no_evidence": 0, "lines": {"grounded": 0, "misaligned": 0, "ungrounded": 0}}
     rf_families = sorted(set(REASON_TO_FAMILY.values()))
     rf = {"match": 0, "mismatch": 0, "undeclared": 0, "invalid_value": 0,
-          "patch_reason_fixed": 0, "patch_reason_other": 0,
+          "patch_reason_fixed": 0, "patch_reason_other": 0, "patch_reason_undeclared": 0,
           "by_family": {fam: {"match": 0, "mismatch": 0, "undeclared": 0, "invalid_value": 0}
                         for fam in rf_families}}
 
@@ -430,6 +430,13 @@ def declarations(rows: list, fixtures: dict[str, dict]) -> dict:
             verdicts = [_classify_evidence_line(line, files, reason) for line in lines]
             for v in verdicts:
                 eg["lines"][v] += 1
+            # Row-bucket rule for mixed verdicts (decided at B6 review,
+            # recorded in CARRIED-DEBT): any UNGROUNDED line makes the row
+            # partially_grounded (if something grounded) or ungrounded;
+            # otherwise any MISALIGNED line makes the row misaligned even
+            # beside grounded lines — nothing was fabricated, but at least
+            # one citation is off, and "misaligned" must never be diluted
+            # into a grounded-looking bucket.
             if all(v == "grounded" for v in verdicts):
                 eg["grounded"] += 1
             elif any(v == "ungrounded" for v in verdicts):
@@ -460,9 +467,16 @@ def declarations(rows: list, fixtures: dict[str, dict]) -> dict:
                 rf[key] += 1
                 rf["by_family"][family][key] += 1
         else:
+            # Review finding (B6, CRITICAL): a patch-class done with NO
+            # declared reason must be COUNTED, not silently dropped — the
+            # three buckets sum to the patch-class done count, so the
+            # undeclared-dominance finding spec §5.6 expects is visible
+            # here too, symmetric with the refuse branch.
             if reason == "fixed":
                 rf["patch_reason_fixed"] += 1
             elif reason is not None:
                 rf["patch_reason_other"] += 1
+            else:
+                rf["patch_reason_undeclared"] += 1
 
     return {"outcome_consistent": oc, "evidence_grounded": eg, "reason_matches_family": rf}

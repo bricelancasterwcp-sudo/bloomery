@@ -15,7 +15,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// The four task-loop prompt envelopes a model can be configured for
+/// The five task-loop prompt envelopes a model can be configured for
 /// (`docs/superpowers/evidence/2026-08-15-g4-protocol.md` §10/§11,
 /// Amendments 2 and 3; turn-4 spec §2 for `V4`).
 ///
@@ -87,7 +87,8 @@ impl EnvelopeLens {
 
     /// Whether this lens renders the grant line
     /// (`task::grant_line::grant_line`) between the goal and the verb card
-    /// — `V4` only (turn-4 spec §2). The one predicate `render_prompt_from`
+    /// — `V4` and `V5` (turn-4 spec §2; v5 carries it, turn-6 spec §3.1).
+    /// The one predicate `render_prompt_from`
     /// branches on, so "which lenses show the grant" is stated here rather
     /// than spelled out at the render site.
     pub const fn grant_line(&self) -> bool {

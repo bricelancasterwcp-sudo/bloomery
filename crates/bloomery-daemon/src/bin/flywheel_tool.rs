@@ -255,7 +255,7 @@ fn parse_patch_codec(raw: &str) -> Result<PatchCodec, String> {
     }
 }
 
-/// Parses the wire `envelope` string — the same four values
+/// Parses the wire `envelope` string — the same five values
 /// `EnvelopeLens`'s config parser accepts (`config.rs`'s `EnvelopeLens::parse`
 /// is private to that module, so this binary — a separate crate — restates
 /// the same tiny string-to-enum mapping rather than reaching for it).
