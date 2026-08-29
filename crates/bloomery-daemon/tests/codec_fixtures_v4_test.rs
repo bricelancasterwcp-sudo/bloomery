@@ -25,9 +25,9 @@
 //!   normalizer, exactly as v3 split it.
 //!
 //! The one v4 assertion that genuinely belongs in `codec_fixtures_test.rs`
-//! stayed there: cross-set name uniqueness, which has to see all FOUR
-//! shipped sets at once
-//! (`fixture_names_are_unique_across_all_four_shipped_sets`).
+//! stayed there: cross-set name uniqueness, which has to see every
+//! shipped set at once
+//! (`fixture_names_are_unique_across_all_shipped_sets`).
 //!
 //! `python3` must be on `PATH` for the python-lens assertions to mean
 //! anything; `PythonLens::parses` fails closed if it is absent, so those
