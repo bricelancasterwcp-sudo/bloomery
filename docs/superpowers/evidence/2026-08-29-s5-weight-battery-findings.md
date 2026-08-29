@@ -87,7 +87,11 @@ totality held on all 48 matched tasks (spec §0's discipline: checked,
 never quoted as a result). Retrieval matched 16/16 in every lane — the
 cited-set construction premise held at 100% for the third battery
 running. Completeness 96/96; identity matched both phases; `dropped`
-empty.
+empty. Corpus provenance: the recompute's manifest-derived `corpus_sha`
+is `f7c75e1c6c66b433ee13d6ff9a64a3107f5be0c0f608b2c641b2e96872cb2d30`;
+the manifest FILE's sha256 at freeze, `f5d415ff…`, is the prereg §2
+pin — two formulas over the same frozen bytes, both recorded (the pg
+findings' §7 convention).
 
 ## 4. The weights, verbatim from recompute
 
