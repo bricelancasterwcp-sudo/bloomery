@@ -1790,3 +1790,51 @@ pre-launch verification; the patch-class silent-drop — caught by the
 B6 reviewer) and once more in prose (three miscounts in the audit doc —
 caught by the verifier's re-derivation). The freeze-held-until-tests
 discipline caught two real fixture defects with zero amendment cost.
+
+## Delivered in flywheel turn 7 (2026-08-29, training the declarations)
+
+**Delivered:** the v5 corpus pipeline (`generate_envelope_v5`: mechanical
+post-patch evidence for patch ideals, template ground-truth triples for
+the 8 target-present refusal templates, family→reason inverted from the
+one endpoint table; `--envelope v4` byte-identical, proven against the
+pre-change tree), the structural corpus check (`check_corpus_v5`, rules
+1–7), eval-time instrument binding (`instrument_rows` in recompute —
+duplicates/unknowns exit 2; the adversarial reviewer's journal surgery is
+a committed regression test), the executed floor derivation + mechanical
+verdict (`derive_turn7_floors --evaluate`, comparator and instrument both
+sha-pinned), the flywheel-tool verbatim declared-`done` path (validated
+by the real parser), a 4,563-pair corpus (sha `08c0bc6d…`, guard-clean
+against all five gates, checker 0 violations with bound expectations),
+one training run at ≈$6.70 of the $10 cap, and a two-boot battery:
+**PASS on all seven locked floors** by the tool's verdict (anchor
+pre-declared; boot 2 identical on every endpoint).
+
+**Deferred, with rulings:**
+- **The lens-shaped `different-defect` residual** is the sharpest next
+  target: all 3 python symptom-mismatch rows declare it, both plaintext
+  rows still declare `no-defect` (3/5 vs the 3/5 floor). A future turn
+  owns whether that's a corpus-side signal question (plaintext
+  symptom-mismatch ideals) or a capacity one.
+- The two find-shaped patch misses (honest `no-such-file` refusals after
+  failing to locate the target) are a find-capability note, not a
+  declaration defect; recorded, not scheduled.
+- `patch_evidence` refuses line-count-changing patches loudly (contract
+  review); a future template needing one extends the walk to track the
+  region delta — the assertion message says so.
+- Checker rule-7 expectations are opt-in by design; every registered use
+  MUST pass `--expect-patch/--expect-refuse` (the turn-7 prereg does).
+- Still open from earlier turns: `BadAttr` parser tightening; the
+  judge-shaped "true-but-irrelevant evidence" endpoint (its relevance
+  GROWS now that quotes are real); mixed v4+v5 `run_boot_g5_probe`
+  integration test; prune-tool `mtp` debt; RunPod account facts — ssh
+  keys are per-pod env (never account state), and the S3 key rotation
+  handoff item stands.
+
+**Process lessons:** the named bug class struck once more in my own
+verification (a cross-version byte-identity check whose `cd` persisted —
+master compared against master, "identical" without information; caught
+and redone); the adversarial reviewer's F-1 (no eval-time instrument
+binding) was the turn's one HIGH and was closed with its own attack as
+the regression test BEFORE the floors locked; every review finding was
+closed pre-lock at zero amendment cost — the hold-until-verified
+discipline keeps paying.

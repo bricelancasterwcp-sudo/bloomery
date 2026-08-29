@@ -192,6 +192,18 @@ Limits after Phase 2a, all known and none hidden:
   [audit](docs/superpowers/evidence/2026-08-29-v4-claim-audit.md) ·
   [protocol](docs/superpowers/evidence/2026-08-29-g5v5-protocol.md) ·
   [baselines](docs/superpowers/evidence/2026-08-29-g5v5-baselines.md).
+- **Turn 7 (training the declarations):** `qwen36-reap48-flywheel7`,
+  trained on the first corpus of declared-`done` ideals
+  (`generate_envelope_v5`, seed 20260829, every evidence quote proven
+  grounded under the shipped scorer's own rule before training) against
+  seven pre-registered floors locked before the pod was cut — **PASS on
+  all seven** (outcome consistency 32/32, evidence grounding 28/32 from
+  an untrained 8/32, `different-defect` present where it was universally
+  absent), verdict produced by the repo's own `derive --evaluate`, never
+  by prose arithmetic —
+  [pre-registration](docs/superpowers/evidence/2026-08-29-flywheel7-preregistration.md) ·
+  [training](docs/superpowers/evidence/2026-08-29-flywheel7-training.md) ·
+  [battery](docs/superpowers/evidence/2026-08-29-flywheel7-battery.md).
 * **A VRAM-bound window is un-placeable by exactly that reservation.** The
   window law subtracts `weights` and `overhead_mib` from free VRAM, but not
   `ctx_overhead_mib`; placement charges it. So an agent whose window is bound
