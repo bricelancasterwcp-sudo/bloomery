@@ -684,18 +684,21 @@ path = "/mnt/extra/models/qwen3.8-27b.gguf"
 
 // ---------------------------------------------------------------------------
 // `[memory] refalsify`
-// (docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md §5: "bool,
-// default `false`, read only when `enabled` is true")
+// (docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md §5 as
+// amended 2026-08-28: default flipped to `true` by operator ruling on the
+// refalsify-battery-v2 findings — G1 token-preservation exact, G2 injection
+// 50=50, probe cost sub-noise. Read only when `enabled` is true.)
 // ---------------------------------------------------------------------------
 
-/// Absent → `false` *even under an enabled organ* (spec §5: the memory
-/// battery's GATE PASS was measured inject-without-refalsify, so an enabled
-/// organ keeps exactly that behavior until the operator opts in), and the
-/// explicit opt-in parses. The whole-`Config` fixture mirrors the existing
-/// `[memory]` parse tests in `src/config.rs`, routed through `load_config`'s
-/// file-reading path the way this file's other cases are.
+/// Absent → `true` under an enabled organ (the 2026-08-28 default-flip
+/// ruling: battery-v2 measured refalsify-on preserving the repeat benefit
+/// exactly, so probing is what an enabled organ does unless the operator
+/// opts out), and the explicit opt-out parses. The whole-`Config` fixture
+/// mirrors the existing `[memory]` parse tests in `src/config.rs`, routed
+/// through `load_config`'s file-reading path the way this file's other
+/// cases are.
 #[test]
-fn memory_refalsify_defaults_false_and_parses_true() {
+fn memory_refalsify_defaults_true_and_parses_false() {
     let absent = r#"
 port = 9000
 data_dir = "/tmp/bloomery-daemon-test-data"
@@ -711,10 +714,10 @@ enabled = true
     let path = write_temp_toml("memory-refalsify-absent.toml", absent);
     let config = load_config(&path).unwrap();
     assert!(config.memory.enabled);
-    assert!(!config.memory.refalsify);
-    assert!(!MemoryConfig::default().refalsify);
+    assert!(config.memory.refalsify);
+    assert!(MemoryConfig::default().refalsify);
 
-    let opted_in = r#"
+    let opted_out = r#"
 port = 9000
 data_dir = "/tmp/bloomery-daemon-test-data"
 tier = { name = "enthusiast-16gb", emulated = false }
@@ -725,12 +728,12 @@ llama = "/models/llama.gguf"
 
 [memory]
 enabled = true
-refalsify = true
+refalsify = false
 "#;
-    let path = write_temp_toml("memory-refalsify-on.toml", opted_in);
+    let path = write_temp_toml("memory-refalsify-off.toml", opted_out);
     let config = load_config(&path).unwrap();
     assert!(config.memory.enabled);
-    assert!(config.memory.refalsify);
-    // The opt-in is orthogonal to retention — `max_episodes` still defaults.
+    assert!(!config.memory.refalsify);
+    // The opt-out is orthogonal to retention — `max_episodes` still defaults.
     assert_eq!(config.memory.max_episodes, 256);
 }

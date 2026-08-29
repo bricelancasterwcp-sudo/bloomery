@@ -1607,3 +1607,18 @@ verbatim from v1's prereg" but adapted one self-referential clause to
 this document's own section numbering) is recorded in the findings
 doc §10 — force preserved, not grounds to amend the lock, not fixed
 here.
+
+## refalsify default flip — 2026-08-28 (operator ruling, post-battery)
+
+The `[memory] refalsify` default-flip ruling recorded as open above is
+CLOSED: Brice ruled the flip on the refalsify-battery-v2 findings
+(preservation exact, injection 50=50, probe cost sub-noise), and
+`MemoryConfig::refalsify` now defaults `true`
+(`config::default_refalsify`; both specs carry dated amendments;
+`refalsify = false` is the opt-out). Found while landing it: the v2 doc
+sweep had missed `src/config.rs`'s field comment, which still described
+v1 semantics ("a clean nonzero exit contradicts the episode and the task
+runs memory-silent" — exactly inverted from v2's `premise_held`-injects).
+Fixed in the same change; lesson unchanged from the flywheel waves:
+doc sweeps must enumerate every file that states the semantics, not
+just the module that implements them.

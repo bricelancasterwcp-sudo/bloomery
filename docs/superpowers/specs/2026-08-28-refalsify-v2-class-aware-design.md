@@ -92,6 +92,13 @@ Consequences, stated plainly:
   subprocess per retrieval buys premise-freshness) stays the future
   battery's question (v1 spec §6, transferred).
 
+**Amended 2026-08-28 (default flip, operator ruling):** the default is
+now **on** — the refalsify-battery-v2 run answered this spec's "future
+battery's question" for preservation and cost (G1/G2 PASS, probe cost
+sub-noise; findings doc), and Brice ruled the flip. `refalsify = false`
+is the opt-out. See the v1 spec §5 amendment of the same date for the
+full provenance; the bullet above stands as this spec's original text.
+
 ## 3. Implementation shape
 
 - `classify_probe` (task/registry.rs) stays the raw exit classifier

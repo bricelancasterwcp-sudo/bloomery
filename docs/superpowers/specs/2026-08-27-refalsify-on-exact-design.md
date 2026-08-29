@@ -182,6 +182,18 @@ frozen instrument runs memory-off and is doubly untouched. A future
 repeat-exposure battery slice may pre-register refalsify-on as its own
 lens; this spec deliberately leaves that instrument undesigned.
 
+**Amended 2026-08-28 (default flip, operator ruling):** the default is
+now `true`. The refalsify-battery-v2 findings
+(`docs/superpowers/evidence/2026-08-28-refalsify-battery-v2-findings.md`)
+measured refalsify-on (v2 premise-verdict semantics) preserving the
+repeat benefit exactly — G1 injected-token diff median 0.0 against a
+derived band of 5.325, G2 injection 50=50, stamp audit 100%
+`premise_held` — with probe cost unresolvable from box noise, and Brice
+ruled the flip on those findings. `refalsify = false` remains the
+explicit opt-out; the flag is still read only under an enabled organ, so
+every frozen instrument (memory-off) is untouched by the flip. The
+paragraph above stands as this spec's original registered position.
+
 ## 6. Cost honesty
 
 Battery findings §4: injected repeats are already ~7% slower by wall

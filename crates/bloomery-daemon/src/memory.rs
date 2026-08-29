@@ -59,11 +59,13 @@ pub struct MemoryContext {
     /// The `[memory] max_episodes` retention cap on distinct ids (spec §6),
     /// passed to [`store::MemoryStore::mint`] at every mint.
     pub max_episodes: usize,
-    /// The `[memory] refalsify` opt-in (refalsify v2 class-aware design
+    /// The `[memory] refalsify` flag (refalsify v2 class-aware design
     /// `docs/superpowers/specs/2026-08-28-refalsify-v2-class-aware-design.md`
     /// §2; activation carried over from the v1 spec
     /// `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md` §5;
-    /// default `false`): whether the worker probes a retrieved episode's
+    /// default `true` since the 2026-08-28 flip ruling — see
+    /// `config::default_refalsify`): whether the worker probes a retrieved
+    /// episode's
     /// stored run command under the incoming task's grant, `cwd` and
     /// `ExecBounds` before injecting. The probe informs injection, it never
     /// contradicts: a clean nonzero exit confirms the premise
