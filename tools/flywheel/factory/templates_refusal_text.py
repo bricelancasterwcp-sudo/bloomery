@@ -15,7 +15,13 @@ from __future__ import annotations
 import random
 
 from tools.flywheel.factory import goal_phrasing
-from tools.flywheel.factory.task import CHECK_INSTRUCTION, DEFECT_ABSENT, MISSING_TARGET, RefusalTask
+from tools.flywheel.factory.task import (
+    CHECK_INSTRUCTION,
+    DEFECT_ABSENT,
+    MISSING_TARGET,
+    RefusalTask,
+    evidence_line_of,
+)
 from tools.flywheel.factory.wordlists import CONFIG_KEY_BASES, MONTH_NAMES, THEMES
 
 
@@ -51,15 +57,21 @@ def _defect_absent_config_value_txt(rng: random.Random) -> RefusalTask:
         f"No change needed: {target}'s {key} is already set to {correct_val}, which already "
         f"meets the {claimed_floor} floor the report mentions."
     )
+    files = {target: contents}
     return RefusalTask(
         name="refusal_defect_absent_config_value_txt",
         lens="plaintext",
         family=DEFECT_ABSENT,
         target=target,
         target_missing=False,
-        files={target: contents},
+        files=files,
         goal=goal,
         refusal_reason=refusal_reason,
+        # The checked-correct line: the key's real value already meets the
+        # claimed floor (correct_val > claimed_floor by construction).
+        # Unique per line: keys are drawn distinct and no CONFIG_KEY_BASES
+        # entry is a suffix of another, so `{key} = ` matches one line.
+        evidence=(evidence_line_of(files, target, f"{key} = {correct_val}"),),
     )
 
 
@@ -85,15 +97,19 @@ def _defect_absent_version_string_txt(rng: random.Random) -> RefusalTask:
     )
     goal = goal_phrasing.defect_absent_skeletons(rng, target, claim, CHECK_INSTRUCTION)
     refusal_reason = f"No change needed: {target}'s heading {version} is already the correct tag for this entry."
+    files = {target: contents}
     return RefusalTask(
         name="refusal_defect_absent_version_string_txt",
         lens="plaintext",
         family=DEFECT_ABSENT,
         target=target,
         target_missing=False,
-        files={target: contents},
+        files=files,
         goal=goal,
         refusal_reason=refusal_reason,
+        # The checked-correct line: the heading really carries `version`,
+        # the tag the goal claims should read one patch higher.
+        evidence=(evidence_line_of(files, target, f"## {version} - {month} {day}"),),
     )
 
 

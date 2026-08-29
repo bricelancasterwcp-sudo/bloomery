@@ -17,7 +17,13 @@ from __future__ import annotations
 import random
 
 from tools.flywheel.factory import goal_phrasing
-from tools.flywheel.factory.task import CHECK_INSTRUCTION, DEFECT_ABSENT, MISSING_TARGET, RefusalTask
+from tools.flywheel.factory.task import (
+    CHECK_INSTRUCTION,
+    DEFECT_ABSENT,
+    MISSING_TARGET,
+    RefusalTask,
+    evidence_line_of,
+)
 from tools.flywheel.factory.wordlists import THEMES, Theme
 
 
@@ -59,15 +65,20 @@ def _defect_absent_wrong_multiplier_py(rng: random.Random) -> RefusalTask:
         f"No change needed: {fn_name}() in {target} already multiplies by {correct_factor}, "
         f"which is correct -- {fn_name}({base}) returns {correct_result} as expected."
     )
+    files = {target: contents}
     return RefusalTask(
         name="refusal_defect_absent_wrong_multiplier_py",
         lens="python",
         family=DEFECT_ABSENT,
         target=target,
         target_missing=False,
-        files={target: contents},
+        files=files,
         goal=goal,
         refusal_reason=refusal_reason,
+        # The checked-correct line the goal's false claim is about: the
+        # multiplier really is `correct_factor`, and this is the line a
+        # truthful checker quotes to show it.
+        evidence=(evidence_line_of(files, target, f"return value * {correct_factor}"),),
     )
 
 
@@ -108,15 +119,20 @@ def _defect_absent_wrong_comparison_py(rng: random.Random) -> RefusalTask:
         f"No change needed: {fn_name}() in {target} already keeps the {extreme_word} {noun} -- "
         f"{fn_name}({values}) correctly returns {correct_result}."
     )
+    files = {target: contents}
     return RefusalTask(
         name="refusal_defect_absent_wrong_comparison_py",
         lens="python",
         family=DEFECT_ABSENT,
         target=target,
         target_missing=False,
-        files={target: contents},
+        files=files,
         goal=goal,
         refusal_reason=refusal_reason,
+        # The checked-correct line: the comparison the goal claims points
+        # the wrong way really points the right way (`op` matches
+        # `extreme_word` by construction).
+        evidence=(evidence_line_of(files, target, f"if x {op} best:"),),
     )
 
 

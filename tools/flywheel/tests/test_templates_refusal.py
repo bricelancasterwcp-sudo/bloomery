@@ -31,6 +31,7 @@ from tools.flywheel.factory.task import (
     REFUSAL_FAMILIES,
     REFUSAL_QUOTED_RE,
     RefusalTask,
+    evidence_line_of,
     validate_refusal_task,
 )
 
@@ -282,15 +283,17 @@ class RefusalValidationMechanicsTest(unittest.TestCase):
     `StructuralValidityTest` in `test_templates.py`."""
 
     def _valid_defect_absent(self):
+        files = {"mathy.py": "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n"}
         return RefusalTask(
             name="unit_test_family",
             lens="python",
             family=DEFECT_ABSENT,
             target="mathy.py",
             target_missing=False,
-            files={"mathy.py": "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n"},
+            files=files,
             goal=f"mathy.py's `add` looks miscalculated. {CHECK_INSTRUCTION}",
             refusal_reason="No change needed: add() in mathy.py is already correct.",
+            evidence=(evidence_line_of(files, "mathy.py", "return a + b"),),
         )
 
     def _valid_missing_target(self):

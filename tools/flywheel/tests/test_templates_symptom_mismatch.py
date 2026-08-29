@@ -31,6 +31,7 @@ from tools.flywheel.factory.task import (
     REFUSAL_QUOTED_RE,
     SYMPTOM_MISMATCH,
     RefusalTask,
+    evidence_line_of,
     symptom_mismatch_reason,
     validate_refusal_task,
 )
@@ -306,19 +307,21 @@ class SymptomMismatchValidatorTest(unittest.TestCase):
     with family-aware wording."""
 
     def _valid(self) -> RefusalTask:
+        files = {"tallylog.py": "def tally(rows):\n    total = 0\n    for i in range(len(rows) - 1):\n        total += rows[i]\n    return total\n"}
         return RefusalTask(
             name="unit_test_symptom_mismatch",
             lens="python",
             family=SYMPTOM_MISMATCH,
             target="tallylog.py",
             target_missing=False,
-            files={"tallylog.py": "def tally(rows):\n    total = 0\n    for i in range(len(rows) - 1):\n        total += rows[i]\n    return total\n"},
+            files=files,
             goal=f"Field report on tallylog.py: `tally` starts at 5 instead of 0. {CHECK_INSTRUCTION}",
             refusal_reason=(
                 "Checked: no wrong starting value in tallylog.py — tally() starts total at 0. "
                 "Found instead: an off-by-one bound at `range(len(rows) - 1)`; "
                 "no change made without a goal that matches."
             ),
+            evidence=(evidence_line_of(files, "tallylog.py", "for i in range(len(rows) - 1):"),),
         )
 
     def test_the_hand_built_valid_task_has_no_violations(self):

@@ -28,6 +28,7 @@ from tools.flywheel.factory.task import (
     CHECK_INSTRUCTION,
     SYMPTOM_MISMATCH,
     RefusalTask,
+    evidence_line_of,
     symptom_mismatch_reason,
 )
 from tools.flywheel.factory.wordlists import CONFIG_KEY_BASES, PERSON_NAMES, THEMES
@@ -74,15 +75,21 @@ def _symptom_mismatch_duplicate_key_txt(rng: random.Random) -> RefusalTask:
         found=f"a duplicated `{dup_key}` entry, so the file declares it twice with different values",
         site=f"lines {first_line} and {second_line} ({first_value}, then {second_value})",
     )
+    files = {target: contents}
     return RefusalTask(
         name="refusal_symptom_mismatch_duplicate_key_txt",
         lens="plaintext",
         family=SYMPTOM_MISMATCH,
         target=target,
         target_missing=False,
-        files={target: contents},
+        files=files,
         goal=goal,
         refusal_reason=refusal_reason,
+        # The real defect Y's line — the SECOND declaration, the one that
+        # makes `dup_key` a duplicate. Unique per line by construction:
+        # second_value's range (100-999) is disjoint from every other value
+        # range in the file, so no other `key = value` line can contain it.
+        evidence=(evidence_line_of(files, target, f"{dup_key} = {second_value}"),),
     )
 
 
@@ -126,15 +133,19 @@ def _symptom_mismatch_escalation_loop_txt(rng: random.Random) -> RefusalTask:
         found=f"an escalation path that loops back to the owner ({owner} is listed as both)",
         site=f"`Owner: {owner}` and `Escalate to: {owner}`",
     )
+    files = {target: contents}
     return RefusalTask(
         name="refusal_symptom_mismatch_escalation_loop_txt",
         lens="plaintext",
         family=SYMPTOM_MISMATCH,
         target=target,
         target_missing=False,
-        files={target: contents},
+        files=files,
         goal=goal,
         refusal_reason=refusal_reason,
+        # The real defect Y's line — the escalation entry that points back
+        # at the owner, making an escalation go nowhere.
+        evidence=(evidence_line_of(files, target, f"Escalate to: {owner}"),),
     )
 
 

@@ -42,6 +42,7 @@ from tools.flywheel.factory.task import (
     CHECK_INSTRUCTION,
     SYMPTOM_MISMATCH,
     RefusalTask,
+    evidence_line_of,
     symptom_mismatch_reason,
 )
 from tools.flywheel.factory.wordlists import THEMES
@@ -90,15 +91,19 @@ def _symptom_mismatch_dropped_last_reading_py(rng: random.Random) -> RefusalTask
         found="an off-by-one loop bound that silently drops the last reading",
         site="`for i in range(len(readings) - 1)`",
     )
+    files = {target: contents}
     return RefusalTask(
         name="refusal_symptom_mismatch_dropped_last_reading_py",
         lens="python",
         family=SYMPTOM_MISMATCH,
         target=target,
         target_missing=False,
-        files={target: contents},
+        files=files,
         goal=goal,
         refusal_reason=refusal_reason,
+        # The real defect Y's line — the same `site` ground truth the
+        # refusal_reason spends: the off-by-one loop bound.
+        evidence=(evidence_line_of(files, target, "for i in range(len(readings) - 1):"),),
     )
 
 
@@ -139,15 +144,19 @@ def _symptom_mismatch_truncated_average_py(rng: random.Random) -> RefusalTask:
         found="an integer floor division that discards the fractional part",
         site="`return sum(samples) // len(samples)`",
     )
+    files = {target: contents}
     return RefusalTask(
         name="refusal_symptom_mismatch_truncated_average_py",
         lens="python",
         family=SYMPTOM_MISMATCH,
         target=target,
         target_missing=False,
-        files={target: contents},
+        files=files,
         goal=goal,
         refusal_reason=refusal_reason,
+        # The real defect Y's line — the same `site` ground truth the
+        # refusal_reason spends: the flooring division.
+        evidence=(evidence_line_of(files, target, "return sum(samples) // len(samples)"),),
     )
 
 
