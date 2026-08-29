@@ -1701,3 +1701,33 @@ than bootstrap and cost four independent hand-derived vectors to pin.
 Driver and dry_manifest needed ZERO changes for a three-lane per-task
 p2 corpus — the key-presence convention generalized; their shas in
 this prereg are byte-identical to the pg lock's pins.
+
+## §5 ruling — 2026-08-29 (Brice: "we will do as you recommend")
+
+The s5-weight-battery's open ruling is CLOSED: **§5 stands as-is.**
+Rationale of record: the shipped refalsify-on default already shields
+the measured-total moot lane (premise_gone → nothing injected → §5
+inert there); the true-positive lane is earning its keep (15/16 stale
+removals + 1 correction); collateral on right lessons measured zero.
+No code change ships on this ruling.
+
+**QUEUED as a recorded future slice (not scheduled): run-evidence
+scoping of §5** — trigger becomes "a completed post-injection run
+failed, with no later completed pass" instead of "scored outcome with
+no verifying run." Motivations pinned when queued: (i) resolves the
+refalsify-v2 spec's named premise_held-into-honest-completion tension;
+(ii) fixes the code-entailed Done-gate wrinkle (a scored non-Done task
+with a landed patch + passing run still contradicts — verifying_run is
+Done-gated); (iii) preserves the measured stale-removal lane (every
+observed stale contradiction came from a ran-and-failed task). If
+executed: memory-organ design §5 dated amendment + registry change +
+pins, and the weights re-measured under the amended rule before anyone
+quotes them.
+
+**PARKED by the same ruling:** the staleness-benefit registration
+(headline pre-empted twice — token deltas within band in both
+batteries; the qualitative story already licensed) and the probe-cost
+registration (revisit only if a ms-level number becomes
+decision-relevant). The three spec-flagged [judgment] items (seeds,
+floors, perturbation constants) remain standing review flags,
+unobjected.
