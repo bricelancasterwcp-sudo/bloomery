@@ -1,0 +1,12 @@
+import unittest
+
+import brinecheck
+
+
+class TestBrinecheck(unittest.TestCase):
+    def test_algae_growth_value(self):
+        self.assertEqual(brinecheck.algae_growth_value({'primary': 1, 'secondary': 2, 'fallback': 3, 'override': 4, 'baseline': 5, 'candidate': 6, 'nominal': 7, 'adjusted': 8}), 11)
+
+
+if __name__ == "__main__":
+    unittest.main()
