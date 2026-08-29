@@ -84,6 +84,17 @@
 //! rendered trajectory states exactly the capability its real executor calls
 //! ran under.
 //!
+//! **Turn 7 (turn-7 spec §2.3) makes the `done` completion envelope-aware**:
+//! under a lens where `done_declares()` is false (v1–v4) nothing changes —
+//! the pinned `<action verb="done">` wrap, byte-identical. Under a
+//! `done_declares()` lens (v5) the wire `summary`/`refusal_reason` must
+//! already BE a full declared done block, read back with the real
+//! [`bloomery_core::action::parse_action`] and required to carry `outcome`,
+//! `reason`, and at least one `evidence:` line, then emitted verbatim (see
+//! [`render::done_completion`]). A v5 ideal that fails that parse is a
+//! factory bug: the tool answers with its JSON error line and the factory
+//! aborts the task, the same fail-loud posture every other factory bug has.
+//!
 //! One consequence worth stating, because it is the reason the turn-3 gate
 //! protocol calls `find` observations *format*-faithful rather than
 //! byte-faithful: `exec_find`'s per-hit line embeds a canonicalized,
@@ -419,7 +430,7 @@ fn handle_find_trajectory(
         &format!("patched (lens: {lens_name})"),
         &new_contents,
     );
-    trajectory.emit(done_completion(summary));
+    trajectory.emit(done_completion(summary, envelope)?);
 
     Ok(TrajectoryResponse {
         pairs: trajectory.pairs,
@@ -516,7 +527,7 @@ fn handle_run_trajectory(
         ));
     }
     trajectory.observe("run", &run.outcome, &run.content);
-    trajectory.emit(done_completion(summary));
+    trajectory.emit(done_completion(summary, envelope)?);
 
     Ok(TrajectoryResponse {
         pairs: trajectory.pairs,
@@ -616,7 +627,7 @@ fn handle_patch_trajectory(
         &req.commands,
         &transcript_after_patch,
     );
-    let completion3 = done_completion(summary);
+    let completion3 = done_completion(summary, envelope)?;
 
     let mut pairs = pairs_1_2();
     pairs.push(Pair {
@@ -638,7 +649,7 @@ fn handle_patch_trajectory(
 /// `done`), never a `patch` — `search`/`replace` are absent from the
 /// request and no [`land`] call ever happens. Both refusal families share
 /// pair 1 (the model attempts the same `read` a repair trajectory would)
-/// and completion 2 (`done_completion(refusal_reason)`); they differ only
+/// and completion 2 (`done_completion(refusal_reason, envelope)`); they differ only
 /// in how pair 2's transcript is built:
 ///
 /// - **defect-absent** (`target_missing == false`, the default): `target`
@@ -681,7 +692,7 @@ fn handle_refuse_trajectory(
         &req.commands,
         &transcript_after_read,
     );
-    let completion2 = done_completion(refusal_reason);
+    let completion2 = done_completion(refusal_reason, envelope)?;
 
     Ok(TrajectoryResponse {
         pairs: vec![

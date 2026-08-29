@@ -19,7 +19,7 @@
 //! `flywheel_tool.rs`'s handlers.
 
 use bloomery_core::action::lens::{land, Landing, LandingLens, PlainText};
-use bloomery_core::action::{PatchBody, PatchCodec};
+use bloomery_core::action::{parse_action, Action, PatchBody, PatchCodec};
 use bloomery_daemon::config::EnvelopeLens;
 use bloomery_daemon::task::lens_py::PythonLens;
 use bloomery_daemon::task::task_loop::{render_task_prompt, transcript_entry};
@@ -77,10 +77,71 @@ pub(crate) fn patch_completion(target: &str, search: &str, replace: &str) -> Str
     )
 }
 
-/// Builds pair 3's completion: `<action verb="done">` with `summary` as
-/// its one-line body.
-pub(crate) fn done_completion(summary: &str) -> String {
-    format!("<action verb=\"done\">\n{summary}\n</action>")
+/// Builds the trajectory's `done` completion, envelope-aware (turn-7 spec
+/// §2.3).
+///
+/// Under a lens where [`EnvelopeLens::done_declares`] is false (v1–v4):
+/// `<action verb="done">` with `summary` as its one-line body — the wrap
+/// those envelopes have always rendered, byte-identical (pinned by the
+/// turn-1 golden and every earlier snapshot).
+///
+/// Under a `done_declares()` lens (v5): the wire `summary`/`refusal_reason`
+/// must already BE a full declared done block. It is read back with the
+/// REAL [`parse_action`] — the same parser the daemon's task loop decodes
+/// turns with, never a second implementation — and must yield
+/// [`Action::Done`] with `outcome` and `reason` present and at least one
+/// leading `evidence:` line. On success the input is emitted verbatim (no
+/// wrap, no whitespace changes): the ideal the corpus teaches is, provably,
+/// one the serving parser reads back with the declarations intact. Any
+/// failure is a factory bug, not a tool bug — the `Err` names the missed
+/// requirement and rides the tool's JSON error contract, aborting the run.
+pub(crate) fn done_completion(summary: &str, envelope: EnvelopeLens) -> Result<String, String> {
+    if !envelope.done_declares() {
+        return Ok(format!("<action verb=\"done\">\n{summary}\n</action>"));
+    }
+    let action = parse_action(summary).map_err(|e| {
+        format!(
+            "envelope-v5 requires the done completion to already be a full declared \
+             <action verb=\"done\" outcome=\"...\" reason=\"...\"> block, but the wire \
+             summary/refusal_reason did not parse as one: {e:?} — this is a factory bug, \
+             not a tool bug"
+        )
+    })?;
+    let Action::Done {
+        outcome,
+        reason,
+        evidence,
+        ..
+    } = action
+    else {
+        return Err(
+            "envelope-v5 requires the done completion to be a declared done block, but the \
+             wire summary/refusal_reason parsed as a different action verb, not done"
+                .to_string(),
+        );
+    };
+    if outcome.is_none() {
+        return Err(
+            "envelope-v5 done completion is missing its \"outcome\" attribute — a v5 ideal \
+             must declare both outcome and reason"
+                .to_string(),
+        );
+    }
+    if reason.is_none() {
+        return Err(
+            "envelope-v5 done completion is missing its \"reason\" attribute — a v5 ideal \
+             must declare both outcome and reason"
+                .to_string(),
+        );
+    }
+    if evidence.is_empty() {
+        return Err(
+            "envelope-v5 done completion carries no leading \"evidence:\" lines — a v5 ideal \
+             must quote at least one"
+                .to_string(),
+        );
+    }
+    Ok(summary.to_string())
 }
 
 /// The `path` attribute a rendered `find` completion carries: the task's
