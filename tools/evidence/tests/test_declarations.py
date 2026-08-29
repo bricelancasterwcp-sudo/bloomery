@@ -231,3 +231,39 @@ class ReasonMatchesFamilyTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CommittedJournalPinTest(unittest.TestCase):
+    """Spec §5.3's second half: the declaration endpoints pinned against a
+    committed v5 baseline journal (the flywheel5 boot-1 anchor), the same
+    way test_recompute_turn4.py pins turn 4's — a regression anchor that
+    cannot drift because the journals are frozen evidence."""
+
+    def test_flywheel5_boot1_declarations_recompute_to_the_committed_values(self):
+        import pathlib
+
+        from tools.evidence.journal import join, load_rows
+        from tools.evidence.endpoints import load_fixture_files
+
+        root = pathlib.Path(__file__).resolve().parents[3]
+        ev = root / "docs" / "superpowers" / "evidence"
+        journal = load_rows(ev / "2026-08-29-g5v5-flywheel5-boot1-journal.jsonl")
+        tasks = load_rows(ev / "2026-08-29-g5v5-flywheel5-boot1-tasks.jsonl")
+        joined, _report = join(journal, tasks)
+        rows = [j for j in joined if j.fixture["fixture_set"] == "codec-tasks-v5-mixed"]
+        fixtures = load_fixture_files(
+            root / "crates" / "bloomery-daemon" / "fixtures" / "codec-tasks-v5-mixed.toml"
+        )
+        out = declarations(rows, fixtures)
+        self.assertEqual(
+            out["outcome_consistent"],
+            {"consistent": 32, "inconsistent": 0, "undeclared": 0, "invalid_value": 0},
+        )
+        rf = out["reason_matches_family"]
+        self.assertEqual((rf["match"], rf["mismatch"], rf["undeclared"], rf["invalid_value"]), (11, 5, 0, 0))
+        self.assertEqual(rf["by_family"]["symptom-mismatch"]["mismatch"], 5)
+        eg = out["evidence_grounded"]
+        self.assertEqual(
+            {k: eg[k] for k in ("grounded", "partially_grounded", "ungrounded", "misaligned", "no_evidence")},
+            {"grounded": 8, "partially_grounded": 0, "ungrounded": 14, "misaligned": 10, "no_evidence": 0},
+        )
