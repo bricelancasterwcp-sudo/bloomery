@@ -64,6 +64,11 @@ def recompute(journal: Path, tasks: Path, g5_fixtures: Path | None, g4_set: str 
         report["g5"] = g5
         report["composition"] = ep.composition(g5_rows)
         report["endpoints"] = ep.endpoints(g5_rows, fx)
+        # The v4 claim audit (turn-6 spec §2): pre-registered for
+        # codec-tasks-v4-mixed ONLY -- its patterns and family inference
+        # are that audit's, never generalized to another set here.
+        if g5_set == "codec-tasks-v4-mixed":
+            report["claim_audit"] = ep.claim_audit(g5_rows)
     else:
         report["g5"] = None
     report["grant_violation_rows"] = ep.grant_violation_rows(trows)
