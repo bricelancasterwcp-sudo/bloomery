@@ -1622,3 +1622,42 @@ runs memory-silent" — exactly inverted from v2's `premise_held`-injects).
 Fixed in the same change; lesson unchanged from the flywheel waves:
 doc sweeps must enumerate every file that states the semantics, not
 just the module that implements them.
+
+## premise-gone-battery-v1 — 2026-08-28 (branch premise-gone-battery)
+
+**Settled:** the first of battery-v2's three named absences. Full PASS
+(findings doc): refalsify-on takes the premise_gone lane totally on
+goal-satisfied exact repeats — 50/50 `premise_gone` silent stamps, zero
+injections, zero contradictions, store fully verified — while
+refalsify-off injects the moot lesson 50/50. Design finding recorded in
+spec §0: under two-stage exact retrieval the "already-fixed" flavor of
+goal-satisfied can never retrieve; the reachable lane is "the world
+moved on" (verification contract updated around unchanged cited bytes),
+realized by moved-on tests that pass on the defective target and fail
+on the old fix (S4 non-vacuity).
+
+**Deferred, with rulings:**
+- The design-§5 passive-poisoning WEIGHT registration now has its
+  motivating observation: A2 shows §5 contradicted 47/50 TRUE episodes
+  in the off arm on goal-satisfied repeats (3 survived only by
+  re-patching), zero in the on arm. Advisory here; that registration
+  should start from the memory-organ design §5 and may now cite this
+  battery's A2 as the fired question.
+- Staleness-benefit story still needs its own corpus treatment (A1's
+  within-band +5.0 completion-token diff, silent arm HIGHER, is its
+  first observation: the moot injection may shortcut investigation —
+  direction unproven, unregistered).
+- Spec-flagged [judgment] calls for Brice's after-the-fact review:
+  corpus seed 20260828, bootstrap seed 20260829, floor 25 = n/2.
+- Probe cost remains unresolved (battery-v2's verdict stands; this
+  battery's A3 wall delta runs the WRONG direction for a probe cost and
+  is tail-dominated by M′'s moot-lesson recovery work).
+
+**Process lessons:** the whole machinery arc (generator with
+execute-and-pin authoring, S1-S5 checker, driver per-phase source,
+scratch-copy p2 carry, recompute) landed with 8 mutation checks killed
+before the lock and zero live machinery failures across dry + real
+runs; the scratch-copy manifest held the tracked-tree rule (git status
+clean after 206 daemon task-halves of granted writes). The
+sibling-convention driver delta kept corpus-v1 manifests byte-identical
+in behavior (compat pinned by the untouched pre-existing suite).
