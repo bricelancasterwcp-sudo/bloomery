@@ -165,11 +165,23 @@ def evaluate(floors_report: dict, subject_path: Path) -> dict:
         )
     if subject["join"]["violations"]:
         raise SystemExit(f"evaluate: subject join violations {subject['join']['violations']}")
+    g4, g5, dec = subject.get("g4"), subject.get("g5"), subject.get("declarations")
+    if not g4 or not g5 or not dec:
+        raise SystemExit(
+            "evaluate: subject recompute JSON is missing g4/g5/declarations -- not a complete "
+            "v5 measurement, no floor verdict is produced"
+        )
+    # The subject must have been scored against the FROZEN instrument's
+    # bytes, not merely a set with the same fixture names (re-review LOW-1).
+    if g5.get("set") != "codec-tasks-v5-mixed" or g5.get("fixtures_sha256") != V5_MIXED_SHA256:
+        raise SystemExit(
+            f"evaluate: subject was not scored against the frozen instrument "
+            f"(set={g5.get('set')!r}, fixtures_sha256={g5.get('fixtures_sha256')!r}) -- re-run "
+            f"tools.evidence.recompute (this repo's version, this repo's fixture file) first"
+        )
 
     floors = floors_report["floors"]
-    dec = subject["declarations"]
     fam = dec["reason_matches_family"]["by_family"]
-    g4, g5 = subject["g4"], subject["g5"]
     checks = {
         "F1_g4": {"floor": floors["F1_g4"]["floor"], "observed": g4["landed"],
                   "n_ok": g4["n"] == 20},

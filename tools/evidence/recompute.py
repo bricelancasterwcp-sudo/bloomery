@@ -9,6 +9,7 @@ on the gate path. Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -64,7 +65,11 @@ def recompute(journal: Path, tasks: Path, g5_fixtures: Path | None, g4_set: str 
             ]
         patch = [j for j in g5_rows if j.fixture.get("expect") == "patch"]
         refuse = [j for j in g5_rows if j.fixture.get("expect") == "refuse"]
+        # The scored-against instrument's identity travels with the report
+        # (re-review LOW-1, 2026-08-29) so a floor evaluation can pin WHICH
+        # fixture bytes produced these numbers, not just their set name.
         g5 = {"set": g5_set,
+              "fixtures_sha256": hashlib.sha256(Path(g5_fixtures).read_bytes()).hexdigest(),
               "patch": ep.leg(sum(bool(j.fixture["landed"]) for j in patch), len(patch)),
               "refuse": ep.leg(sum(bool(j.fixture["landed"]) for j in refuse), len(refuse))}
         jv = _journaled_g5(jrows, g5_set)

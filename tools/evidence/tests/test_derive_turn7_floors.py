@@ -15,7 +15,7 @@ import json
 import unittest
 from pathlib import Path
 
-from tools.evidence.derive_turn7_floors import derive, hold_floor, improvement_floor
+from tools.evidence.derive_turn7_floors import V5_MIXED_SHA256, derive, hold_floor, improvement_floor
 
 REPO = Path(__file__).resolve().parents[3]
 BASELINE = REPO / "docs/superpowers/evidence/2026-08-29-g5v5-reap48ours-boot1-recompute.json"
@@ -106,7 +106,8 @@ class EvaluateModeTest(unittest.TestCase):
             "instrument_rows": {"expected": 32, "seen": 32, "duplicates": [], "unknown": [], "missing": []},
             "join": {"violations": []},
             "g4": {"landed": 20, "n": 20},
-            "g5": {"patch": {"landed": 15, "n": 16}, "refuse": {"landed": 16, "n": 16}},
+            "g5": {"set": "codec-tasks-v5-mixed", "fixtures_sha256": V5_MIXED_SHA256,
+                   "patch": {"landed": 15, "n": 16}, "refuse": {"landed": 16, "n": 16}},
             "declarations": {
                 "outcome_consistent": {"consistent": 31},
                 "evidence_grounded": {"grounded": 20},
@@ -160,6 +161,17 @@ class EvaluateModeTest(unittest.TestCase):
     def test_a_subject_without_the_binding_is_refused(self):
         subject = self._subject()
         del subject["instrument_rows"]
+        with self.assertRaises(SystemExit):
+            self._evaluate(subject)
+
+    def test_a_subject_scored_against_other_fixture_bytes_is_refused(self):
+        subject = self._subject()
+        subject["g5"]["fixtures_sha256"] = "0" * 64
+        with self.assertRaises(SystemExit):
+            self._evaluate(subject)
+
+    def test_a_structurally_incomplete_subject_is_a_named_refusal(self):
+        subject = self._subject(g4=None)
         with self.assertRaises(SystemExit):
             self._evaluate(subject)
 
