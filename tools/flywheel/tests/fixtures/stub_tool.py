@@ -46,6 +46,16 @@ something no unit test can hold the factory to:
   `scratch::check_command_prefixes`: under v4 those bytes reach the prompt,
   where an empty prefix renders a dangling label and a blank word a stray
   double space.
+
+Turn 7 (spec §2.3) teaches the stub envelope-v5's done rule, mirroring
+`render.rs::done_completion`: under a `done_declares()` envelope (v5) the
+wire `summary`/`refusal_reason` already IS the full declared done block,
+so it is emitted VERBATIM — no wrap; under v1-v4 the classic
+`<action verb="done">\n{text}\n</action>` wrap stays byte-identical. The
+stub does not re-implement the real binary's parse-back validation of the
+declared block (that is `bloomery-core`'s parser, and a stub copy would
+drift); it mimics only the wire shape. v5 also carries the grant line,
+exactly as `EnvelopeLens::grant_line` says (v4's delta persists).
 """
 
 import json
@@ -53,8 +63,9 @@ import sys
 
 FIND_PATH = "."
 
-ENVELOPES = ("v1", "v2", "v3", "v4")
-GRANT_LINE_ENVELOPES = ("v4",)
+ENVELOPES = ("v1", "v2", "v3", "v4", "v5")
+GRANT_LINE_ENVELOPES = ("v4", "v5")
+DONE_DECLARES_ENVELOPES = ("v5",)
 NONE_LINE = "Granted commands: none — run is not available in this task"
 GRANTED_LABEL = "Granted commands:"
 
@@ -82,6 +93,15 @@ def _grant_section(req):
     return "".join(f"{GRANTED_LABEL} {' '.join(prefix)}\n" for prefix in commands) + "\n"
 
 
+def _done_completion(req, text):
+    """`render.rs::done_completion`'s envelope split (turn-7 spec §2.3):
+    under `done_declares()` (v5) the wire text IS the declared done block,
+    emitted verbatim; under v1-v4 the classic wrap, byte-identical."""
+    if req.get("envelope") in DONE_DECLARES_ENVELOPES:
+        return text
+    return f'<action verb="done">\n{text}\n</action>'
+
+
 def _handle_refuse(req):
     goal = req["goal"]
     target = req["target"]
@@ -98,7 +118,7 @@ def _handle_refuse(req):
     else:
         read_outcome = target_contents
     prompt2 = f"PROMPT2 goal={goal} read={read_outcome}\n\n{grant}"
-    completion2 = f'<action verb="done">\n{refusal_reason}\n</action>'
+    completion2 = _done_completion(req, refusal_reason)
 
     pairs = [
         {"prompt": prompt1, "completion": completion1},
@@ -183,7 +203,7 @@ def _handle_patch(req):
             return ran
         completions.append(ran)
 
-    completions.append(f'<action verb="done">\n{req["summary"]}\n</action>')
+    completions.append(_done_completion(req, req["summary"]))
     return {
         "pairs": _pairs(req, completions),
         "landed": True,
