@@ -79,6 +79,16 @@ pub struct Fixture {
     /// against.
     #[serde(default)]
     pub commands: Vec<Vec<String>>,
+    /// The refuse fixture's factory family (turn-6 spec §4.2, wire
+    /// spellings `"defect-absent" | "missing-target" | "symptom-mismatch"`)
+    /// — written from `RefusalTask.family`, which always existed and was
+    /// simply never serialized. Serde-defaulted `None` so every v1–v4 TOML
+    /// loads unchanged (the daemon stays permissive; the v5 real-fixture
+    /// test asserts presence on all 16 v5 refuse rows, and the evidence
+    /// tool errors if a v5 refuse row lacks it — the daemon itself never
+    /// reads it).
+    #[serde(default)]
+    pub family: Option<String>,
 }
 
 /// One file's starting contents, keyed by its path relative to the task's
