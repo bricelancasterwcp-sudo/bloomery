@@ -699,3 +699,61 @@ class DriverInvariantsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PerPhaseSourceTest(unittest.TestCase):
+    """premise-gone-battery plan Task 4: a task entry carrying a
+    `pristine_p2` key gets its PHASE-2 workspace materialized from the
+    sibling `pristine_p2/` directory; phase 1 always materializes from
+    `pristine/`; a manifest without the key behaves byte-identically to
+    before (which the rest of this file's tests, unmodified, already
+    pin)."""
+
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp_path = Path(self._tmp.name)
+
+    def _build_p2_manifest(self) -> dict[str, Any]:
+        manifest = _build_manifest(self.tmp_path, ["t0"])
+        task_dir = self.tmp_path / "tasks" / "t0"
+        (task_dir / "pristine_p2").mkdir()
+        (task_dir / "pristine_p2" / "x.txt").write_text("moved-on-bytes\n", encoding="utf-8")
+        manifest["tasks"][0]["pristine_p2"] = "tasks/t0/pristine_p2"
+        return manifest
+
+    def test_phase2_materializes_from_pristine_p2_when_the_key_is_present(self) -> None:
+        manifest = self._build_p2_manifest()
+        workspace = Path(manifest["tasks"][0]["grant"]["write_roots"][0])
+
+        snapshots: list[str] = []
+
+        def identity_responder() -> tuple[int, Any]:
+            snapshots.append((workspace / "x.txt").read_text(encoding="utf-8"))
+            return 200, {"models": [{"digest": "d1"}]}
+
+        script = Script()
+        script.add("GET", "/status", identity_responder)
+        _add_ok_task(script, "a1", "tk1")
+        script.add("GET", "/status", identity_responder)
+        _add_ok_task(script, "a2", "tk2")
+
+        server = ScriptedServer(script)
+        self.addCleanup(server.close)
+
+        run_arm(
+            manifest,
+            server.base_url,
+            "r",
+            "d1",
+            self.tmp_path / "ledger.jsonl",
+            poll_interval_s=0.0,
+            task_deadline_s=5.0,
+        )
+
+        self.assertEqual(len(snapshots), 2)
+        # Phase 1 sees the pristine (defective) bytes; phase 2 sees the
+        # moved-on bytes -- observed at each phase's identity request, the
+        # same at-the-instant mechanism the reset-ordering tests use.
+        self.assertEqual(snapshots[0], "pristine-bytes\n")
+        self.assertEqual(snapshots[1], "moved-on-bytes\n")

@@ -276,19 +276,30 @@ def _suspend(base_url: str, agent_id: str) -> bool:
     return status == 204
 
 
-def _reset_workspace(workspace_dir: Path) -> None:
-    """Restores `workspace_dir` to its sibling `pristine/` snapshot
-    (corpus.py's own on-disk shape: `tasks/<name>/{workspace,pristine}/`)
-    via a full wipe-and-recopy -- byte-identical to pristine by
+def _reset_workspace(workspace_dir: Path, source_name: str = "pristine") -> None:
+    """Restores `workspace_dir` to its sibling `source_name` snapshot
+    (corpus.py's own on-disk shape: `tasks/<name>/{workspace,pristine}/`;
+    a premise-gone corpus adds a `pristine_p2/` sibling for phase 2)
+    via a full wipe-and-recopy -- byte-identical to the source by
     construction. `_purge_pycache` runs afterward as explicit,
     independently-named belt-and-suspenders coverage of the pyc rule (see
     this module's docstring)."""
     workspace_dir = Path(workspace_dir)
-    pristine_dir = workspace_dir.parent / "pristine"
+    source_dir = workspace_dir.parent / source_name
     if workspace_dir.exists():
         shutil.rmtree(workspace_dir)
-    shutil.copytree(pristine_dir, workspace_dir)
+    shutil.copytree(source_dir, workspace_dir)
     _purge_pycache(workspace_dir)
+
+
+def _phase2_source_name(task_entry: dict[str, Any]) -> str:
+    """Which sibling snapshot phase 2 materializes from: `pristine_p2`
+    when the manifest entry declares one (premise-gone-battery plan Task
+    4 -- the on-disk shape always has it as the workspace's sibling, the
+    same convention `pristine/` itself follows), else `pristine` -- a
+    manifest without the key behaves byte-identically to before this
+    parameter existed."""
+    return "pristine_p2" if "pristine_p2" in task_entry else "pristine"
 
 
 def _purge_pycache(directory: Path) -> None:
@@ -415,7 +426,9 @@ def run_arm(
             _process_task(base_url, arm_name, 1, task_entry, poll_interval_s, task_deadline_s, ledger)
 
         for task_entry in tasks:
-            _reset_workspace(Path(task_entry["grant"]["write_roots"][0]))
+            _reset_workspace(
+                Path(task_entry["grant"]["write_roots"][0]), _phase2_source_name(task_entry)
+            )
 
         _assert_identity(base_url, arm_name, 2, expected_digest, ledger)
         for task_entry in tasks:
