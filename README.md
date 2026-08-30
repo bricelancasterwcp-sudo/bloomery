@@ -522,3 +522,27 @@ Sibling repos whose measurements this project is built on:
 [assay](https://github.com/bricelancasterwcp-sudo/assay) (capability profiles),
 [robigo](https://github.com/bricelancasterwcp-sudo/robigo) (the VRAM-budget
 coding agent and its 1.06% null result).
+
+## License
+
+bloomery is **dual-licensed**.
+
+* **Code** (`crates/`, `tools/`) — [GNU AGPL v3.0](LICENSE)
+  (`AGPL-3.0-only`), free for any purpose including commercial use, on the
+  AGPL's terms. bloomery is a network service, so **section 13 applies**: if
+  you modify it and let users reach it over a network, those users must be
+  offered your modified source.
+* **Documents** (`docs/`) — [CC BY 4.0](docs/LICENSE). The specs,
+  pre-registrations, evidence and findings are meant to be quoted, cited and
+  argued with. Attribution is the only condition.
+* **A commercial license** is available for embedding bloomery in a closed
+  product, running a modified instance as a service without section 13, or
+  when AGPL is barred by policy — and it is the only way to get warranty,
+  indemnity or a support commitment. The AGPL grant carries none of those.
+
+Read [LICENSING.md](LICENSING.md) for what each option requires and how to
+enquire; [CLA.md](CLA.md) if you want to contribute. Every dependency is
+permissive (MIT / Apache-2.0), llama.cpp included — the copyleft here is a
+choice, not something inherited.
+
+Copyright © 2026 Brice Lancaster.

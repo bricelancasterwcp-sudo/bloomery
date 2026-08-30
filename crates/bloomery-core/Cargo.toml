@@ -2,6 +2,9 @@
 name = "bloomery-core"
 version = "0.1.0"
 edition = "2021"
+# Dual-licensed: AGPL-3.0-only, or a commercial license (see LICENSING.md).
+license = "AGPL-3.0-only"
+publish = false
 
 [dependencies]
 serde = { workspace = true }
