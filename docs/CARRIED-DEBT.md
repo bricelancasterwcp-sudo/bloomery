@@ -76,6 +76,27 @@ struck somewhere it was never written. Turn 4's section is added below with
 its settled rulings, its deferred minors, and its process lessons. Nothing
 else in this file is touched.
 
+**Amended 2026-08-31** (`agent-delete-endpoint`, the first carried-debt
+slice): this file had gone stale at its own tail. Four items in the
+*OpenAI tools adapter — live acceptance* section were written at 09:15 on
+2026-08-31 and were overtaken by commits landed later the same day, so the
+file's newest section was also its least accurate — the failure mode a
+durable debt list exists to prevent. Items **1** (retry misclassified as a
+history rewrite) and **4** (no parse-rate statistic) are struck through in
+place with what closed them; item **2** (the one-context tier) gains a note
+on what changed around it without closing it; item **3** (no
+`DELETE /agents/{id}`) is struck on arrival, delivered by this slice. Each
+strike was verified against the code and the committed tests, not inferred
+from a commit subject.
+
+Two further corrections in the same pass. The withdrawn streaming non-goal
+and the buffered SSE that followed it are recorded in that section, since
+they are the other half of the same day's arc and appear nowhere else in
+this file. And the *Smaller items* file-size entry — already amended once on
+2026-08-19, from "only file over the ceiling" to eight — is amended a second
+time in the same accumulating style: it is now **20**. Nothing is deleted;
+one item is added, recorded below as the endpoint's own carry.
+
 **Amended 2026-09-01** (pager-lock spike, read-only): the `/v1` section's
 "pager lock is held across `infer`" item gains the findings of a spike run
 *before* committing to the slice it names, because the spike narrowed the
@@ -1493,6 +1514,17 @@ requested context window; still unaddressed, unchanged by this turn.
   over the ceiling. The original text stands as recorded; the swap-candidate
   section's *Recorded, not fixed* carries the full count as of 2026-08-19.
   The remedy is unchanged and now project-wide, not one file's chore.
+  **Amended 2026-08-31 (`agent-delete-endpoint`):** still open, and now
+  **20** files over the ceiling — 13 test, 7 source — measured on the branch.
+  `pager_test.rs` is no longer the worst of them and has not been for some
+  time: `api_native_test.rs` is 2505 lines, `drift_test.rs` 1983,
+  `codec_probe_test.rs` 1634, `task/registry.rs` 1395 (the largest *source*
+  file), `tools/memory_battery/tests/test_recompute.py` 1386. The count has
+  gone 1 → 8 → 20 across three amendments without the remedy changing, which
+  is the actual finding: recording a chore is not the same as scheduling it.
+  This slice put its own tests in a new file (`api_native_agent_delete_test.rs`)
+  rather than appending to `api_native_test.rs` for exactly that reason —
+  the smallest thing that keeps the number from going to 21.
 - `/v1` 429/503/422 extension rows lack dedicated tests.
 - `probe_each`: an `attach_profile` failure aborts remaining probes and
   is reported as a journal failure (unreachable today).
@@ -1975,7 +2007,7 @@ to the real client, which displayed bloomery's byte arithmetic unaltered.
 
 **Carried, each with its own reason for not being fixed here:**
 
-1. **A client retry is misclassified as a history rewrite.** hermes sent a
+1. ~~**A client retry is misclassified as a history rewrite.** hermes sent a
    byte-identical request twice (both hashing `493b2c9dbc94ceff`). After
    request 1, `record_generation` had appended the assistant turn, so the
    retry's `[system, user]` was *shorter* than the tracked
@@ -1987,7 +2019,18 @@ to the real client, which displayed bloomery's byte arithmetic unaltered.
    because fakes echo. The plausible treatment (recognise a prefix differing
    only by the assistant turn we appended, and re-serve it) needs its own spec
    amendment, its own tests, and a decision about whether a retry should
-   replay the previous answer — so it is a slice, not a patch.
+   replay the previous answer — so it is a slice, not a patch.~~
+   **DELIVERED 2026-08-31**, and it did take the slice this item predicted:
+   the spec amendment landed first (`ebbe73c`, "the retry state, from the live
+   acceptance run"), then the classification (`5ff73c3`, a byte-identical
+   retry is classified as a retry rather than a rewrite), then the correction
+   the first fix's own reviews demanded (`7a08546`: a retry must match on
+   `tools` too, and a reset must suspend before it creates). The decision this
+   item said was needed — whether a retry replays the previous answer — was
+   taken in the spec amendment rather than left implicit in code. Three of the
+   four defects the arc closed were **silent**: the task completed correctly
+   on every run, so nothing looked wrong while the adapter's whole economic
+   justification produced nothing (`0213362`).
 
 2. **The tier fits exactly one context, and it is smaller than hermes needs.**
    The pager's static boot budget is 14,064,746,496 B; after 1 GiB overhead
@@ -1998,17 +2041,49 @@ to the real client, which displayed bloomery's byte arithmetic unaltered.
    fits. This is an honest tier limit, not a defect, but it means finding 1
    fires hard: every reset needs the previous agent gone first.
 
-3. **Agent accumulation is now demonstrated rather than theoretical.** Each
+   **Still open, with what moved around it (2026-08-31).** The ceiling is
+   unchanged — it is a property of the tier, and no code in this repo can
+   raise it. What changed is the consequence named in the last sentence:
+   `7a08546` makes a reset suspend the previous agent *before* creating the
+   next, so a reset no longer needs two contexts to be placeable at once.
+   The tier still fits exactly one context; a reset no longer asks it for two.
+
+3. ~~**Agent accumulation is now demonstrated rather than theoretical.** Each
    failed attempt left an agent behind, reaching `a7`; they were cleared by
    hand with `POST /agents/{id}/suspend`. bloomery still has no
    `DELETE /agents/{id}` — recorded previously against the adapter's design,
-   now with a live reproduction.
+   now with a live reproduction.~~
+   **DELIVERED 2026-08-31** (`agent-delete-endpoint`, this file's first
+   carried-debt slice). `DELETE /agents/{id}` is one arm in
+   `api_native::dispatch` over the `Pager::remove_agent` that already existed
+   for `/v1`'s ephemeral cleanup: 204 when the agent was there (resident,
+   suspended or fresh alike), 404 `unknown_agent` when it was not. The
+   workaround this item records is exactly what the endpoint replaces —
+   `suspend` *parks* an agent, keeping its id, its table entry and its KV
+   image, so clearing seven leaked agents with it cleared nothing. That
+   substitution is the sharpest mutant the new tests kill: replacing
+   `remove_agent` with `suspend` in the handler still answers 204 and is
+   caught by three independent tests, not by the status code.
 
-4. **No parse-rate statistic is claimed.** The pre-registered question ("a
+   Pinned by `api_native_agent_delete_test.rs` (8 tests, TDD'd; the RED run
+   answered the router's `not_found` for all eight). Four mutants killed, each
+   by exactly the test written for it: an idempotent 204 on an unknown id, the
+   `suspend`-instead-of-remove substitution above, an over-broad route arm
+   (`["agents", id, ..]`, which would have swallowed the POST sub-resources),
+   and a reworded journal reason. The pager-layer semantics were already
+   pinned by `pager_remove_agent_test.rs` and are deliberately not re-pinned.
+
+4. ~~**No parse-rate statistic is claimed.** The pre-registered question ("a
    poor parse rate is a finding, not a failure") is **unanswered**, not
    answered favourably: finding 1 ended the session before a multi-turn
    trajectory existed. Every tool call observed was well-formed, but the
-   sample is far too small to be a rate.
+   sample is far too small to be a rate.~~
+   **ANSWERED MODESTLY 2026-08-31** and recorded as such in `0213362`'s
+   addendum to the acceptance doc — the multi-turn trajectory finding 1 had
+   prevented became reachable once finding 1 closed. The addendum answers the
+   pre-registered question *and says how weakly*: it is a small-sample
+   observation, not a rate. The item is struck because the question is no
+   longer unaddressed, not because a statistic now exists.
 
 **What earned its keep.** The structured per-request logging added as
 Important 4 of the final whole-branch review — added precisely *because*
@@ -2019,3 +2094,71 @@ session/agent/reset line per request, the symptom was an opaque 409.
 including through the `[o]penai` bracket trick, because the literal pattern
 also appeared elsewhere on the same command line. Kill by PID from `ps`
 output instead.
+
+**Recorded 2026-08-31, the streaming non-goal (delivered, and it should
+never have been a non-goal).** The adapter's spec carried "no streaming" as
+a deliberate non-goal until `b7bd4f7` withdrew it and said why the reasoning
+was wrong: the evidence for it came from **failure-only artifacts** — the
+captures that motivated it were of requests that had already failed, so they
+showed no streaming because there was nothing to stream, not because the
+client did not ask for it. Buffered SSE shipped in `09a2279`. Recorded here
+because a non-goal argued from a biased sample is a measurement error, and
+this file is where those are kept; it appears in no other list.
+
+Its own carry is already in *Smaller items* above: the buffered
+implementation emits one final chunk with `finish_reason` and usage merged,
+rather than OpenAI's two-chunk trailer.
+
+## `DELETE /agents/{id}` (2026-08-31, branch `agent-delete-endpoint`)
+
+The first slice taken purely to pay this file down. Delivered: the endpoint
+struck through as item 3 of the section above, plus this file's own
+amendment for the four items its tail had gone stale on.
+
+**Carried, deliberately, and not fixed here:**
+
+- **`DELETE` takes the pager lock, so it queues behind a stuck `infer`.**
+  This is the same blast radius the `/v1` section above records against
+  `api_v1.rs`, reached through a new door: an operator whose daemon is wedged
+  on an inference cannot delete an agent to relieve it, for the same reason
+  they cannot read `/status` to diagnose it. The endpoint is now the **third**
+  named beneficiary of that slice, after `/status` and `/v1` — which is an
+  argument for doing it, not for pre-solving it badly inside a route addition.
+  No new defect: `DELETE` is as lock-bound as `suspend` and `resume` always
+  were.
+- **No bulk or conditional removal.** No `DELETE /agents` sweep, no
+  "delete every agent older than N", no filtering. The live reproduction that
+  motivated this endpoint wanted seven specific ids gone; a sweep is a
+  different feature with a different blast radius, and nothing has asked for
+  it yet.
+- **No caller-supplied reason.** `http.rs`'s request parser drops the query
+  string before `dispatch` sees it, so `?reason=` cannot reach the handler
+  without a parser change. The journal records a fixed string naming the
+  surface, which is what distinguishes an operator deletion from a `/v1`
+  ephemeral cleanup or an `unregister_model` cascade — all three land as the
+  same `AgentRemoved` event.
+
+**Found while landing it, unrelated — fixed on `master`, not in this slice.**
+`master` was red. `committed_g2_journal_still_replays`
+(`bloomery-core/tests/journal_test.rs`) sweeps every `*.jsonl` directly under
+`docs/superpowers/evidence/` and replays each as a bloomery journal — a
+deliberate design, so a future committed journal is covered without anyone
+remembering to add a case. `0213362` committed
+`2026-08-31-openai-adapter-acceptance-hermes-capture.jsonl` into that
+directory, which is a **hermes wire capture** (`{"tag": "response", "body":
+{...}}`), not a journal, and it does not replay.
+
+**FIXED 2026-08-31 on `master` (`2558ead`), as a filing decision rather than a
+test change.** The capture moved to `docs/superpowers/evidence/captures/`,
+which the non-recursive sweep never descends into; the acceptance doc's
+artifact list carries the new path and the reason. Weakening the filter — skip
+`*-capture.jsonl`, or match only `*-journal.jsonl`/`*-tasks.jsonl` — was the
+alternative and is worse: it converts a strong invariant (anything named
+`*.jsonl` directly under `evidence/` must replay) into an opt-out a future
+misfiling can take by accident, which is the failure the test exists to catch.
+The convention is now recorded in the sweep's own comment, where the next
+person will look. The test was never at fault; it caught a misfiled artifact
+on the day it was misfiled.
+
+Kept out of this slice's commits deliberately, so an unrelated repo-wide fix
+is not buried inside an endpoint's PR.
