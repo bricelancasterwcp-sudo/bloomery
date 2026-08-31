@@ -1894,3 +1894,64 @@ other.
   tool-calling client is specified in
   `docs/superpowers/specs/2026-08-31-openai-tools-adapter-design.md` and
   deliberately lives outside the daemon.
+
+## OpenAI tools adapter — live acceptance (2026-08-31, Task 6)
+
+The adapter's human-gated live run, the first time any of its code touched a
+real model. Verdict **PARTIAL**, recorded in
+`docs/superpowers/evidence/2026-08-31-openai-adapter-acceptance.md`.
+
+**Delivered and measured.** A correct tool call end to end on the first
+attempt; the untrained `qwen36-reap48-ours` selected sensibly from both a
+25-tool and a 132-tool schema. The prefill-once property — the adapter's
+whole economic justification — is confirmed against a live daemon:
+**40,003 → 21 `prompt_tokens` across two turns at the real 132-tool hermes
+scale, ≈39,982 tokens not re-prefilled.** The honest-refusal chain is proven
+to the real client, which displayed bloomery's byte arithmetic unaltered.
+
+**Carried, each with its own reason for not being fixed here:**
+
+1. **A client retry is misclassified as a history rewrite.** hermes sent a
+   byte-identical request twice (both hashing `493b2c9dbc94ceff`). After
+   request 1, `record_generation` had appended the assistant turn, so the
+   retry's `[system, user]` was *shorter* than the tracked
+   `[system, user, assistant]`; `_is_extension` correctly concluded "not an
+   extension" and reset. The classification is right in isolation — Task 3's
+   reviews were correct to demand a reset on a shorter list — but an ordinary
+   retry is indistinguishable from a truncation once the adapter has appended
+   its own turn. **Nobody considered the retry case**, and no fake produced it
+   because fakes echo. The plausible treatment (recognise a prefix differing
+   only by the assistant turn we appended, and re-serve it) needs its own spec
+   amendment, its own tests, and a decision about whether a retry should
+   replay the previous answer — so it is a slice, not a patch.
+
+2. **The tier fits exactly one context, and it is smaller than hermes needs.**
+   The pager's static boot budget is 14,064,746,496 B; after 1 GiB overhead
+   and 10.95 GiB of resident weights, **1.15 GiB remains for contexts** — a
+   ceiling of ≈34,000 tokens, one at a time. A 65,536-token window cannot be
+   placed at all from a cold start, and hermes's 132-tool preamble (40,003
+   tokens, measured) exceeds the ceiling. Its 25-tool default set (≈14,077)
+   fits. This is an honest tier limit, not a defect, but it means finding 1
+   fires hard: every reset needs the previous agent gone first.
+
+3. **Agent accumulation is now demonstrated rather than theoretical.** Each
+   failed attempt left an agent behind, reaching `a7`; they were cleared by
+   hand with `POST /agents/{id}/suspend`. bloomery still has no
+   `DELETE /agents/{id}` — recorded previously against the adapter's design,
+   now with a live reproduction.
+
+4. **No parse-rate statistic is claimed.** The pre-registered question ("a
+   poor parse rate is a finding, not a failure") is **unanswered**, not
+   answered favourably: finding 1 ended the session before a multi-turn
+   trajectory existed. Every tool call observed was well-formed, but the
+   sample is far too small to be a rate.
+
+**What earned its keep.** The structured per-request logging added as
+Important 4 of the final whole-branch review — added precisely *because*
+Task 6 had never run — is what made finding 1 visible at all. Without the
+session/agent/reset line per request, the symptom was an opaque 409.
+
+**Process note.** The `pkill` self-match hazard bit twice during this run,
+including through the `[o]penai` bracket trick, because the literal pattern
+also appeared elsewhere on the same command line. Kill by PID from `ps`
+output instead.
