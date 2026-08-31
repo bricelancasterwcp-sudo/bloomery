@@ -398,11 +398,14 @@ class RetryStateTest(unittest.TestCase):
     as the client last actually sent it, BEFORE this session appended the
     assistant turn it generated for that turn -- separately from the KV
     view (`_sent_messages`, which DOES include that appended turn).
-    `is_retry` reports whether an incoming list equals the client view,
-    reusing `_is_extension`'s own per-message comparison (by calling it on
-    two equal-length lists, which degenerates the zip-and-compare loop
-    into strict equality) rather than a second, looser comparison that
-    could disagree with it.
+    `is_retry` reports whether an incoming list equals the client view AND
+    the incoming tool set matches what is resident (Fix round 1, Finding
+    1: reusing `_sent_tools` -- the same store `next_delta`'s own
+    tools-divergence check already uses -- rather than a second notion of
+    tool identity), reusing `_is_extension`'s own per-message comparison
+    for the messages half (by calling it on two equal-length lists, which
+    degenerates the zip-and-compare loop into strict equality) rather
+    than a second, looser comparison that could disagree with it.
 
     This is exactly the gap the live acceptance run hit: after a
     successful turn, `record_generation` appends the assistant turn to
@@ -415,7 +418,7 @@ class RetryStateTest(unittest.TestCase):
         self.s = Session("retry1", ChatTemplate.load(TPL))
 
     def test_is_retry_is_false_before_any_turn_has_ever_completed(self):
-        self.assertFalse(self.s.is_retry([U1]))
+        self.assertFalse(self.s.is_retry([U1], TOOLS))
 
     def test_is_retry_is_true_for_the_exact_request_the_client_sent(self):
         # After turn 1, record_generation appends the assistant turn to
@@ -423,18 +426,18 @@ class RetryStateTest(unittest.TestCase):
         # turn. The client view is still just [U1].
         self.s.next_delta([U1], TOOLS)
         self.s.record_generation(GEN)
-        self.assertTrue(self.s.is_retry([U1]))
+        self.assertTrue(self.s.is_retry([U1], TOOLS))
 
     def test_is_retry_is_false_for_a_genuine_follow_up(self):
         self.s.next_delta([U1], TOOLS)
         self.s.record_generation(GEN)
         assistant = {"role": "assistant", "content": GEN}
-        self.assertFalse(self.s.is_retry([U1, assistant, U2]))
+        self.assertFalse(self.s.is_retry([U1, assistant, U2], TOOLS))
 
     def test_is_retry_is_false_for_a_genuine_rewrite(self):
         self.s.next_delta([U1], TOOLS)
         self.s.record_generation(GEN)
-        self.assertFalse(self.s.is_retry([U2]))  # compressed history, not a retry
+        self.assertFalse(self.s.is_retry([U2], TOOLS))  # compressed history, not a retry
 
     def test_is_retry_recognises_a_retry_after_a_multi_turn_conversation(self):
         # The bug this fixes was not turn-1-specific; neither is the fix.
@@ -445,8 +448,8 @@ class RetryStateTest(unittest.TestCase):
         self.s.next_delta(second_request, TOOLS)
         self.s.record_generation(GEN)
         # Retry of turn 2's request, not turn 1's.
-        self.assertTrue(self.s.is_retry(second_request))
-        self.assertFalse(self.s.is_retry([U1]))
+        self.assertTrue(self.s.is_retry(second_request, TOOLS))
+        self.assertFalse(self.s.is_retry([U1], TOOLS))
 
     def test_is_retry_reuses_is_extensions_tool_call_identity_so_they_cannot_disagree(self):
         # A regenerated tool_call id is representational noise the template
@@ -465,7 +468,7 @@ class RetryStateTest(unittest.TestCase):
                     "function": {"name": "terminal", "arguments": {"command": "ls"}}}]
         retried_with_regenerated_id = [U1, {"role": "assistant", "content": "",
                                             "tool_calls": call_v2}, U2]
-        self.assertTrue(s.is_retry(retried_with_regenerated_id))
+        self.assertTrue(s.is_retry(retried_with_regenerated_id, TOOLS))
 
     def test_client_view_is_restored_alongside_the_kv_view_on_a_failed_send(self):
         # Critical 2's mechanism must cover the client view too: if the
@@ -479,8 +482,28 @@ class RetryStateTest(unittest.TestCase):
         snap = self.s.snapshot()
         self.s.next_delta([U1, assistant, U2], TOOLS)  # not yet delivered downstream
         self.s.restore(snap)
-        self.assertTrue(self.s.is_retry([U1]))
-        self.assertFalse(self.s.is_retry([U1, assistant, U2]))
+        self.assertTrue(self.s.is_retry([U1], TOOLS))
+        self.assertFalse(self.s.is_retry([U1, assistant, U2], TOOLS))
+
+    def test_is_retry_is_false_when_the_tool_set_changed(self):
+        # Fix round 1, Finding 1 (live-verified): a changed tool set means
+        # the resident <tools> block is stale -- the divergence rule must
+        # outrank the retry rule, not the other way round. Reuses
+        # _sent_tools (the same store next_delta's tools_diverged check
+        # already uses), not a second notion of tool identity.
+        self.s.next_delta([U1], TOOLS)
+        self.s.record_generation(GEN)
+        other_tools = [{"type": "function", "function": {
+            "name": "other_tool", "parameters": {"type": "object", "properties": {}}}}]
+        self.assertFalse(self.s.is_retry([U1], other_tools))
+
+    def test_is_retry_is_true_when_the_tool_set_is_unchanged(self):
+        # The under-comparison half of the same fix: an equal (by content,
+        # not identity) tools value must not spuriously defeat a retry.
+        self.s.next_delta([U1], TOOLS)
+        self.s.record_generation(GEN)
+        same_tools_new_list = list(TOOLS)
+        self.assertTrue(self.s.is_retry([U1], same_tools_new_list))
 
 
 if __name__ == "__main__":
