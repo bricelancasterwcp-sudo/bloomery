@@ -263,6 +263,51 @@ corrupt the model's context.
 Agents accumulate across a long-lived adapter process. Recorded in
 CARRIED-DEBT on arrival; a delete endpoint is a daemon slice, not this one.
 
+> **Amended 2026-08-31 after the live acceptance run (Brice's ruling).**
+> The two-state classification above — *append* or *rewrite* — is
+> incomplete, and the gap stopped a real hermes session dead. Evidence:
+> `docs/superpowers/evidence/2026-08-31-openai-adapter-acceptance.md`.
+>
+> **The missing state is a retry.** hermes sent a byte-identical request
+> twice (both hashing `493b2c9dbc94ceff`). After the first, this adapter's
+> own `record_generation` had appended the assistant turn, so the tracked
+> history was `[system, user, assistant]` while the retry carried
+> `[system, user]` — *shorter*. `_is_extension` correctly reported "not an
+> extension", the turn was classified a rewrite, and the reset created a
+> fresh agent that the tier could not place. **The classification was right;
+> the vocabulary was too small.** An ordinary client retry is
+> indistinguishable from a truncation once the adapter has appended a turn
+> the client never sent.
+>
+> **The cause is that one list was being asked to mean two things.** The
+> adapter must track them separately:
+>
+> - the **KV view** — every turn whose bytes reached the cache, including
+>   the assistant turn the adapter appended after generating it;
+> - the **client view** — the message list as the client last actually sent
+>   it, before any adapter-side append.
+>
+> Classification then falls out with no heuristics, and in this order:
+> 1. incoming **equals the client view** → **retry**;
+> 2. incoming **extends the KV view** → **append** (unchanged behaviour);
+> 3. otherwise → **rewrite**, reset as before.
+>
+> **A retry replays the previous response.** This is not a shortcut. The
+> substrate samples with `LlamaSampler::greedy()`, so re-inferring a
+> byte-identical prompt yields byte-identical output: replay is
+> *observationally equivalent* to re-inference, costs no tokens, and leaves
+> the KV untouched. The equivalence holds **within one boot and one
+> context**, which is exactly a session's scope; it is explicitly NOT
+> claimed across launches, because turn-5's evidence recorded Vulkan greedy
+> producing differing prose across boots.
+>
+> **Replay is bounded at one.** A client may be retrying because it could
+> not use the previous answer, and replaying forever would loop. After a
+> single replay, a further identical request falls through to the ordinary
+> path — where rule 3 classifies it a rewrite and it is re-inferred against
+> a fresh agent. Every replay is logged, so the behaviour is visible rather
+> than silent.
+
 ## 7. Error mapping
 
 | `PagerError` | HTTP | OpenAI shape |
