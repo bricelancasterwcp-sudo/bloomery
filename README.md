@@ -110,7 +110,7 @@ semantic store, appliance boot) is not built. See
   Design: `docs/superpowers/specs/2026-08-26-memory-organ-design.md`; live
   acceptance: `docs/superpowers/evidence/2026-08-26-memory-organ-acceptance.md`.
 * **Two HTTP surfaces.** A native API (`/agents`, `/agents/{id}/infer`,
-  `/suspend`, `/resume`, `/models/{m}/unload`, `/models/{m}/bless`,
+  `/suspend`, `/resume`, `DELETE /agents/{id}`, `/models/{m}/unload`, `/models/{m}/bless`,
   `/models/{m}/unblock`, `POST`/`GET /models/{m}/swap-candidate`,
   `GET`/`DELETE /memory`, `/status`) and an OpenAI-compatible shim
   (`GET /v1/models`, `POST /v1/chat/completions`).
@@ -449,6 +449,13 @@ target/release/bloomery-daemon --config bloomery.toml
 curl -s localhost:8181/status
 curl -s localhost:8181/agents -d '{"model":"qwen2.5-coder:7b-instruct-q8_0","window_cap":2048}'
 curl -s localhost:8181/agents/a1/infer -d '{"prompt":"hello","max_tokens":32}'
+
+# Park an agent (keeps the id, saves a KV image for a later /resume):
+curl -s -X POST localhost:8181/agents/a1/suspend
+# Remove it outright (destroys the context, drops the image, forgets the id).
+# 204 when it was there, 404 {"error":"unknown_agent"} when it was not — a
+# second DELETE does not pretend to have removed anything.
+curl -s -X DELETE localhost:8181/agents/a1
 ```
 
 Reproducing the gate — the invocations verbatim, including the pressure setup

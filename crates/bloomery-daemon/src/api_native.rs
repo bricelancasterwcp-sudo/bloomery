@@ -90,6 +90,7 @@ pub(crate) fn dispatch<S: Substrate + Send + 'static>(
         ("POST", ["agents", id, "infer"]) => infer(pager, id, body),
         ("POST", ["agents", id, "suspend"]) => suspend(pager, id),
         ("POST", ["agents", id, "resume"]) => resume(pager, id),
+        ("DELETE", ["agents", id]) => delete_agent(pager, id),
         ("POST", ["models", name, "unload"]) => unload(pager, name),
         ("POST", ["models", name, "bless"]) => bless(pager, name),
         ("POST", ["models", name, "unblock"]) => unblock(pager, name),
@@ -217,6 +218,58 @@ fn resume<S: Substrate>(pager: &Mutex<Pager<S>>, id: &str) -> ApiResult {
         Err(poisoned) => return poisoned,
     };
     match p.resume(id) {
+        Ok(()) => (204, None),
+        Err(e) => map_error(&e),
+    }
+}
+
+/// The reason journaled for a removal this endpoint performed.
+///
+/// [`Pager::remove_agent`] writes its `reason` verbatim into the
+/// `AgentRemoved` event, and three quite different things reach that same
+/// event: a `/v1` ephemeral cleanup, an `unregister_model` cascade, and — now
+/// — an operator asking directly. The string is the only thing that tells
+/// them apart in the journal, so it names the surface rather than restating
+/// what the event already says.
+const OPERATOR_DELETE_REASON: &str = "operator requested removal via DELETE /agents/{id}";
+
+/// `DELETE /agents/{id}` — remove an agent outright: destroy its resident
+/// context, drop any parked KV image, forget the id.
+///
+/// | case | status |
+/// |------|--------|
+/// | removed (resident, suspended or fresh) | 204 |
+/// | no such agent | 404 `unknown_agent` |
+///
+/// **This is not [`suspend`].** A suspended agent keeps its id, its table
+/// entry and its image, and is meant to come back; a deleted one is gone. The
+/// distinction had a cost before this route existed: the OpenAI-tools
+/// adapter's live acceptance run (2026-08-31) leaked seven agents and cleared
+/// them with `suspend`, which was the closest thing available and left every
+/// entry standing.
+///
+/// **A second DELETE is a 404, not an idempotent 204.** Answering 204 for an
+/// id that was never there would assert a removal that did not happen — a
+/// success envelope over nothing, the same class this daemon's `/v1` shim
+/// stopped doing on the day this route was added. Repeating the call still
+/// leaves state identical, which is all DELETE's idempotence requires; it
+/// just does not claim to have removed something twice.
+///
+/// **No caller-supplied reason.** [`crate::http`]'s request parser drops the
+/// query string before dispatch ever sees it, so a `?reason=` would need a
+/// parser change to reach here — deliberately out of scope for this route.
+/// [`OPERATOR_DELETE_REASON`] is what the journal records.
+///
+/// Like every other route on this surface, this one takes the pager lock, so
+/// it queues behind a running `infer` — an operator cannot delete their way
+/// out of a wedged daemon. That blast radius is recorded in `CARRIED-DEBT.md`
+/// and belongs to its own slice, not to this route.
+fn delete_agent<S: Substrate>(pager: &Mutex<Pager<S>>, id: &str) -> ApiResult {
+    let mut p = match lock_pager(pager) {
+        Ok(p) => p,
+        Err(poisoned) => return poisoned,
+    };
+    match p.remove_agent(id, OPERATOR_DELETE_REASON) {
         Ok(()) => (204, None),
         Err(e) => map_error(&e),
     }
