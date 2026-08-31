@@ -1,0 +1,10 @@
+{
+  "base_url": "http://127.0.0.1:8080",
+  "model": "qwen36-reap48-ours",
+  "template": "adapters/openai-tools/templates/qwen36-reap48-ours.jinja",
+  "max_tokens": 1024,
+  "window_cap": null,
+  "keep_reasoning_in_history": true,
+  "host": "127.0.0.1",
+  "port": 8000
+}
