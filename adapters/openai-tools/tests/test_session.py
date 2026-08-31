@@ -272,12 +272,25 @@ class SessionTest(unittest.TestCase):
         self.assertFalse(reset)
         self.assertNotIn("<tools>", delta)
 
-    def test_tool_call_arguments_with_a_different_key_order_still_resets(self):
-        # Guard against over-normalising: the whitespace fix above must NOT
-        # loosen this too. The SAME pairs in a DIFFERENT key order render
-        # DIFFERENT bytes (the template renders `arguments|items` in dict
-        # order), so this must still reset. Order-sensitivity is
-        # load-bearing, not incidental.
+    def test_tool_call_arguments_with_a_different_key_order_is_still_an_append(self):
+        # REVERSED 2026-08-31 (was
+        # test_tool_call_arguments_with_a_different_key_order_still_resets):
+        # live-captured against a real hermes trajectory, the adapter emits
+        # tool_calls[].function.arguments in the order the model produced
+        # the parameters; the client echoes the SAME call back with its
+        # keys reordered. Order-sensitivity here was justified by "the
+        # template renders arguments|items in dict order, so reordering
+        # changes the rendered bytes" -- true, but irrelevant: the append
+        # path never re-renders history at all (the KV already holds the
+        # bytes this adapter itself produced; only the NEW turns are sent),
+        # and the reset path re-renders everything from the client's
+        # CURRENT messages self-consistently regardless of order. So key
+        # order in a client's echo can never actually change what the model
+        # sees, and comparing it order-sensitively bought no correctness
+        # while forcing a reset (and a full <tools> re-render, ~6.2k
+        # tokens) on every single turn of a real client trajectory. This is
+        # an authorised expectation change, not a weakened test: the SAME
+        # key/value pairs in a DIFFERENT key order must now be an append.
         s = Session("arg_order", ChatTemplate.load(TPL))
         s.next_delta([U1], TOOLS)
         call_1 = [{"id": "call_1", "type": "function",
@@ -290,8 +303,30 @@ class SessionTest(unittest.TestCase):
                                  "arguments": '{"path": "/tmp/x.txt", "content": "world"}'}}]
         assistant_2 = {"role": "assistant", "content": "", "tool_calls": call_2}
         delta, reset = s.next_delta([U1, assistant_2, U2], TOOLS)
-        self.assertTrue(reset)
-        self.assertIn("<tools>", delta)
+        self.assertFalse(reset)
+        self.assertNotIn("<tools>", delta)
+
+    def test_a_real_hermes_trajectory_key_reorder_is_an_append_not_a_reset(self):
+        # THE reproduction: captured live against a real hermes
+        # trajectory. The adapter emits arguments in the order the model
+        # produced them; hermes echoes the same call back with the keys
+        # reordered. This must be an APPEND (was_reset False) and must NOT
+        # re-render the <tools> preamble.
+        s = Session("hermes_live", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        emitted = [{"id": "call_1", "type": "function",
+                    "function": {"name": "write_file",
+                                 "arguments": '{"path": "/tmp/x.txt", "content": "hello"}'}}]
+        generated = {"role": "assistant", "content": None, "tool_calls": emitted}
+        s.record_generation(generated)
+        echoed = [{"id": "call_1", "type": "function",
+                   "function": {"name": "write_file",
+                                "arguments": '{"content":"hello","path":"/tmp/x.txt"}'}}]
+        echoed_message = {"role": "assistant", "content": "", "tool_calls": echoed}
+        tool_result = {"role": "tool", "tool_call_id": "call_1", "content": "ok"}
+        delta, reset = s.next_delta([U1, echoed_message, tool_result], TOOLS)
+        self.assertFalse(reset)
+        self.assertNotIn("<tools>", delta)
 
     def test_tool_call_arguments_with_a_different_value_still_resets(self):
         # Second over-normalisation guard: same key, DIFFERENT value, via

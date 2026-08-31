@@ -134,9 +134,10 @@ class Session:
 
     @staticmethod
     def _arguments_identity(arguments):
-        """The key/value sequence one tool call's `arguments` renders as
-        (see `_tool_call_identity`) -- compares the PARSED value, never
-        the raw form `arguments` happens to be in.
+        """The key/value SET one tool call's `arguments` renders as (see
+        `_tool_call_identity`) -- compares the PARSED value, never the raw
+        form `arguments` happens to be in, and never the KEY ORDER it
+        happens to be in either.
 
         Live finding (2026-08-31, measured against hermes): the adapter
         serialises `arguments` via `json.dumps(args)` (toolcall.py's
@@ -151,13 +152,38 @@ class Session:
         method parses both sides before comparing, so only a difference in
         the parsed value -- not its encoding -- can change the identity.
 
+        REVERSED 2026-08-31 (this method previously kept comparison
+        order-SENSITIVE; see git history for that version). That ruling
+        reasoned that the chat template renders `arguments|items` in dict
+        order, so two argument objects with the same pairs in a different
+        order render to different bytes -- true, but it does not follow
+        that this comparison must be order-sensitive, because order-
+        sensitivity only matters if the adapter ever RE-RENDERS a
+        historical assistant turn, and it never does:
+          - on the APPEND path (`next_delta`'s `is_extension` branch),
+            history is never re-rendered at all -- the KV already holds
+            the bytes THIS ADAPTER ITSELF produced, and only the new
+            turns are sent. The key order in the client's ECHO of that
+            turn is therefore irrelevant to what the model already saw.
+          - on the RESET path (`render_initial`), everything is
+            re-rendered from the client's CURRENT messages, so whatever
+            order the client supplies is exactly what gets rendered --
+            self-consistently, regardless of what this comparison
+            decides.
+        So order-sensitivity bought no correctness, while costing a reset
+        (and a full `<tools>` re-render, ~6.2k tokens) on every turn of a
+        real client trajectory: live-captured against hermes, the client
+        echoes `tool_calls[].function.arguments` back with its keys
+        reordered relative to what the adapter emitted, and the previous
+        order-sensitive comparison misclassified every such echo as a
+        rewrite. Comparing the same key/value PAIRS regardless of order
+        fixes this without weakening any other guard below.
+
         Handles the three shapes this codebase sees for `arguments`:
-          - an already-parsed dict: used directly, in its OWN order;
-          - a JSON-encoded string: parsed with `json.loads`, which is
-            whitespace/separator-insensitive and preserves the order keys
-            appear in the source text -- so two encodings of the same
-            object, in the same key order, always produce the same
-            result;
+          - an already-parsed dict: its items, sorted by key;
+          - a JSON-encoded string: parsed with `json.loads`, then its
+            items, sorted by key -- so two encodings of the same object,
+            in ANY key order, always produce the same result;
           - a string that is not valid JSON, or that parses to something
             other than an object: this is a CLIENT error under the OpenAI
             wire format, and `_normalize_tool_call` already refuses it
@@ -170,23 +196,27 @@ class Session:
             never silently treated as equal to a call with no arguments,
             nor to another (even byte-identical) malformed value.
 
-        Deliberately does NOT sort keys or compare a set of pairs: the
-        chat template renders `arguments|items` in dict order, so two
-        argument objects with the same pairs in a DIFFERENT key order
-        render to DIFFERENT bytes and must still compare unequal here.
-        Absent `arguments` (`None` or missing) is not malformed -- it
-        renders as "no parameters," the same as `{}`, so both map to the
-        same empty tuple as before this method existed.
+        Sorted BY KEY ONLY (`key=lambda pair: pair[0]`), never by comparing
+        values -- JSON object keys are always strings (always orderable),
+        but values may be lists or nested objects, which are not orderable
+        with `<` in Python and would raise `TypeError` if the sort ever
+        had to fall back to comparing them. A DIFFERENT value for the same
+        key still changes the resulting tuple (the pair itself differs),
+        and a DIFFERENT key set still changes it (different keys and/or a
+        different length) -- both must still compare unequal here, same
+        as before this reversal. Absent `arguments` (`None` or missing) is
+        not malformed -- it renders as "no parameters," the same as `{}`,
+        so both map to the same empty tuple as before this method existed.
         """
         if isinstance(arguments, dict):
-            return tuple(arguments.items())
+            return tuple(sorted(arguments.items(), key=lambda pair: pair[0]))
         if isinstance(arguments, str):
             try:
                 parsed = json.loads(arguments)
             except (json.JSONDecodeError, ValueError):
                 return (("<unparseable>", object()),)
             if isinstance(parsed, dict):
-                return tuple(parsed.items())
+                return tuple(sorted(parsed.items(), key=lambda pair: pair[0]))
             return (("<unparseable>", object()),)
         return ()
 
@@ -194,10 +224,17 @@ class Session:
     def _tool_call_identity(tool_calls) -> tuple:
         """The subset of a `tool_calls` list the template
         (`templates/qwen36-reap48-ours.jinja`, lines ~105-127) actually
-        renders: each call's function `name` and `arguments`, in order
-        (order-sensitive, since the template iterates `arguments|items` in
-        dict order -- a reordering changes the rendered bytes). Never the
-        call's `id` or `type`: the template never references either.
+        renders: each call's function `name` and `arguments`. The list of
+        calls itself, and the calls' `name`s, are still compared in ORDER
+        (a reordered call list, or a call under a different name, changes
+        the rendered bytes). `arguments` KEY order is deliberately NOT
+        part of the comparison -- see `_arguments_identity`'s 2026-08-31
+        reversal for why order-insensitivity there is still correct here:
+        the append path never re-renders a historical turn (so a client's
+        echoed key order never reaches the model), and the reset path
+        re-renders the client's current messages self-consistently
+        regardless of order. Never the call's `id` or `type`: the template
+        never references either.
 
         Three spellings of "no tool calls" all render nothing and must
         collapse to the same identity: an absent field, an explicit `None`,
