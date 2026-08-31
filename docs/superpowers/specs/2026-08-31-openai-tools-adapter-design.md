@@ -330,6 +330,53 @@ Streaming (the captured hermes requests carry no `stream` key), multimodal
 content parts, `tool_choice` forcing beyond `auto`, retry-on-malformed-output
 loops, and any daemon change.
 
+> **Amended 2026-08-31 — the streaming non-goal is WITHDRAWN. The reasoning
+> above was wrong, and the live run proved it.**
+>
+> "The captured hermes requests carry no `stream` key" was true of the
+> artifacts I inspected and false of the client. Those artifacts are
+> `request_dump_*.json` files, which hermes writes only when a call FAILS —
+> they are error dumps, not a sample of normal traffic, and I generalised
+> from them without noticing. Captured live through a proxy, every hermes
+> chat request carries:
+>
+> ```json
+> {"stream": true, "stream_options": {"include_usage": true}, ...}
+> ```
+>
+> Without SSE the client fails with *"Provider returned an empty stream with
+> no finish_reason (possible upstream error or malformed SSE response)"* and
+> the session never starts. Streaming is therefore a REQUIREMENT for the
+> stated success criterion, not a deferrable nicety.
+>
+> **What to build: buffered SSE, exactly the shape bloomery's own `/v1`
+> already ships** (`api_v1.rs`, "Streaming (D3)"). The adapter holds the
+> whole reply before it emits anything, because inference completes before
+> parsing can classify the turn — so this is buffered, not token-incremental,
+> and that limitation is stated rather than hidden. On `stream: true`:
+>
+> 1. `Content-Type: text/event-stream`.
+> 2. One `chat.completion.chunk` carrying the whole reply in
+>    `choices[0].delta` — `{"role": "assistant", "content": …}` for a text
+>    reply, or `delta.tool_calls` for a tool call. **Streamed tool calls
+>    require an `index` on each entry** alongside `id`, `type` and
+>    `function.{name,arguments}`; omitting `index` is the usual reason a
+>    client silently drops them.
+> 3. A final chunk with the `finish_reason` and an empty delta.
+> 4. When `stream_options.include_usage` is set, a chunk carrying `usage`
+>    with an empty `choices` array.
+> 5. The terminal `data: [DONE]`.
+>
+> A refusal that occurs BEFORE any chunk is emitted stays an ordinary JSON
+> error response with its HTTP status — the honest-refusal path in §7 is
+> unchanged and must not be converted into a 200 that streams an error.
+> Non-streaming requests keep exactly their current behaviour.
+>
+> **Process note, recorded because it generalises:** the non-goal rested on
+> evidence drawn from a failure-only artifact. Error dumps describe how a
+> system fails, never how it normally behaves, and a claim about normal
+> behaviour cannot be sourced from them.
+
 **A tool call that does not parse is returned as `content`. The adapter
 never fabricates a `tool_calls` entry.** Guessing would reproduce inside the
 adapter exactly the silent-failure class the spike just caught in `/v1`,
