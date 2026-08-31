@@ -10,7 +10,9 @@ a Rust workspace crate, so the uncertain half iterates fast and the AGPL
 daemon grows no model-specific heuristics; downstream API = bloomery's
 **native** `/agents/{id}/infer`, not `/v1`, because the adapter must own the
 prompt bytes; a tool call that does not parse is returned as text, never
-fabricated).
+fabricated; and — **amended 2026-08-31 during planning, see §6** —
+conversation state is **incremental append**, not full-render diffing,
+after the template was measured rewriting historical assistant turns).
 **Lineage:** the hermes-consumer spike of 2026-08-30 (same session). Three
 of its findings are load-bearing here and each is cited at the point it
 decides something: hermes always sends `tools` (n=37, observed in captured
@@ -167,6 +169,44 @@ One hermes session maps to one persistent bloomery agent. The adapter
 records the exact rendered prefix that agent's KV holds, and each turn sends
 only the suffix beyond it.
 
+> **Amended 2026-08-31, during planning — the full-render diff below is
+> WITHDRAWN and replaced by incremental append (Brice's ruling: option A).**
+> Measured while writing the implementation plan: this model's chat template
+> **rewrites historical assistant turns**, splitting on `</think>` and
+> rebuilding the turn without the reasoning block
+> (`content.split('</think>')[-1].lstrip('\n')`). So a re-render of the
+> conversation is *not* a byte-prefix extension of what the KV holds.
+> Demonstrated: with a one-tool conversation, `rerender.startswith(resident)`
+> is **False**, diverging at index 1161 — KV holds
+> `…assistant\n<think>\n\nI should call terminal.\n</think>\n\n<tool_call>…`
+> while the re-render holds `…assistant\n<tool_call>…`. Under the original
+> design the divergence check would fire **every turn**, resetting the agent
+> every turn, and the preamble saving that motivates this whole section would
+> never materialise once.
+>
+> **The replacement.** The adapter never re-renders history. It tracks the
+> resident byte string itself: turn 1 is a full template render (system +
+> tools + first user + generation prompt); after generation the raw generated
+> bytes are appended to that record, because bloomery has already fed them
+> into the KV; each later turn sends `<|im_end|>\n` (closing the assistant
+> turn the model left open) + the per-turn rendering of the new user/tool
+> messages + the generation prompt. Divergence detection moves from a byte
+> diff of renders to a **semantic prefix check on hermes's `messages` list** —
+> did it append, or did it edit/compress? — which is both simpler and
+> strictly more robust.
+>
+> **The deviation this accepts, stated plainly:** history retains `<think>`
+> blocks that the template's own convention drops. Its effect on quality is
+> **unmeasured**. It is therefore a config flag (`keep_reasoning_in_history`,
+> default true) so the alternative — full re-render with a fresh agent per
+> turn, correct by construction and with no reuse — stays testable against
+> it rather than merely arguable. The per-turn wrapper must be *derived from
+> the template by differential rendering*, never hand-written ChatML, and
+> pinned by a test that catches template drift.
+>
+> The token-boundary rule immediately below still governs, and matters more
+> under append than it did under diffing.
+
 **The delta must be split at a token-safe boundary.** The prefix lives in KV
 as *tokens*, but the adapter diffs *strings*, and bloomery tokenizes each
 suffix independently (`str_to_token(prompt, AddBos::Never)`). Tokenization
@@ -275,3 +315,14 @@ is correct-looking and destroys the KV benefit).
   rather than answer 200 with empty content.
 - Whether the adapter graduates into a Rust workspace crate. Revisit with
   evidence that it works, never on faith.
+- **A KV snapshot/restore (or truncate-to-position) endpoint on the daemon.**
+  Added by the 2026-08-31 amendment in §6: it is the change that would let
+  the adapter have both the template's exact history convention *and* the
+  preamble saving — snapshot immediately after the invariant preamble,
+  restore it each turn, re-render only the conversation. bloomery already
+  owns the machinery (`save_state` / `load_state` and the KV image store);
+  what is missing is a surface. That is a daemon slice with its own spec and
+  it must not block this adapter.
+- Whether keeping `<think>` in history costs anything. The flag exists so
+  this becomes a measurement rather than an argument; nothing here claims an
+  answer.
