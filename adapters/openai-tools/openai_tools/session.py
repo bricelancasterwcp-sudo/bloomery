@@ -25,6 +25,7 @@ so this class exists to send only what is new — and, per the spec's
 template rewrites historical assistant turns and a re-render is therefore not
 a prefix extension of what was actually sent.
 """
+import json
 
 
 class Session:
@@ -34,6 +35,78 @@ class Session:
         self.keep_reasoning = keep_reasoning
         self._sent_messages: list[dict] = []
         self._open_assistant_turn = False
+
+    @staticmethod
+    def _normalize_tool_call(call):
+        """Coerce one tool call's `arguments` to the mapping the template
+        requires (it renders `arguments|items`), accepting BOTH wire
+        shapes: an already-parsed dict, and the JSON-encoded STRING that
+        Task 2's `parse_tool_calls` actually emits (`json.dumps(args)`) --
+        the shape a client echoing history back will therefore send. The
+        real OpenAI wire format is the string shape, so this is not an
+        edge case; it is the common one.
+
+        Returns `(normalized_call, unparseable)`. `unparseable` is True
+        iff `arguments` was a string that failed to parse as a JSON
+        object. That failure is NEVER treated as "no arguments" -- doing
+        so would silently discard a real, if malformed, payload and risk
+        two DIFFERENT malformed payloads comparing equal (a false append
+        onto a stale KV, the same catastrophic direction as the tool_calls
+        Critical already fixed). It is also never handed to the template
+        as a raw string, since `arguments|items` raises TypeError on
+        anything but a mapping. Instead the call's `arguments` is
+        re-pointed at `{}` for RENDERING (so a delta can still be sent
+        rather than crashing) while the original string survives under an
+        internal `__raw_arguments__` key that the template never looks at
+        but `_tool_call_identity` does -- so two genuinely different
+        malformed payloads still compare unequal, and neither is ever
+        misread as "no arguments."
+
+        Never mutates the caller's dicts: builds new ones throughout.
+        """
+        if not isinstance(call, dict):
+            return call, False
+        new_call = dict(call)
+        wrapped = isinstance(new_call.get("function"), dict)
+        fn = dict(new_call["function"]) if wrapped else new_call
+        arguments = fn.get("arguments")
+        unparseable = False
+        if isinstance(arguments, str):
+            try:
+                parsed = json.loads(arguments)
+            except (json.JSONDecodeError, ValueError):
+                parsed = None
+            if isinstance(parsed, dict):
+                fn["arguments"] = parsed
+            else:
+                unparseable = True
+                fn["__raw_arguments__"] = arguments
+                fn["arguments"] = {}
+        if wrapped:
+            new_call["function"] = fn
+        else:
+            new_call = fn
+        return new_call, unparseable
+
+    @staticmethod
+    def _normalize_message(message: dict) -> tuple[dict, bool]:
+        """A new copy of `message` with every tool call's `arguments`
+        normalized to a mapping (see `_normalize_tool_call`), plus whether
+        any call's `arguments` was an unparseable string. Non-assistant
+        messages, and assistant messages without tool_calls, pass through
+        as a plain per-message copy (already required by Finding 2)."""
+        new_message = dict(message)
+        tool_calls = new_message.get("tool_calls")
+        if new_message.get("role") != "assistant" or not tool_calls:
+            return new_message, False
+        new_calls = []
+        had_unparseable = False
+        for call in tool_calls:
+            normalized_call, unparseable = Session._normalize_tool_call(call)
+            new_calls.append(normalized_call)
+            had_unparseable = had_unparseable or unparseable
+        new_message["tool_calls"] = new_calls
+        return new_message, had_unparseable
 
     @staticmethod
     def _tool_call_identity(tool_calls) -> tuple:
@@ -50,6 +123,15 @@ class Session:
         them). Likewise a call with `arguments` absent and one with
         `arguments: {}` both render zero `<parameter>` blocks, so both
         normalise to an empty tuple of argument pairs.
+
+        Expects `tool_calls` to already be `_normalize_tool_call`-clean
+        (arguments is always a dict, with `__raw_arguments__` set exactly
+        when the original was an unparseable string). A `__raw_arguments__`
+        marker is folded into the identity instead of the (empty) rendered
+        `arguments`, so two DIFFERENT unparseable payloads -- both
+        substituted with `{}` for rendering safety -- still compare
+        unequal rather than being silently read as the same "no
+        arguments" call.
         """
         if not tool_calls:
             return ()
@@ -62,6 +144,9 @@ class Session:
             if not isinstance(fn, dict):
                 fn = {}
             name = fn.get("name")
+            if "__raw_arguments__" in fn:
+                identities.append((name, ("__unparseable__", fn["__raw_arguments__"])))
+                continue
             arguments = fn.get("arguments")
             args_items = tuple(arguments.items()) if isinstance(arguments, dict) else ()
             identities.append((name, args_items))
@@ -114,10 +199,24 @@ class Session:
         # A per-message copy, not just a copy of the outer list: a caller
         # that mutates a message dict in place after this call must not be
         # able to silently desync `_sent_messages` from the bytes actually
-        # sent (Finding 2).
-        messages = [dict(m) for m in messages]
+        # sent (Finding 2). `_normalize_message` also coerces each tool
+        # call's `arguments` to a mapping, accepting the JSON-string wire
+        # shape the real OpenAI format (and Task 2's own parser) actually
+        # uses, so it never reaches the template as a bare string.
+        normalized = [Session._normalize_message(m) for m in messages]
+        messages = [m for m, _ in normalized]
+        had_unparseable_arguments = any(bad for _, bad in normalized)
         had_history = bool(self._sent_messages)
-        is_extension = had_history and self._is_extension(self._sent_messages, messages)
+        # An unparseable `arguments` string makes this turn's messages
+        # un-trustworthy as an append target: we cannot tell whether it
+        # matches the resident KV, and appending onto a mismatch would be
+        # silent corruption. Force the safe branch -- reset, not append --
+        # rather than let `_is_extension`'s tuple comparison decide, since
+        # `_tool_call_identity` deliberately makes an unparseable call
+        # compare unequal to everything except a byte-identical repeat of
+        # the same malformed string, which is exactly "we cannot be sure."
+        is_extension = (had_history and not had_unparseable_arguments
+                         and self._is_extension(self._sent_messages, messages))
 
         if is_extension and self.keep_reasoning:
             new = messages[len(self._sent_messages):]

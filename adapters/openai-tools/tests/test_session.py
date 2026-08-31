@@ -199,6 +199,83 @@ class SessionTest(unittest.TestCase):
         self.assertTrue(reset)
         self.assertIn("<tools>", delta)
 
+    def test_render_initial_succeeds_with_json_string_arguments(self):
+        # `arguments` in the real OpenAI wire format is a JSON-encoded
+        # STRING (Task 2's parse_tool_calls emits `json.dumps(args)`), not
+        # a mapping. The template renders `arguments|items`, which requires
+        # a mapping -- render_initial (via next_delta's first turn) must
+        # accept the string shape rather than raising TypeError.
+        call = [{"id": "call_1", "type": "function",
+                 "function": {"name": "terminal", "arguments": '{"command": "ls -la"}'}}]
+        assistant = {"role": "assistant", "content": "", "tool_calls": call}
+        delta, reset = self.s.next_delta([U1, assistant], TOOLS)  # must not raise
+        self.assertFalse(reset)
+        self.assertIn("command", delta)
+        self.assertIn("ls -la", delta)
+
+    def test_tool_calls_with_different_json_string_arguments_still_reset(self):
+        # The under-comparison half of the same gap: two DIFFERENT
+        # JSON-string payloads must not be silently treated as equal --
+        # that would read a genuine rewrite as an append onto a stale KV.
+        s = Session("json_diff", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        call_1 = [{"id": "call_1", "type": "function",
+                   "function": {"name": "terminal", "arguments": '{"command": "ls"}'}}]
+        assistant_1 = {"role": "assistant", "content": "", "tool_calls": call_1}
+        s.next_delta([U1, assistant_1, U2], TOOLS)
+        call_2 = [{"id": "call_1", "type": "function",
+                   "function": {"name": "terminal", "arguments": '{"command": "rm -rf /"}'}}]
+        assistant_2 = {"role": "assistant", "content": "", "tool_calls": call_2}
+        delta, reset = s.next_delta([U1, assistant_2, U2], TOOLS)
+        self.assertTrue(reset)
+        self.assertIn("<tools>", delta)
+
+    def test_json_string_and_dict_arguments_with_same_pairs_are_equivalent(self):
+        # Both wire shapes for the SAME logical arguments must compare
+        # equal -- a client echoing history back as a string must not
+        # force a reset against a dict-shaped seed, or vice versa.
+        s = Session("json_dict_equal", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        call_str = [{"id": "call_1", "type": "function",
+                     "function": {"name": "terminal", "arguments": '{"command": "ls"}'}}]
+        assistant_str = {"role": "assistant", "content": "", "tool_calls": call_str}
+        s.next_delta([U1, assistant_str, U2], TOOLS)
+        call_dict = [{"id": "call_1", "type": "function",
+                      "function": {"name": "terminal", "arguments": {"command": "ls"}}}]
+        assistant_dict = {"role": "assistant", "content": "", "tool_calls": call_dict}
+        _, reset = s.next_delta([U1, assistant_dict, U2], TOOLS)
+        self.assertFalse(reset)
+
+    def test_malformed_json_arguments_do_not_crash_and_force_a_reset(self):
+        # A string that fails to parse as JSON must not crash the render,
+        # and must not be silently treated as "no arguments" (which would
+        # risk two DIFFERENT malformed payloads comparing equal). The safe
+        # branch is a reset.
+        s = Session("malformed", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        call_ok = [{"id": "call_1", "type": "function",
+                    "function": {"name": "terminal", "arguments": {"command": "ls"}}}]
+        assistant_ok = {"role": "assistant", "content": "", "tool_calls": call_ok}
+        s.next_delta([U1, assistant_ok, U2], TOOLS)
+        call_broken = [{"id": "call_1", "type": "function",
+                        "function": {"name": "terminal", "arguments": "{not valid json"}}]
+        assistant_broken = {"role": "assistant", "content": "", "tool_calls": call_broken}
+        delta, reset = s.next_delta([U1, assistant_broken, U2], TOOLS)  # must not raise
+        self.assertTrue(reset)
+        self.assertIn("<tools>", delta)
+
+    def test_keep_reasoning_false_renders_tool_call_history_without_raising(self):
+        # keep_reasoning=False takes the full render (render_initial) path
+        # on EVERY turn by design, so this crash is reachable on turn 2
+        # already, not just on a reset.
+        s = Session("kr_false_tc", ChatTemplate.load(TPL), keep_reasoning=False)
+        s.next_delta([U1], TOOLS)
+        call = [{"id": "call_1", "type": "function",
+                 "function": {"name": "terminal", "arguments": '{"command": "ls"}'}}]
+        assistant = {"role": "assistant", "content": "", "tool_calls": call}
+        delta, _ = s.next_delta([U1, assistant, U2], TOOLS)  # must not raise
+        self.assertIn("<tools>", delta)
+
 
 if __name__ == "__main__":
     unittest.main()
