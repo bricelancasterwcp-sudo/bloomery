@@ -126,6 +126,79 @@ class SessionTest(unittest.TestCase):
         _, reset = self.s.next_delta([U1, assistant_none, U2], TOOLS)
         self.assertFalse(reset)
 
+    def test_absent_none_and_empty_tool_calls_are_all_pairwise_equivalent(self):
+        # GAP 1: all three spellings mean "no tool calls" to the template
+        # and must compare equal to EACH OTHER, not just absent-vs-None.
+        # Chained absent -> None -> [] -> absent covers all three adjacent
+        # pairs; equivalence is symmetric so that closes the triangle.
+        s = Session("gap1", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        assistant_absent = {"role": "assistant", "content": GEN}
+        s.next_delta([U1, assistant_absent, U2], TOOLS)
+
+        assistant_none = {"role": "assistant", "content": GEN, "tool_calls": None}
+        _, reset_absent_to_none = s.next_delta([U1, assistant_none, U2], TOOLS)
+        self.assertFalse(reset_absent_to_none)
+
+        assistant_empty = {"role": "assistant", "content": GEN, "tool_calls": []}
+        _, reset_none_to_empty = s.next_delta([U1, assistant_empty, U2], TOOLS)
+        self.assertFalse(reset_none_to_empty)
+
+        _, reset_empty_to_absent = s.next_delta([U1, assistant_absent, U2], TOOLS)
+        self.assertFalse(reset_empty_to_absent)
+
+    def test_a_regenerated_tool_call_id_does_not_force_a_reset(self):
+        # GAP 2: the template (lines ~105-127) never renders tool_call.id,
+        # so two calls differing ONLY in id are byte-identical to the
+        # model. Many clients regenerate call ids per request; comparing
+        # them would reset every turn for those clients.
+        s = Session("gap2a", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        call_v1 = [{"id": "call_1", "type": "function",
+                    "function": {"name": "terminal", "arguments": {"command": "ls"}}}]
+        assistant_v1 = {"role": "assistant", "content": "", "tool_calls": call_v1}
+        s.next_delta([U1, assistant_v1, U2], TOOLS)
+        call_v2 = [{"id": "call_regenerated_9999", "type": "function",
+                    "function": {"name": "terminal", "arguments": {"command": "ls"}}}]
+        assistant_v2 = {"role": "assistant", "content": "", "tool_calls": call_v2}
+        _, reset = s.next_delta([U1, assistant_v2, U2], TOOLS)
+        self.assertFalse(reset)
+
+    def test_tool_calls_differing_only_in_arguments_still_reset(self):
+        # Proves GAP 2's id-exclusion did not loosen the check too far:
+        # same id, same function name, DIFFERENT arguments must still
+        # reset -- arguments are rendered by the template and are not
+        # representational noise the way id is.
+        s = Session("gap2b", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        call_ls = [{"id": "call_1", "type": "function",
+                    "function": {"name": "terminal", "arguments": {"command": "ls"}}}]
+        assistant_ls = {"role": "assistant", "content": "", "tool_calls": call_ls}
+        s.next_delta([U1, assistant_ls, U2], TOOLS)
+        call_rm = [{"id": "call_1", "type": "function",
+                    "function": {"name": "terminal", "arguments": {"command": "rm -rf /"}}}]
+        assistant_rm = {"role": "assistant", "content": "", "tool_calls": call_rm}
+        delta, reset = s.next_delta([U1, assistant_rm, U2], TOOLS)
+        self.assertTrue(reset)
+        self.assertIn("<tools>", delta)
+
+    def test_a_different_reasoning_content_with_matching_visible_content_still_resets(self):
+        # GAP 3: the template DOES render reasoning_content (lines ~91-101)
+        # when it is an explicit string. Two turns with identical VISIBLE
+        # content but different reasoning_content render different bytes
+        # and must reset -- the same bug class as the Critical already
+        # fixed for tool_calls, one field over.
+        s = Session("gap3", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        assistant_r1 = {"role": "assistant", "content": "same visible answer",
+                        "reasoning_content": "reasoning A"}
+        s.next_delta([U1, assistant_r1, U2], TOOLS)
+        assistant_r2 = {"role": "assistant", "content": "same visible answer",
+                        "reasoning_content": "reasoning B"}
+        delta, reset = s.next_delta([U1, assistant_r2, U2], TOOLS)
+        self.assertTrue(reset)
+        self.assertIn("<tools>", delta)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -36,14 +36,61 @@ class Session:
         self._open_assistant_turn = False
 
     @staticmethod
+    def _tool_call_identity(tool_calls) -> tuple:
+        """The subset of a `tool_calls` list the template
+        (`templates/qwen36-reap48-ours.jinja`, lines ~105-127) actually
+        renders: each call's function `name` and `arguments`, in order
+        (order-sensitive, since the template iterates `arguments|items` in
+        dict order -- a reordering changes the rendered bytes). Never the
+        call's `id` or `type`: the template never references either.
+
+        Three spellings of "no tool calls" all render nothing and must
+        collapse to the same identity: an absent field, an explicit `None`,
+        and `[]` (falsy, so `not tool_calls` is True for every one of
+        them). Likewise a call with `arguments` absent and one with
+        `arguments: {}` both render zero `<parameter>` blocks, so both
+        normalise to an empty tuple of argument pairs.
+        """
+        if not tool_calls:
+            return ()
+        identities = []
+        for call in tool_calls:
+            if not isinstance(call, dict):
+                identities.append((None, ()))
+                continue
+            fn = call.get("function", call)
+            if not isinstance(fn, dict):
+                fn = {}
+            name = fn.get("name")
+            arguments = fn.get("arguments")
+            args_items = tuple(arguments.items()) if isinstance(arguments, dict) else ()
+            identities.append((name, args_items))
+        return tuple(identities)
+
+    @staticmethod
+    def _reasoning_identity(message: dict):
+        """The template only uses `reasoning_content` when it `is string`
+        (line ~91); otherwise it derives reasoning by splitting `content`
+        on `</think>`, a pure function of `content`, which is already
+        compared separately. So an absent `reasoning_content` and an
+        explicit `None` are equivalent (both fail `is string`, both fall
+        back to the same content-derived value) and normalise to `None`
+        here; any actual string -- including `""` -- is compared as
+        itself, since only a real string overrides the content-derived
+        reasoning."""
+        reasoning_content = message.get("reasoning_content")
+        return reasoning_content if isinstance(reasoning_content, str) else None
+
+    @staticmethod
     def _is_extension(previous: list[dict], current: list[dict]) -> bool:
-        # Full message identity, not a role/content subset: an assistant
+        # Full SEMANTIC message identity: everything the template actually
+        # renders for a message, not a role/content subset. An assistant
         # turn carrying tool_calls has content "" or None, so two DIFFERENT
         # tool-call turns can compare equal on role+content alone. That
         # would misclassify a client's rewritten history as an append and
-        # silently corrupt the KV. `.get("tool_calls")` already treats a
-        # missing key and an explicit `None` as equivalent, since both
-        # return `None` -- no separate normalisation needed. When in doubt,
+        # silently corrupt the KV. Conversely, fields the template never
+        # renders (tool_calls[].id, tool_calls[].type) must NOT force a
+        # reset merely because a client regenerated them. When in doubt,
         # this must refuse (reset) rather than accept: a false reset costs
         # performance, a false append costs correctness.
         if len(current) < len(previous):
@@ -51,7 +98,9 @@ class Session:
         for old, new in zip(previous, current):
             if (old.get("role") != new.get("role")
                     or old.get("content") != new.get("content")
-                    or old.get("tool_calls") != new.get("tool_calls")):
+                    or Session._reasoning_identity(old) != Session._reasoning_identity(new)
+                    or (Session._tool_call_identity(old.get("tool_calls"))
+                        != Session._tool_call_identity(new.get("tool_calls")))):
                 return False
         return True
 
