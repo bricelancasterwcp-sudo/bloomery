@@ -65,7 +65,8 @@ bookkeeping, tool-call parsing, error mapping — be exercised in
 | `base_url` | yes (for `main()`) | The bloomery daemon's native API base URL, e.g. `http://127.0.0.1:8080`. Only read when running as `__main__`; `build_server` itself never touches it, since the client is injected. |
 | `model` | yes | The model name passed to bloomery's `create_agent` and reported by `GET /v1/models`. |
 | `template` | yes | Path to the committed `.jinja` chat template (see below). |
-| `max_tokens` | no (default `512`) | Default generation cap when a request omits `max_tokens`. |
+| `max_tokens` | no (default `512`) | Default generation cap when a request omits both `max_tokens` and `max_completion_tokens`. |
+| `max_tokens_cap` | no (default `4096`) | Hard ceiling the resolved `max_tokens` is clamped to before it reaches bloomery. Real hermes requests carry `max_tokens` of 64000-128000; sent through unclamped against a ~98k-103k-token window, the daemon's window law 413s nearly every request. A smaller client-supplied value is still honoured verbatim; only the ceiling is enforced. |
 | `window_cap` | no | Passed through to `create_agent`'s `window_cap`, if bloomery should cap this agent's KV window below the model's default. |
 | `keep_reasoning_in_history` | no (default `true`) | See below. |
 | `host` / `port` | no (default `127.0.0.1` / OS-assigned) | Bind address. |
@@ -127,15 +128,34 @@ same canned first prompt, etc.) **must** send their own `X-Session-Id`
 header. There is no cryptographic or client-identity component to the
 fallback; it is purely a convenience default for casual single-client use.
 
-**Agents accumulate; there is no cleanup.** Every new session key creates
-one bloomery agent via `create_agent`, held in `server.sessions` for the
-adapter process's lifetime. bloomery's native API has `POST
-/agents/{id}/suspend` (used by `BloomeryClient.suspend`) but **no `DELETE
-/agents/{id}`**, so a suspended agent's resources are not released back to
-the daemon by this adapter — there is currently no code path that even
-calls `suspend`. Long-running deployments with many distinct sessions will
-accumulate agents (and their resident KV/window budget) on the daemon side
-until the daemon itself is restarted. This is a known gap, not an oversight
-to be silently worked around; closing it needs either a bloomery-side
-delete/reap endpoint or an adapter-side idle-session suspend policy, and
-that is future work, not something this task's scope covers.
+**Agents accumulate; there is no cleanup, only reclaim-on-reset.** Every new
+session key creates one bloomery agent via `create_agent`, held in
+`server.sessions` for the adapter process's lifetime. Since the final fix
+wave, a session that diverges (rewritten history, a changed tool set, or
+`keep_reasoning_in_history=false` declining reuse) suspends its OLD agent
+(`BloomeryClient.suspend`) before starting a fresh one, so a divergent
+session's superseded agents ARE reclaimed. What is still missing:
+bloomery's native API has `POST /agents/{id}/suspend` but **no `DELETE
+/agents/{id}`**, and a session that never diverges keeps its one agent
+resident for the adapter process's lifetime with no idle-timeout or
+explicit-close path. Long-running deployments with many distinct,
+never-diverging sessions will still accumulate agents (and their resident
+KV/window budget) on the daemon side until the daemon itself is restarted.
+This is a known gap, not an oversight to be silently worked around; closing
+it fully needs either a bloomery-side delete/reap endpoint or an
+adapter-side idle-session suspend policy, and that is future work, not
+something this task's scope covers.
+
+## Diagnostics
+
+Every request writes one structured JSON line to stderr via the stdlib
+`logging` module (`openai_tools.server` logger): the session key, the
+bloomery agent id used, whether this turn was a reset, the delta size in
+bytes, `prompt_tokens`/`completion_tokens` from the daemon (when the turn
+reached the daemon), and the outcome (`"ok"`, `"invalid_tool_arguments"`, or
+`"bloomery_error_<status>"`). An unexpected (non-`BloomeryError`) exception
+also logs its full traceback to stderr before the client gets the generic
+500 — the response body never carries internal detail, but the process's
+own stderr always does. `log_message` (raw per-connection HTTP access
+logging) stays quiet by design; this is a separate, purpose-built request
+log.

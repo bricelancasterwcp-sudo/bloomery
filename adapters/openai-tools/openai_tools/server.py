@@ -67,6 +67,8 @@ reviews on this branch:
 """
 import hashlib
 import json
+import logging
+import sys
 import threading
 import time
 import uuid
@@ -77,6 +79,19 @@ from .errors import BloomeryError, to_openai_error
 from .session import Session, UnrenderableMessage
 from .template import ChatTemplate
 from .toolcall import parse_tool_calls, split_reasoning
+
+# Fix wave, Important 4: minimal structured diagnostics to stderr. Task 6's
+# live acceptance run (real daemon, no test harness) has never been
+# attempted, and before this the only failure signal was a bare 500 with no
+# server-side trace of what happened. One handler, attached once, dependency
+# -free (stdlib `logging`); `log_message` below stays quiet -- this is a
+# purpose-built request log, not the raw HTTP access log.
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    _handler = logging.StreamHandler(sys.stderr)
+    _handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(_handler)
+    logger.setLevel(logging.INFO)
 
 
 def _error_body(kind: str, code: str, message: str) -> dict:
@@ -144,6 +159,13 @@ class _SessionEntry:
         self.session = session
         self.agent_id = agent_id
         self.lock = threading.Lock()
+        # Critical 1: whether ANY turn has ever been successfully committed
+        # to this entry's (current or a prior) agent. Only used to tell "the
+        # first turn of a session" (agent is already fresh, just created)
+        # apart from every later turn -- never touched by a failed attempt,
+        # so a failed-then-retried first turn is still correctly treated as
+        # the first turn.
+        self.turns_committed = 0
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -183,6 +205,11 @@ class _Handler(BaseHTTPRequestHandler):
             # Last-resort guard: never leak a bare traceback (or any
             # internal detail) to the client. Known failure modes are
             # already handled explicitly below; this is only a backstop.
+            # Important 4: the traceback still goes to stderr (exc_info=True
+            # on the logging call, not the response body) so an unexpected
+            # failure during Task 6's live acceptance run is diagnosable
+            # server-side, without ever leaking internals to the client.
+            logger.error("unhandled exception handling POST %s", self.path, exc_info=True)
             self._send_json(500, _error_body("server_error", "internal_error",
                                              "internal error"))
 
@@ -194,17 +221,45 @@ class _Handler(BaseHTTPRequestHandler):
         return json.loads(raw_body.decode("utf-8"))
 
     def _get_session(self, session_key: str, model: str) -> _SessionEntry:
+        # Minor fix: `create_agent` is a network call to the daemon: it must
+        # not run while holding `sessions_lock`, or one session's first
+        # request blocks every OTHER session's `_get_session` for the full
+        # round trip. Double-checked: read under the lock, create outside
+        # it, then re-check under the lock before publishing -- if another
+        # thread's request for the SAME session_key won the race, use its
+        # entry and suspend the redundant agent we created rather than
+        # leaking it.
+        with self.server.sessions_lock:
+            entry = self.server.sessions.get(session_key)
+        if entry is not None:
+            return entry
+
+        agent_id = self.server.client.create_agent(
+            model, self.server.config.get("window_cap"))
+        session = Session(
+            agent_id, self.server.template,
+            keep_reasoning=self.server.config.get("keep_reasoning_in_history", True))
+        candidate = _SessionEntry(session, agent_id)
+
         with self.server.sessions_lock:
             entry = self.server.sessions.get(session_key)
             if entry is None:
-                agent_id = self.server.client.create_agent(
-                    model, self.server.config.get("window_cap"))
-                session = Session(
-                    agent_id, self.server.template,
-                    keep_reasoning=self.server.config.get("keep_reasoning_in_history", True))
-                entry = _SessionEntry(session, agent_id)
-                self.server.sessions[session_key] = entry
-            return entry
+                self.server.sessions[session_key] = candidate
+                return candidate
+
+        # Lost the race: another thread already published an entry for this
+        # session_key. Our agent was never used for anything; abandon it.
+        self._suspend_best_effort(agent_id)
+        return entry
+
+    def _suspend_best_effort(self, agent_id: str) -> None:
+        try:
+            self.server.client.suspend(agent_id)
+        except BloomeryError:
+            # VRAM-hygiene cleanup, not correctness for THIS request; do not
+            # let a suspend failure block or fail the response it rides
+            # along with. Logged so it is not silently invisible either.
+            logger.warning(json.dumps({"event": "suspend_failed", "agent": agent_id}))
 
     def _handle_chat_completion(self):
         try:
@@ -223,19 +278,44 @@ class _Handler(BaseHTTPRequestHandler):
 
         tools = payload.get("tools")
         model = payload.get("model") or self.server.config["model"]
-        max_tokens = payload.get("max_tokens") or self.server.config.get("max_tokens", 512)
+        max_tokens = self._resolve_max_tokens(payload)
 
         session_key = self.headers.get("X-Session-Id") or _first_user_message_key(messages)
         entry = self._get_session(session_key, model)
 
         with entry.lock:
-            self._infer_and_respond(entry, messages, tools, model, max_tokens)
+            self._infer_and_respond(entry, session_key, messages, tools, model, max_tokens)
 
-    def _infer_and_respond(self, entry, messages, tools, model, max_tokens):
+    def _resolve_max_tokens(self, payload: dict) -> int:
+        """Minor fix: `max_completion_tokens` is honoured as an alias for
+        `max_tokens` (the newer OpenAI field name; some clients send one,
+        some the other). Important 1: the resolved value is then clamped to
+        `config["max_tokens_cap"]` (default 4096) -- real hermes requests
+        carry 64000/65536/128000, which unclamped against a ~98k-103k-token
+        window makes the daemon's window law 413 nearly every request,
+        which then hits Critical 2's failure mode. A smaller client-
+        supplied value is still honoured verbatim; only the ceiling is
+        enforced.
+        """
+        requested = payload.get("max_tokens")
+        if requested is None:
+            requested = payload.get("max_completion_tokens")
+        if requested is None:
+            requested = self.server.config.get("max_tokens", 512)
+        cap = self.server.config.get("max_tokens_cap", 4096)
+        return min(requested, cap)
+
+    def _infer_and_respond(self, entry, session_key, messages, tools, model, max_tokens):
         session = entry.session
 
+        # Critical 2: snapshot BEFORE next_delta -- next_delta itself still
+        # mutates immediately (every existing session.py test relies on
+        # that), so undoing a downstream delivery failure is this method's
+        # job via `session.restore`, not next_delta's.
+        snapshot = session.snapshot()
+
         try:
-            delta, _was_reset = session.next_delta(messages, tools)
+            delta, was_reset = session.next_delta(messages, tools)
         except UnrenderableMessage as exc:
             # Requirement C: a malformed `arguments` string is a CLIENT
             # error under the OpenAI wire format (which defines
@@ -243,17 +323,61 @@ class _Handler(BaseHTTPRequestHandler):
             # as an unhandled 500 that would blame the server for the
             # client's request. `str(exc)` never carries the raw
             # malformed payload (see UnrenderableMessage's own docstring
-            # and session.py's test for it).
+            # and session.py's test for it). next_delta itself never
+            # mutates before raising, so no restore is needed here.
+            self._log_event(session_key, entry.agent_id, None, None,
+                            "invalid_tool_arguments")
             self._send_json(400, _error_body(
                 "invalid_request_error", "invalid_tool_arguments", str(exc)))
             return
 
+        # Critical 1: a delta from the full-render path must land on an
+        # agent with an EMPTY KV -- bloomery appends, so sending a full
+        # render (system + tools + entire history) onto an agent whose KV
+        # already holds a prior conversation duplicates it. This is needed
+        # not only when `was_reset` is True (the client diverged) but also
+        # when `keep_reasoning=False` chose not to reuse an otherwise-
+        # legitimate append (spec's measurement control): both take the
+        # full-render path, and `entry.turns_committed == 0` is the one
+        # case where the CURRENT agent is already guaranteed fresh (it was
+        # just created for this session's first turn), so no swap is
+        # needed there.
+        needs_fresh_agent = (
+            entry.turns_committed > 0 and (was_reset or not session.keep_reasoning))
+
+        send_agent_id = entry.agent_id
+        created_agent_id = None
+
         try:
-            result = self.server.client.infer(entry.agent_id, delta, max_tokens)
+            if needs_fresh_agent:
+                created_agent_id = self.server.client.create_agent(
+                    model, self.server.config.get("window_cap"))
+                send_agent_id = created_agent_id
+            result = self.server.client.infer(send_agent_id, delta, max_tokens)
         except BloomeryError as exc:
+            # No session state may change until the daemon has accepted the
+            # bytes: restore undoes next_delta's mutation, so an honest
+            # retry of the identical request reproduces the identical
+            # delta, never a stunted one built on the false belief this
+            # attempt's bytes already landed in the KV.
+            session.restore(snapshot)
+            if created_agent_id is not None:
+                # Never used for anything (infer to it failed); abandon it
+                # rather than leaking it. The OLD agent (entry.agent_id) is
+                # untouched -- it was never actually replaced.
+                self._suspend_best_effort(created_agent_id)
+            self._log_event(session_key, send_agent_id, was_reset, len(delta),
+                            f"bloomery_error_{exc.status}")
             status, body = to_openai_error(exc)
             self._send_json(status, body)
             return
+
+        # Success: the daemon has accepted the bytes. Only now does the
+        # agent swap (if any) actually take effect.
+        if created_agent_id is not None:
+            self._suspend_best_effort(entry.agent_id)
+            entry.agent_id = created_agent_id
+        entry.turns_committed += 1
 
         raw = result["text"]
         _reasoning, visible = split_reasoning(raw)
@@ -285,7 +409,27 @@ class _Handler(BaseHTTPRequestHandler):
         # extension for this task; _is_extension itself is untouched).
         session.record_generation(message)
 
+        self._log_event(session_key, entry.agent_id, was_reset, len(delta), "ok",
+                        prompt_tokens=result.get("prompt_tokens"),
+                        completion_tokens=result.get("completion_tokens"))
         self._send_json(200, self._envelope(model, message, finish_reason, result))
+
+    def _log_event(self, session_key, agent_id, was_reset, delta_bytes, outcome,
+                   prompt_tokens=None, completion_tokens=None) -> None:
+        """Important 4: one structured line to stderr per request -- the
+        only diagnostic signal available the first time this adapter is run
+        against a real daemon (Task 6's live acceptance run). Deliberately
+        plain JSON on a single `logger.info` call rather than a new
+        dependency."""
+        logger.info(json.dumps({
+            "session": session_key,
+            "agent": agent_id,
+            "reset": was_reset,
+            "delta_bytes": delta_bytes,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "outcome": outcome,
+        }))
 
     @staticmethod
     def _envelope(model: str, message: dict, finish_reason: str, result: dict) -> dict:
@@ -329,8 +473,6 @@ def build_server(config: dict, client) -> ThreadingHTTPServer:
 
 
 def main(argv=None) -> int:
-    import sys
-
     argv = sys.argv[1:] if argv is None else argv
     config_path = argv[0] if argv else "adapters/openai-tools/config.json"
     with open(config_path, encoding="utf-8") as handle:

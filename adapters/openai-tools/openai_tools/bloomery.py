@@ -43,7 +43,8 @@ class BloomeryClient:
                 text = resp.read().decode("utf-8")
                 return json.loads(text) if text else {}
         except urllib.error.HTTPError as exc:
-            text = exc.read().decode("utf-8", errors="replace")
+            with exc:
+                text = exc.read().decode("utf-8", errors="replace")
             try:
                 body = json.loads(text)
             except json.JSONDecodeError:

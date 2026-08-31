@@ -334,6 +334,52 @@ class SessionTest(unittest.TestCase):
         self.assertFalse(reset)
         self.assertNotIn("<tools>", delta)
 
+    def test_a_changed_tool_set_forces_a_reset(self):
+        # Important 3: the append path never re-renders `tools` at all
+        # (`render_turns` takes no tools argument), so if the client's tool
+        # set differs from what turn 1 baked into the resident KV, an
+        # append would leave the model's context stale while parsing
+        # against the NEW schema -- the same silent-corruption class
+        # `_is_extension` exists to catch for `messages`.
+        other_tools = [{"type": "function", "function": {
+            "name": "other_tool", "parameters": {"type": "object", "properties": {}}}}]
+        s = Session("tools_diverge", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        assistant = {"role": "assistant", "content": GEN}
+        delta, reset = s.next_delta([U1, assistant, U2], other_tools)
+        self.assertTrue(reset)
+        self.assertIn("<tools>", delta)   # a reset re-sends the full render
+
+    def test_an_unchanged_tool_set_is_not_treated_as_divergence(self):
+        # The under-comparison half of the same gap: the SAME tools value
+        # (by content, not identity) must not spuriously force a reset.
+        same_tools_new_list = list(TOOLS)
+        s = Session("tools_same", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        assistant = {"role": "assistant", "content": GEN}
+        _, reset = s.next_delta([U1, assistant, U2], same_tools_new_list)
+        self.assertFalse(reset)
+
+    def test_snapshot_and_restore_undo_a_next_delta_call(self):
+        # Critical 2's mechanism: a caller takes a snapshot BEFORE calling
+        # next_delta; if the resulting bytes are never actually delivered
+        # downstream (the daemon call raised), restoring that snapshot
+        # undoes next_delta's mutation, so an identical retry reproduces
+        # the identical delta -- not a stunted one built on the false
+        # assumption that the failed send had succeeded.
+        s = Session("snap", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        s.record_generation(GEN)
+
+        turn2_messages = [U1, {"role": "assistant", "content": GEN}, U2]
+        snap = s.snapshot()
+        first_attempt, first_reset = s.next_delta(turn2_messages, TOOLS)
+        s.restore(snap)  # the downstream send of first_attempt never landed
+
+        retry, retry_reset = s.next_delta(turn2_messages, TOOLS)
+        self.assertEqual(retry, first_attempt)
+        self.assertEqual(retry_reset, first_reset)
+
     def test_record_generation_string_form_is_unchanged(self):
         # The original contract: a plain string is still treated as a
         # content-only assistant turn, exactly as before this extension.

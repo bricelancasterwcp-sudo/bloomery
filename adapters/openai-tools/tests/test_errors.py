@@ -13,6 +13,8 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
+# Commercial licensing is available as an alternative to the AGPL — see
+# LICENSING.md.
 
 import unittest
 
@@ -40,6 +42,30 @@ class ErrorMappingTest(unittest.TestCase):
         status, body = to_openai_error(BloomeryError(402, {"error": "budget"}))
         self.assertEqual(status, 402)
         self.assertEqual(body["error"]["code"], "insufficient_quota")
+
+    def test_unprofiled_names_the_model_and_is_an_invalid_request_error(self):
+        # Important 2: the single likeliest FIRST error on a live run
+        # (crates/bloomery-daemon/src/api_native.rs: PagerError::Unprofiled
+        # -> native 422, {error: "unprofiled", model}). Before this arm
+        # existed it fell through to a bare 502 upstream_error, misreporting
+        # a normal admission refusal as a substrate protocol breach.
+        status, body = to_openai_error(BloomeryError(422, {
+            "error": "unprofiled", "model": "qwen36-reap48-ours"}))
+        self.assertEqual(status, 422)
+        self.assertEqual(body["error"]["type"], "invalid_request_error")
+        self.assertIn("qwen36-reap48-ours", body["error"]["message"])
+        self.assertIn("capability profile", body["error"]["message"])
+
+    def test_drift_blocked_maps_to_409_and_names_the_blocked_model(self):
+        # Spec §7: DriftBlocked -> 409, naming the blocked model. The
+        # native API's own status for this is 422 (see api_native.rs); the
+        # mapping here is by `kind`, not a status passthrough.
+        status, body = to_openai_error(BloomeryError(422, {
+            "error": "drift_blocked", "model": "qwen36-reap48-ours",
+            "reference": "ref-abc123"}))
+        self.assertEqual(status, 409)
+        self.assertIn("qwen36-reap48-ours", body["error"]["message"])
+        self.assertIn("ref-abc123", body["error"]["message"])
 
     def test_an_unmapped_status_is_surfaced_not_swallowed(self):
         status, body = to_openai_error(BloomeryError(500, {"error": "weird"}))

@@ -56,6 +56,26 @@ def to_openai_error(err: BloomeryError) -> tuple[int, dict]:
                               f"token budget exhausted: {body}")
     if err.status == 404:
         return 404, _envelope("invalid_request_error", "model_not_found", f"{body}")
+    if kind == "unprofiled":
+        # Fix wave, Important 2: the single likeliest FIRST error on a live
+        # run (crates/bloomery-daemon/src/api_native.rs maps
+        # PagerError::Unprofiled to a native 422 carrying {error, model}).
+        # A bare 502 upstream_error would misreport this as a substrate
+        # protocol breach; it is a normal, nameable admission refusal.
+        return 422, _envelope(
+            "invalid_request_error", "model_unprofiled",
+            f"model {body.get('model')!r} has no capability profile yet -- "
+            "bloomery refuses to serve an unprofiled model rather than guessing.")
+    if kind == "drift_blocked":
+        # Spec §7: DriftBlocked -> 409, naming the blocked model (the
+        # native API's own status for this is 422; this adapter's error
+        # envelope is a deliberate translation, not a passthrough -- see
+        # this module's docstring on why the numbers are kept, not the
+        # daemon's raw status code).
+        return 409, _envelope(
+            "server_error", "drift_blocked",
+            f"model {body.get('model')!r} is blocked pending drift review "
+            f"(reference {body.get('reference')!r}).")
     if err.status == 503 or kind == "connection_failed":
         return 503, _envelope(
             "server_error", "unavailable",

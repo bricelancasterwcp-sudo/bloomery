@@ -63,6 +63,7 @@ class Session:
         self.keep_reasoning = keep_reasoning
         self._sent_messages: list[dict] = []
         self._open_assistant_turn = False
+        self._sent_tools = None
 
     @staticmethod
     def _normalize_tool_call(call, message_index: int):
@@ -212,6 +213,14 @@ class Session:
         ever assigned after normalization has fully succeeded -- so a
         caller that fixes the bad request and retries finds this session
         exactly as it was.
+
+        Fix wave (final review): a caller (`server.py`) may still fail to
+        actually deliver `delta` to the daemon after this returns (a 409 or
+        413 mid-flight is routine, not exceptional). `next_delta` itself
+        stays mutating -- unwinding that failure is `snapshot`/`restore`'s
+        job, not this method's -- so every existing caller of `next_delta`
+        (including this module's own test suite, which calls it back to
+        back without an intervening commit step) keeps working unchanged.
         """
         # A per-message copy, not just a copy of the outer list: a caller
         # that mutates a message dict in place after this call must not be
@@ -224,7 +233,20 @@ class Session:
         # that did not happen.
         messages = [Session._normalize_message(m, i) for i, m in enumerate(messages)]
         had_history = bool(self._sent_messages)
-        is_extension = had_history and self._is_extension(self._sent_messages, messages)
+
+        # Fix wave, Important 3: a changed `tools` array is divergence too.
+        # The append path never re-renders `tools` (`render_turns` does not
+        # even accept it), so if the client's tool set differs from what is
+        # actually baked into the resident KV's `<tools>` block, an append
+        # would leave the model's context stale while this adapter parses
+        # against the NEW schema -- exactly the silent-corruption class
+        # `_is_extension` already exists to catch for `messages`. Compared
+        # by plain equality (order-sensitive, like the template itself):
+        # only ever checked once history exists, since there is nothing to
+        # diverge from on the first turn.
+        tools_diverged = had_history and tools != self._sent_tools
+        is_extension = (had_history and not tools_diverged
+                         and self._is_extension(self._sent_messages, messages))
 
         if is_extension and self.keep_reasoning:
             new = messages[len(self._sent_messages):]
@@ -234,21 +256,41 @@ class Session:
             self._open_assistant_turn = True
             return delta, False
 
-        # Full render path. This is reached for three distinct reasons:
+        # Full render path. This is reached for four distinct reasons:
         #   - first turn of the session (had_history is False);
         #   - the client rewrote history rather than appending (a real
         #     divergence: is_extension is False despite had_history);
+        #   - the client's tool set changed (also a real divergence);
         #   - keep_reasoning=False on an otherwise-legitimate append (spec's
         #     option B: no reuse, by deliberate choice, not a divergence).
-        # Only the middle case is a reset -- the client did something the
-        # adapter cannot trust. The third case is the adapter choosing not
-        # to reuse a resident KV it could have reused; that is not the
+        # Only the middle two cases are a reset -- the client did something
+        # the adapter cannot trust. The last case is the adapter choosing
+        # not to reuse a resident KV it could have reused; that is not the
         # client's fault, so was_reset must stay False.
         delta = self.template.render_initial(messages, tools)
         self._sent_messages = messages
+        self._sent_tools = tools
         self._open_assistant_turn = True
         was_reset = had_history and not is_extension
         return delta, was_reset
+
+    def snapshot(self) -> tuple:
+        """An opaque capture of everything `next_delta` and
+        `record_generation` mutate, taken BEFORE calling `next_delta` --
+        so that if the caller's downstream send of the resulting delta is
+        never actually accepted (the daemon call raises), `restore` can
+        undo `next_delta`'s mutation and leave the session byte-for-byte as
+        it was. Treat the return value as opaque; it is a plain tuple only
+        so `Session` never needs a second, parallel state-holding type.
+        """
+        return (self._sent_messages, self._open_assistant_turn, self._sent_tools)
+
+    def restore(self, snapshot: tuple) -> None:
+        """Undo the mutation of a `next_delta` (and, if it was also called,
+        `record_generation`) call whose output bytes were never actually
+        accepted downstream. `snapshot` must be a value previously returned
+        by `self.snapshot()`, taken before that call."""
+        self._sent_messages, self._open_assistant_turn, self._sent_tools = snapshot
 
     def record_generation(self, raw) -> None:
         """The generated turn is already in the KV; record it so the next

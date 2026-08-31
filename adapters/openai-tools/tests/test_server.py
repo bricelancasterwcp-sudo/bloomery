@@ -72,20 +72,98 @@ class _FakeBloomery:
         pass
 
 
-def _post(port, payload):
+class _ResetTrackingBloomery(_FakeBloomery):
+    """Critical 1: a distinct agent id per `create_agent` call (unlike
+    `_FakeBloomery`'s constant `"a1"`), and records which agent id each
+    `infer` call actually reached and which agent ids were `suspend`ed --
+    so a test can tell whether a reset landed on a genuinely fresh agent
+    and reclaimed the old one."""
+
+    def __init__(self, reply):
+        super().__init__(reply)
+        self._next_id = 0
+        self.infer_agent_ids = []
+        self.suspended = []
+
+    def create_agent(self, model, window_cap=None):
+        self._next_id += 1
+        return f"agent-{self._next_id}"
+
+    def infer(self, agent_id, prompt, max_tokens):
+        self.infer_agent_ids.append(agent_id)
+        return super().infer(agent_id, prompt, max_tokens)
+
+    def suspend(self, agent_id):
+        self.suspended.append(agent_id)
+
+
+class _FailNBloomery(_FakeBloomery):
+    """Critical 2: fails the Nth `infer` call(s) (1-indexed, `fail_calls` a
+    set of attempt numbers) with a routine `BloomeryError` (a 413, exactly
+    the designed-behaviour refusal path per spec §7), then behaves like
+    `_FakeBloomery` otherwise. `all_prompts` records every attempted
+    prompt, successful or not, so a test can compare a failed attempt's
+    bytes against a later retry's."""
+
+    def __init__(self, reply, fail_calls=frozenset()):
+        super().__init__(reply)
+        self.fail_calls = fail_calls
+        self.attempt = 0
+        self.all_prompts = []
+
+    def infer(self, agent_id, prompt, max_tokens):
+        self.attempt += 1
+        self.all_prompts.append(prompt)
+        if self.attempt in self.fail_calls:
+            raise BloomeryError(413, {"error": "prompt_too_large",
+                                      "needed_tokens": 999999, "window_tokens": 1})
+        return super().infer(agent_id, prompt, max_tokens)
+
+
+class _MaxTokensRecordingBloomery(_FakeBloomery):
+    """Important 1 / Minor: records the `max_tokens` value that actually
+    reached `infer`, so a test can check clamping and the
+    `max_completion_tokens` alias without caring about the reply text."""
+
+    def __init__(self, reply):
+        super().__init__(reply)
+        self.max_tokens_seen = []
+
+    def infer(self, agent_id, prompt, max_tokens):
+        self.max_tokens_seen.append(max_tokens)
+        return super().infer(agent_id, prompt, max_tokens)
+
+
+class _CrashingBloomery(_FakeBloomery):
+    """Important 4: an unexpected (non-`BloomeryError`) exception from the
+    client, standing in for a genuine bug rather than a routine daemon
+    refusal -- must still become a generic 500, but with the traceback
+    logged server-side."""
+
+    def infer(self, agent_id, prompt, max_tokens):
+        raise ValueError("unexpected-daemon-side-crash-sentinel")
+
+
+def _post(port, payload, session_id=None):
+    headers = {"Content-Type": "application/json"}
+    if session_id is not None:
+        headers["X-Session-Id"] = session_id
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/v1/chat/completions",
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"}, method="POST")
+        headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=10) as resp:
         return resp.status, json.loads(resp.read().decode())
 
 
-def _post_expect_error(port, payload):
+def _post_expect_error(port, payload, session_id=None):
+    headers = {"Content-Type": "application/json"}
+    if session_id is not None:
+        headers["X-Session-Id"] = session_id
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/v1/chat/completions",
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"}, method="POST")
+        headers=headers, method="POST")
     try:
         urllib.request.urlopen(req, timeout=10)
         raise AssertionError("expected an HTTPError")
@@ -345,6 +423,143 @@ class ServerTest(unittest.TestCase):
         post_with_header("client-a")
         post_with_header("client-b")
         self.assertEqual(fake.agents_created, 2)
+
+    # --- Critical 1: a reset must land on a fresh agent -----------------
+
+    def test_history_rewrite_sends_the_second_prompt_to_a_different_agent(self):
+        port, fake = self._serve(PLAIN, fake_cls=_ResetTrackingBloomery)
+        base = {"model": "m", "tools": TOOLS}
+        _post(port, dict(base, messages=[{"role": "user", "content": "one"}]), "s1")
+        # The client compressed history away: a real divergence, not an
+        # append.
+        _post(port, dict(base, messages=[{"role": "user", "content": "compressed"}]), "s1")
+        self.assertEqual(len(fake.infer_agent_ids), 2)
+        self.assertNotEqual(fake.infer_agent_ids[0], fake.infer_agent_ids[1])
+
+    def test_history_rewrite_suspends_the_old_agent(self):
+        port, fake = self._serve(PLAIN, fake_cls=_ResetTrackingBloomery)
+        base = {"model": "m", "tools": TOOLS}
+        _post(port, dict(base, messages=[{"role": "user", "content": "one"}]), "s1")
+        old_agent = fake.infer_agent_ids[0]
+        _post(port, dict(base, messages=[{"role": "user", "content": "compressed"}]), "s1")
+        self.assertIn(old_agent, fake.suspended)
+
+    def test_keep_reasoning_false_uses_a_fresh_agent_every_turn(self):
+        # keep_reasoning=False is the spec's designated measurement CONTROL:
+        # every turn is a full render (system + tools + entire history), so
+        # every turn also needs a fresh, empty-KV agent -- not just resets.
+        port, fake = self._serve(PLAIN, fake_cls=_ResetTrackingBloomery,
+                                 cfg_extra={"keep_reasoning_in_history": False})
+        base = {"model": "m", "tools": TOOLS}
+        m1 = [{"role": "user", "content": "one"}]
+        _post(port, dict(base, messages=m1), "s1")
+        m2 = m1 + [{"role": "assistant", "content": "sure, here is the answer"},
+                   {"role": "user", "content": "two"}]
+        _post(port, dict(base, messages=m2), "s1")
+        m3 = m2 + [{"role": "assistant", "content": "sure, here is the answer"},
+                   {"role": "user", "content": "three"}]
+        _post(port, dict(base, messages=m3), "s1")
+        self.assertEqual(len(fake.infer_agent_ids), 3)
+        self.assertEqual(len(set(fake.infer_agent_ids)), 3)
+        for prompt in fake.prompts:
+            self.assertIn("<tools>", prompt)   # every turn is a full render
+
+    # --- Important 3: a changed tool set is divergence too --------------
+
+    def test_a_changed_tool_set_forces_a_reset_and_a_fresh_agent(self):
+        port, fake = self._serve(PLAIN, fake_cls=_ResetTrackingBloomery)
+        other_tools = [{"type": "function", "function": {
+            "name": "other_tool", "parameters": {"type": "object", "properties": {}}}}]
+        _, body1 = _post(port, {"model": "m", "tools": TOOLS,
+                                "messages": [{"role": "user", "content": "one"}]}, "s1")
+        own_message = body1["choices"][0]["message"]
+        _post(port, {"model": "m", "tools": other_tools,
+                     "messages": [{"role": "user", "content": "one"}, own_message,
+                                 {"role": "user", "content": "two"}]}, "s1")
+        self.assertEqual(len(fake.infer_agent_ids), 2)
+        self.assertNotEqual(fake.infer_agent_ids[0], fake.infer_agent_ids[1])
+        self.assertIn("<tools>", fake.prompts[1])
+
+    # --- Critical 2: a failed infer must not corrupt session state ------
+
+    def test_a_failed_first_turn_leaves_state_clean_for_an_identical_retry(self):
+        fake = _FailNBloomery(PLAIN, fail_calls={1})
+        cfg = {"model": "m", "template": TPL, "max_tokens": 64}
+        srv = build_server(cfg, fake)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        port = srv.server_port
+
+        payload = {"model": "m", "tools": TOOLS,
+                   "messages": [{"role": "user", "content": "one"}]}
+        status1, _, _ = _post_expect_error(port, payload)
+        self.assertEqual(status1, 413)
+        status2, body2 = _post(port, payload)  # identical retry
+        self.assertEqual(status2, 200)
+        self.assertEqual(len(fake.all_prompts), 2)
+        self.assertEqual(fake.all_prompts[0], fake.all_prompts[1])
+        self.assertIn("<tools>", fake.all_prompts[1])
+        self.assertIn("one", fake.all_prompts[1])
+
+    def test_a_failed_mid_conversation_turn_leaves_state_clean_for_an_identical_retry(self):
+        fake = _FailNBloomery(PLAIN, fail_calls={2})  # turn 1 succeeds, turn 2 fails
+        cfg = {"model": "m", "template": TPL, "max_tokens": 64}
+        srv = build_server(cfg, fake)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        port = srv.server_port
+
+        base = {"model": "m", "tools": TOOLS}
+        _, body1 = _post(port, dict(base, messages=[{"role": "user", "content": "one"}]))
+        own_message = body1["choices"][0]["message"]
+        turn2 = dict(base, messages=[
+            {"role": "user", "content": "one"}, own_message,
+            {"role": "user", "content": "two"}])
+        status2, _, _ = _post_expect_error(port, turn2)
+        self.assertEqual(status2, 413)
+        status3, _ = _post(port, turn2)  # identical retry
+        self.assertEqual(status3, 200)
+        # attempt 2 (failed) and attempt 3 (retry) must be byte-identical --
+        # the previous bug produced a stunted 41-byte delta with the user's
+        # question silently dropped instead.
+        self.assertEqual(fake.all_prompts[1], fake.all_prompts[2])
+        self.assertIn("two", fake.all_prompts[2])
+
+    # --- Important 1 / Minor: max_tokens clamping and alias -------------
+
+    def test_max_tokens_is_clamped_to_the_configured_cap(self):
+        port, fake = self._serve(PLAIN, fake_cls=_MaxTokensRecordingBloomery,
+                                 cfg_extra={"max_tokens_cap": 4096})
+        _post(port, {"model": "m", "tools": TOOLS, "max_tokens": 128000,
+                     "messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(fake.max_tokens_seen[-1], 4096)
+
+    def test_max_tokens_under_the_cap_is_passed_through_unchanged(self):
+        port, fake = self._serve(PLAIN, fake_cls=_MaxTokensRecordingBloomery,
+                                 cfg_extra={"max_tokens_cap": 4096})
+        _post(port, {"model": "m", "tools": TOOLS, "max_tokens": 100,
+                     "messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(fake.max_tokens_seen[-1], 100)
+
+    def test_max_completion_tokens_is_honoured_as_an_alias_for_max_tokens(self):
+        port, fake = self._serve(PLAIN, fake_cls=_MaxTokensRecordingBloomery)
+        _post(port, {"model": "m", "tools": TOOLS, "max_completion_tokens": 77,
+                     "messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(fake.max_tokens_seen[-1], 77)
+
+    # --- Important 4: diagnostics on an unexpected exception ------------
+
+    def test_unexpected_exception_logs_a_traceback_and_returns_a_generic_500(self):
+        port, _ = self._serve(CALL, fake_cls=_CrashingBloomery)
+        with self.assertLogs("openai_tools.server", level="ERROR") as logs:
+            status, raw, body = _post_expect_error(port, {
+                "model": "m", "tools": TOOLS,
+                "messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(status, 500)
+        self.assertEqual(body["error"]["message"], "internal error")
+        self.assertNotIn("unexpected-daemon-side-crash-sentinel", raw)
+        self.assertTrue(
+            any("unexpected-daemon-side-crash-sentinel" in entry for entry in logs.output))
 
 
 if __name__ == "__main__":
