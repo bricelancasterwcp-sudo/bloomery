@@ -226,6 +226,25 @@ class Session:
         return reasoning_content if isinstance(reasoning_content, str) else None
 
     @staticmethod
+    def _content_identity(content):
+        """Two spellings of "no text" collapse to the same identity:
+        `None` and `""`. This is exactly the shape of a tool-call turn --
+        the OpenAI wire format defines `content` and `tool_calls` as
+        alternatives, so this adapter returns `content: None` when
+        `tool_calls` are present, while a client (live-measured against
+        hermes) may echo that same turn back with `content: ""`, or vice
+        versa. The template renders either as zero visible characters
+        (`render_content` treats `none` as `''`, and `''|trim` is also
+        `''`), so they are the SAME rendered bytes and must compare equal.
+
+        Any actual string, including a non-empty one, is returned as-is:
+        the equivalence is only between the two empty spellings -- `"x"`
+        vs `""` and `"x"` vs `None` must still compare unequal, the same
+        as before this normalization existed.
+        """
+        return None if content is None or content == "" else content
+
+    @staticmethod
     def _is_extension(previous: list[dict], current: list[dict]) -> bool:
         # Full SEMANTIC message identity: everything the template actually
         # renders for a message, not a role/content subset. An assistant
@@ -241,7 +260,8 @@ class Session:
             return False
         for old, new in zip(previous, current):
             if (old.get("role") != new.get("role")
-                    or old.get("content") != new.get("content")
+                    or (Session._content_identity(old.get("content"))
+                        != Session._content_identity(new.get("content")))
                     or Session._reasoning_identity(old) != Session._reasoning_identity(new)
                     or (Session._tool_call_identity(old.get("tool_calls"))
                         != Session._tool_call_identity(new.get("tool_calls")))):

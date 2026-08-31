@@ -391,6 +391,65 @@ class SessionTest(unittest.TestCase):
         self.assertFalse(reset)
         self.assertNotIn("<tools>", delta)
 
+    def test_none_content_echoed_back_as_empty_string_is_still_an_append(self):
+        # Live finding (2026-08-31, measured against hermes): the adapter
+        # returns content: None on a tool-call turn (correct per the
+        # OpenAI shape, since content and tool_calls are mutually
+        # exclusive on the wire). hermes echoes that same turn back with
+        # content: "". Both spellings mean "no text" -- exactly the case
+        # for a tool-call turn -- so they must compare equal. Before this
+        # fix, `None != ""` made _is_extension see every tool-call turn as
+        # changed, forcing a reset (and a full <tools> re-render) on every
+        # single turn -- silently defeating the prefill-once property that
+        # is this adapter's entire economic justification.
+        s = Session("none_vs_empty", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        generated = {"role": "assistant", "content": None, "tool_calls": TC_A}
+        s.record_generation(generated)
+        echoed = {"role": "assistant", "content": "", "tool_calls": TC_A}
+        tool_result = {"role": "tool", "tool_call_id": "call_1", "content": "ok"}
+        delta, reset = s.next_delta([U1, echoed, tool_result], TOOLS)
+        self.assertFalse(reset)
+        self.assertNotIn("<tools>", delta)
+
+    def test_empty_string_content_echoed_back_as_none_is_still_an_append(self):
+        # The mirror direction of the same equivalence: an adapter-side ""
+        # echoed back by a client as None must also be an append, not a
+        # reset -- the normalization is symmetric.
+        s = Session("empty_vs_none", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        generated = {"role": "assistant", "content": "", "tool_calls": TC_A}
+        s.record_generation(generated)
+        echoed = {"role": "assistant", "content": None, "tool_calls": TC_A}
+        tool_result = {"role": "tool", "tool_call_id": "call_1", "content": "ok"}
+        delta, reset = s.next_delta([U1, echoed, tool_result], TOOLS)
+        self.assertFalse(reset)
+        self.assertNotIn("<tools>", delta)
+
+    def test_content_x_vs_empty_string_still_resets(self):
+        # Guard against over-normalising: the equivalence is only between
+        # the two EMPTY spellings (None and ""). A turn with actual text
+        # is not "no text" under either spelling and must still reset.
+        s = Session("x_vs_empty", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        assistant_x = {"role": "assistant", "content": "x"}
+        s.next_delta([U1, assistant_x, U2], TOOLS)
+        assistant_empty = {"role": "assistant", "content": ""}
+        delta, reset = s.next_delta([U1, assistant_empty, U2], TOOLS)
+        self.assertTrue(reset)
+        self.assertIn("<tools>", delta)
+
+    def test_content_x_vs_none_still_resets(self):
+        # Same guard, the other empty spelling.
+        s = Session("x_vs_none", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        assistant_x = {"role": "assistant", "content": "x"}
+        s.next_delta([U1, assistant_x, U2], TOOLS)
+        assistant_none = {"role": "assistant", "content": None}
+        delta, reset = s.next_delta([U1, assistant_none, U2], TOOLS)
+        self.assertTrue(reset)
+        self.assertIn("<tools>", delta)
+
 
 class RetryStateTest(unittest.TestCase):
     """Spec's 2026-08-31 amendment "the retry state" (from the live
@@ -504,6 +563,25 @@ class RetryStateTest(unittest.TestCase):
         self.s.record_generation(GEN)
         same_tools_new_list = list(TOOLS)
         self.assertTrue(self.s.is_retry([U1], same_tools_new_list))
+
+    def test_is_retry_recognises_a_retry_differing_only_by_none_vs_empty_content(self):
+        # is_retry reuses _is_extension's own per-message comparison rather
+        # than a second one (see the class docstring) -- so the None/""
+        # content normalization must be inherited automatically, not
+        # re-implemented. A retry whose only difference from the client
+        # view is None vs "" content on the assistant turn must still be
+        # recognised as a retry.
+        s = Session("retry_none_vs_empty", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        s.record_generation({"role": "assistant", "content": None, "tool_calls": TC_A})
+        tool_result = {"role": "tool", "tool_call_id": "call_1", "content": "ok"}
+        turn2_request = [U1, {"role": "assistant", "content": None, "tool_calls": TC_A},
+                          tool_result]
+        s.next_delta(turn2_request, TOOLS)
+        s.record_generation(GEN)
+        retried_with_empty_content = [U1, {"role": "assistant", "content": "",
+                                            "tool_calls": TC_A}, tool_result]
+        self.assertTrue(s.is_retry(retried_with_empty_content, TOOLS))
 
 
 if __name__ == "__main__":
