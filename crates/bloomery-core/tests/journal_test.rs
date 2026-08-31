@@ -412,6 +412,16 @@ fn committed_g2_journal_still_replays() {
     // *future* committed journal is picked up automatically without anyone
     // remembering to add a case for it. Path is relative to the workspace
     // root.
+    //
+    // The sweep is non-recursive, and that is the escape hatch: evidence that
+    // is JSONL but *not* a bloomery journal — an OpenAI wire capture, a
+    // proxy transcript — belongs in `evidence/captures/`, which this loop
+    // never descends into. Do not weaken the filter here to accommodate such
+    // a file. The invariant worth keeping is the strong one: anything named
+    // `*.jsonl` directly under `evidence/` must replay as a journal. This
+    // test earned that phrasing on 2026-08-31, when a hermes capture was
+    // committed beside the journals and turned the whole suite red — working
+    // exactly as designed, on a misfiled artifact.
     let evidence_dir =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/superpowers/evidence");
     let journal_paths: Vec<_> = std::fs::read_dir(&evidence_dir)

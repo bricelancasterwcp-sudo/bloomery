@@ -148,9 +148,12 @@ retry may or may not want the previous answer replayed.
 
 - `2026-08-31-openai-adapter-acceptance-adapter.log` — the adapter's
   structured per-request log, showing the session/agent/reset pattern.
-- `2026-08-31-openai-adapter-acceptance-hermes-capture.jsonl` — every
+- `captures/2026-08-31-openai-adapter-acceptance-hermes-capture.jsonl` — every
   request and response between hermes and the adapter, captured by a
-  throwaway proxy, including the two identical requests.
+  throwaway proxy, including the two identical requests. It lives under
+  `captures/` rather than beside this document because it is an OpenAI wire
+  record, not a bloomery journal, and `journal_test.rs` replays every `*.jsonl`
+  directly under `evidence/` as a journal.
 
 
 ---
