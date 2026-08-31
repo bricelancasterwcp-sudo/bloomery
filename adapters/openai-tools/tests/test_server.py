@@ -196,6 +196,36 @@ def _post(port, payload, session_id=None):
         return resp.status, json.loads(resp.read().decode())
 
 
+def _post_sse(port, payload, session_id=None):
+    headers = {"Content-Type": "application/json"}
+    if session_id is not None:
+        headers["X-Session-Id"] = session_id
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/v1/chat/completions",
+        data=json.dumps(payload).encode(),
+        headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return resp.status, resp.headers.get("Content-Type"), resp.read().decode()
+
+
+def _sse_data_lines(raw: str) -> list[str]:
+    """Every `data: ...` payload in an SSE body, in order, as the raw text
+    after the `data: ` prefix (still `[DONE]` for the terminal one -- a
+    caller that needs JSON decodes every entry except that one itself, so
+    a malformed non-DONE line fails the test loudly instead of being
+    silently skipped). Asserts every event block is well-formed (`data: `
+    prefix, blank-line terminated) rather than best-effort parsing it.
+    """
+    lines = []
+    for block in raw.split("\n\n"):
+        block = block.strip("\n")
+        if not block:
+            continue
+        assert block.startswith("data: "), f"not a well-formed SSE data line: {block!r}"
+        lines.append(block[len("data: "):])
+    return lines
+
+
 def _post_expect_error(port, payload, session_id=None):
     headers = {"Content-Type": "application/json"}
     if session_id is not None:
@@ -821,6 +851,136 @@ class ServerTest(unittest.TestCase):
         # distinct agent (turn 1's initial agent, then a reset per re-infer).
         self.assertEqual(len(fake.infer_agent_ids), 3)
         self.assertEqual(len(set(fake.infer_agent_ids)), 3)
+
+
+    # --- Streaming (buffered SSE), the amended §8 -----------------------
+    # From the live acceptance run: every real hermes chat request carries
+    # `stream: true` (the `request_dump_*.json` fixtures used to write the
+    # non-streaming tests above are error dumps, not a sample of normal
+    # traffic -- see the spec's process note). Without SSE, hermes fails
+    # before a session ever starts. This is buffered, not token-
+    # incremental: the whole reply is generated before anything is
+    # emitted, same limitation as bloomery's own `/v1` (`api_v1.rs`,
+    # "Streaming (D3)").
+
+    def test_streaming_request_gets_event_stream_content_type_and_terminal_done(self):
+        port, _ = self._serve(PLAIN)
+        status, content_type, raw = _post_sse(port, {
+            "model": "m", "tools": TOOLS, "stream": True,
+            "messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(status, 200)
+        self.assertEqual(content_type, "text/event-stream")
+        lines = _sse_data_lines(raw)
+        self.assertEqual(lines[-1], "[DONE]")
+
+    def test_every_streamed_chunk_is_valid_json_shaped_as_a_chat_completion_chunk(self):
+        port, _ = self._serve(PLAIN)
+        _, _, raw = _post_sse(port, {
+            "model": "m", "tools": TOOLS, "stream": True,
+            "messages": [{"role": "user", "content": "hi"}]})
+        lines = _sse_data_lines(raw)
+        for line in lines[:-1]:  # every line except the terminal [DONE]
+            chunk = json.loads(line)  # raises loudly if this isn't valid JSON
+            self.assertEqual(chunk["object"], "chat.completion.chunk")
+
+    def test_a_streamed_text_reply_carries_content_in_a_delta_and_a_final_stop(self):
+        port, _ = self._serve(PLAIN)
+        _, _, raw = _post_sse(port, {
+            "model": "m", "tools": TOOLS, "stream": True,
+            "messages": [{"role": "user", "content": "hi"}]})
+        chunks = [json.loads(line) for line in _sse_data_lines(raw)[:-1]]
+        self.assertEqual(chunks[0]["choices"][0]["delta"]["content"],
+                         "sure, here is the answer")
+        self.assertEqual(chunks[0]["choices"][0]["delta"]["role"], "assistant")
+        self.assertIsNone(chunks[0]["choices"][0]["finish_reason"])
+        self.assertEqual(chunks[-1]["choices"][0]["finish_reason"], "stop")
+        self.assertEqual(chunks[-1]["choices"][0]["delta"], {})
+
+    def test_a_streamed_tool_call_carries_an_index_on_each_delta_tool_call(self):
+        # The detail that most often breaks a client: omitting `index` is
+        # the usual reason a client silently drops a streamed tool call.
+        port, _ = self._serve(CALL)
+        _, _, raw = _post_sse(port, {
+            "model": "m", "tools": TOOLS, "stream": True,
+            "messages": [{"role": "user", "content": "ls"}]})
+        chunks = [json.loads(line) for line in _sse_data_lines(raw)[:-1]]
+        call = chunks[0]["choices"][0]["delta"]["tool_calls"][0]
+        self.assertEqual(call["index"], 0)
+        self.assertEqual(call["type"], "function")
+        self.assertIn("id", call)
+        self.assertEqual(call["function"]["name"], "terminal")
+        self.assertEqual(json.loads(call["function"]["arguments"]), {"command": "ls /tmp"})
+        self.assertEqual(chunks[-1]["choices"][0]["finish_reason"], "tool_calls")
+
+    def test_include_usage_produces_a_usage_chunk_with_empty_choices(self):
+        port, _ = self._serve(PLAIN)
+        _, _, raw = _post_sse(port, {
+            "model": "m", "tools": TOOLS, "stream": True,
+            "stream_options": {"include_usage": True},
+            "messages": [{"role": "user", "content": "hi"}]})
+        chunks = [json.loads(line) for line in _sse_data_lines(raw)[:-1]]
+        usage_chunks = [c for c in chunks if "usage" in c]
+        self.assertEqual(len(usage_chunks), 1)
+        self.assertEqual(usage_chunks[0]["choices"], [])
+        self.assertEqual(usage_chunks[0]["usage"]["prompt_tokens"], 10)
+        self.assertEqual(usage_chunks[0]["usage"]["completion_tokens"], 5)
+
+    def test_without_include_usage_no_usage_chunk_is_emitted(self):
+        port, _ = self._serve(PLAIN)
+        _, _, raw = _post_sse(port, {
+            "model": "m", "tools": TOOLS, "stream": True,
+            "messages": [{"role": "user", "content": "hi"}]})
+        chunks = [json.loads(line) for line in _sse_data_lines(raw)[:-1]]
+        self.assertFalse(any("usage" in c for c in chunks))
+
+    def test_bloomery_error_on_a_streaming_request_stays_a_json_error_not_a_streamed_200(self):
+        # The honest-refusal path (spec §7) must survive streaming: a
+        # refusal that happens before any chunk is emitted stays an
+        # ordinary JSON error with its real HTTP status. This is the
+        # ordering consequence of buffering -- SSE headers are never
+        # written until inference has actually succeeded.
+        class _RefusingBloomery(_FakeBloomery):
+            def infer(self, agent_id, prompt, max_tokens):
+                raise BloomeryError(413, {"error": "prompt_too_large",
+                                          "needed_tokens": 900, "window_tokens": 512})
+
+        port, _ = self._serve(CALL, fake_cls=_RefusingBloomery)
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/v1/chat/completions",
+            data=json.dumps({"model": "m", "tools": TOOLS, "stream": True,
+                             "messages": [{"role": "user", "content": "go"}]}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            urllib.request.urlopen(req, timeout=10)
+            raise AssertionError("expected an HTTPError")
+        except urllib.error.HTTPError as exc:
+            self.assertEqual(exc.code, 413)
+            self.assertEqual(exc.headers.get("Content-Type"), "application/json")
+            with exc:
+                body = json.loads(exc.read().decode())
+        self.assertEqual(body["error"]["code"], "context_length_exceeded")
+
+    def test_stream_false_explicit_returns_the_ordinary_json_response_unchanged(self):
+        port, _ = self._serve(PLAIN)
+        status, body = _post(port, {"model": "m", "tools": TOOLS, "stream": False,
+                                    "messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["object"], "chat.completion")
+
+    def test_a_streamed_retry_replays_as_sse_with_no_second_inference(self):
+        # Streaming is a presentation concern only -- the retry/append/
+        # rewrite session logic underneath is unchanged, so a streaming
+        # client's byte-identical retry still replays without a second
+        # inference or a new agent, just rendered as SSE this time.
+        port, fake = self._serve(PLAIN, fake_cls=_ResetTrackingBloomery)
+        payload = {"model": "m", "tools": TOOLS, "stream": True,
+                   "messages": [{"role": "user", "content": "one"}]}
+        _post_sse(port, payload, "s1")
+        status, content_type, raw = _post_sse(port, payload, "s1")
+        self.assertEqual(status, 200)
+        self.assertEqual(content_type, "text/event-stream")
+        self.assertEqual(_sse_data_lines(raw)[-1], "[DONE]")
+        self.assertEqual(len(fake.infer_agent_ids), 1)  # replay, no second inference
 
 
 if __name__ == "__main__":
