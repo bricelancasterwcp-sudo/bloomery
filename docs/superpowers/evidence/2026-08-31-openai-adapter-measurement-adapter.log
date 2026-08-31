@@ -1,0 +1,4 @@
+{"session": "8c0e8e97b4baed5fef2846a8e9b92b84bb6ea97f62ac0411051c2902821d57fe", "agent": "a27", "reset": false, "delta_bytes": 23420, "prompt_tokens": 5895, "completion_tokens": 63, "outcome": "ok"}
+{"session": "8c0e8e97b4baed5fef2846a8e9b92b84bb6ea97f62ac0411051c2902821d57fe", "agent": "a27", "reset": false, "delta_bytes": 147, "prompt_tokens": 32, "completion_tokens": 146, "outcome": "ok"}
+{"session": "8c0e8e97b4baed5fef2846a8e9b92b84bb6ea97f62ac0411051c2902821d57fe", "agent": "a27", "reset": false, "delta_bytes": 785, "prompt_tokens": 212, "completion_tokens": 51, "outcome": "ok"}
+{"session": "8c0e8e97b4baed5fef2846a8e9b92b84bb6ea97f62ac0411051c2902821d57fe", "agent": "a27", "reset": false, "delta_bytes": 215, "prompt_tokens": 54, "completion_tokens": 92, "outcome": "ok"}

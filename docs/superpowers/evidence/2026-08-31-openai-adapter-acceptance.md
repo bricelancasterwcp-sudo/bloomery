@@ -1,4 +1,4 @@
-# OpenAI tools adapter — live acceptance (Task 6): **PARTIAL**
+# OpenAI tools adapter — live acceptance (Task 6): **PARTIAL**, superseded by the 2026-08-31 measurement arc below
 
 **Date:** 2026-08-31. Governs
 `docs/superpowers/plans/2026-08-31-openai-tools-adapter.md` Task 6, the
@@ -151,3 +151,82 @@ retry may or may not want the previous answer replayed.
 - `2026-08-31-openai-adapter-acceptance-hermes-capture.jsonl` — every
   request and response between hermes and the adapter, captured by a
   throwaway proxy, including the two identical requests.
+
+
+---
+
+# Addendum: the measurement arc — **PASS**
+
+Recorded 2026-08-31, after the fixes the PARTIAL verdict above motivated.
+Master `b1849c8`. Same task every run, driven by a real hermes session under
+an isolated `HERMES_HOME`, tools **actually executing** (no `--safe-mode`).
+
+## What blocked it, and what it cost to find
+
+**Streaming was not optional.** §8 deferred it because "the captured hermes
+requests carry no `stream` key". That reasoning was sourced from
+`request_dump_*.json` files — which hermes writes **only when a call fails**.
+Error dumps describe how a system fails, never how it normally behaves.
+Captured live, every request carries `stream: true` with
+`stream_options: {"include_usage": true}`; without SSE the client reports
+*"Provider returned an empty stream with no finish_reason"* and the session
+never begins.
+
+**Then three message-identity defects, each found by measurement rather than
+review, each silent.** The adapter emits `content: null` alongside
+`tool_calls` (correct OpenAI) while hermes echoes `''`; two different
+malformed `arguments` compared equal; and hermes **reorders argument keys**
+on echo. Every one caused a reset on every turn — and because the task still
+completed correctly each time, nothing looked wrong. The adapter's entire
+economic justification was producing nothing, invisibly.
+
+## The measurement
+
+| run | fixes in place | requests | resets | agents | `prompt_tokens` | not re-prefilled |
+|---|---|---|---|---|---|---|
+| 1 | streaming only | 4 | 3 | 4 | 5893, 6293, 6388, 6607 | **−1,609** |
+| 2 | + `content` null/'' | 3 | 1 | 2 | 5891, 6236, 54 | +5,492 |
+| 3 | + arguments identity | 4 | 1 | 2 | 5889, 6234, 1670, 54 | — |
+| 4 | + order-insensitive | 4 | **0** | **1** | 5895, **32, 212, 54** | **+17,387** |
+
+**The prefill-once property holds end to end with the real client.** Run 4 is
+one agent, zero resets, a single full preamble followed by deltas of 32, 212
+and 54 tokens.
+
+**Functionally correct in every run**, including run 1: the agent created the
+directory, wrote three files with the right contents (verified on disk),
+listed them, and reported accurately.
+
+## The pre-registered question, answered
+
+"A poor parse rate is a finding, not a failure" — the question was
+**unanswered** in the PARTIAL run above. It is now answered, though modestly:
+across the measurement arc every tool call the untrained
+`qwen36-reap48-ours` produced was well-formed and correctly targeted, and no
+turn failed to parse. That is a handful of trajectories, not a rate; it is
+enough to say the direction is not blocked by parse quality, and not enough
+to publish a number.
+
+## A ruling reversed, and why it is recorded
+
+An earlier review made `arguments` comparison order-sensitive, reasoning that
+the template renders `arguments|items` in dict order. True, but it does not
+imply resetting on reorder: order matters only if the historical assistant
+turn is **re-rendered**, and the append path never re-renders it while the
+reset path re-renders from the client's current messages. The final review
+built an instrument comparing identity against rendered bytes, could not
+construct a counterexample, and confirmed by execution that the reordered
+turn is never rendered — the append delta is 104 bytes containing no
+`<function=` at all.
+
+## Still carried
+
+- The tier fits **one** context (§3 above). Unchanged.
+- hermes's **132-tool** preamble (40,003 tokens) still exceeds the ~34,000
+  ceiling; the measurement used smaller toolsets that fit comfortably.
+- `_arguments_identity` still collapses non-string, non-dict `arguments`
+  (a list, bool or int) to an empty identity, and such a value reaches jinja
+  as a bare `TypeError` → 500 rather than `UnrenderableMessage` → 400.
+  **Pre-existing at base**, not introduced by these fixes, and unreachable
+  from a conforming client since OpenAI defines `arguments` as a string.
+- Test-harness socket `ResourceWarning`s (36 at base, 45 at head).
