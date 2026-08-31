@@ -71,6 +71,29 @@ class SessionTest(unittest.TestCase):
             [U1, {"role": "assistant", "content": GEN}, U2], TOOLS)
         self.assertFalse(reset)
 
+    def test_default_keep_reasoning_is_true(self):
+        self.assertTrue(self.s.keep_reasoning)
+
+    def test_second_turn_resends_full_render_when_keep_reasoning_is_false(self):
+        s = Session("a2", ChatTemplate.load(TPL), keep_reasoning=False)
+        s.next_delta([U1], TOOLS)
+        s.record_generation(GEN)
+        assistant = {"role": "assistant", "content": GEN}
+        delta, _ = s.next_delta([U1, assistant, U2], TOOLS)
+        self.assertIn("<tools>", delta)   # option B: no reuse, full render every turn
+
+    def test_declining_reuse_via_keep_reasoning_false_is_not_a_reset(self):
+        # The client did nothing wrong here -- it's a legitimate append. We
+        # are choosing not to reuse the KV, which is a deliberate design
+        # tradeoff (spec's option B), not a divergence. A later reader must
+        # not "fix" this by making it True.
+        s = Session("a3", ChatTemplate.load(TPL), keep_reasoning=False)
+        s.next_delta([U1], TOOLS)
+        s.record_generation(GEN)
+        assistant = {"role": "assistant", "content": GEN}
+        _, reset = s.next_delta([U1, assistant, U2], TOOLS)
+        self.assertFalse(reset)
+
 
 if __name__ == "__main__":
     unittest.main()
