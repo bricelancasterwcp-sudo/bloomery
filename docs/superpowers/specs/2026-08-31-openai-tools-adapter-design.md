@@ -75,6 +75,30 @@ everywhere it is used:
 | **fixed floor, before any conversation** | 87,726 | **~21,931** |
 | observed session messages | 441,678 | ~110,419 |
 
+> **Corrected 2026-08-31, after the final whole-branch review.** The row above
+> was taken from a single captured request and is **not representative** — it
+> is near the low end. Measured across all **58** captured hermes requests
+> that carry a tool set: the tool count ranges **2 to 132** (median 45), the
+> serialised schemas run 6,673 to **145,650** chars (median 75,962 ≈ 18,990
+> tokens, max ≈ 36,412), and the median system prompt is 21,281 chars. The
+> **worst-case fixed floor is ≈41,970 tokens**, nearly double the 21,931
+> quoted above, and the median is ≈24k rather than ~22k.
+>
+> Two consequences, both strengthening rather than weakening this section.
+> First, §2's kill of Hermes-4 36B becomes more decisive, not less: at
+> 262,144 B/token that floor costs **≈11.0 GiB of KV alone**, against the same
+> ≈14.9 GiB budget, so the model is out by a wider margin than the original
+> arithmetic showed. On `qwen36-reap48-ours` at 20,480 B/token the same floor
+> costs ≈0.80 GiB — still comfortable. Second, the prefill-once benefit that
+> justifies §6 is **larger** than claimed, since it is a median ≈24k and
+> worst-case ≈42k tokens saved per turn rather than ~22k.
+>
+> One caveat this correction introduces: a ≈42k-token preamble against a
+> 98k–103k window leaves materially less room for conversation than the
+> original figure implied, so window exhaustion (§7's 413 path) will arrive
+> sooner in a long session than this spec first suggested. All figures remain
+> chars/4 estimates, not tokenizer output.
+
 At 256 KiB/token the ~22k floor costs **5.5 GiB of KV alone**, against a
 usable budget of ≈14.9 GiB (15.92 GiB card less ~1.0 GiB desktop):
 
