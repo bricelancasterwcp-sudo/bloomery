@@ -400,17 +400,27 @@ def parse_tool_calls(visible: str, tools):
         return None
     calls = []
     for block in blocks:
-        func = _FUNC.search(block)
-        if not func:
-            return None
-        name, body = func.group(1), func.group(2)
+        # Corrected 2026-08-31 after the Task 2 review: `.search` found only
+        # the FIRST function, so a block carrying two calls returned the first
+        # and silently discarded the second.
+        funcs = _FUNC.findall(block)
+        if len(funcs) != 1:
+            return None  # zero, or a second call that would be dropped
+        name, body = funcs[0]
         properties = _schema_for(tools, name)
         if properties is None:
             return None  # a name the caller never offered
+        # The format carries no escaping, so a value containing the literal
+        # `</parameter>` cannot be delimited. Refuse rather than truncate it
+        # into a plausible-looking wrong value.
+        if body.count("<parameter=") != body.count("</parameter>"):
+            return None
         args = {}
         for key, raw_value in _PARAM.findall(body):
+            if key not in properties:
+                return None  # a parameter the tool never declared
             try:
-                args[key] = _coerce(raw_value, properties.get(key))
+                args[key] = _coerce(raw_value, properties[key])
             except (ValueError, json.JSONDecodeError):
                 return None  # loudly, rather than passing a wrong type
         calls.append({
@@ -425,6 +435,20 @@ def parse_tool_calls(visible: str, tools):
 
 Run: `python3 -m unittest discover -s adapters/openai-tools/tests -t adapters/openai-tools -v`
 Expected: all Task 1 and Task 2 tests PASS
+
+> **Corrected 2026-08-31, after the Task 2 review.** The reference
+> implementation above originally shipped three fabrication defects, all
+> caught by an adversarial probe rather than by the tests in Step 1 — which
+> is the point: the tests below all passed against the defective parser.
+> Two were Critical. `_FUNC.search` returned the first function in a block
+> and silently discarded any second one (a probe input returned a clean call
+> for `ls` while dropping `rm -rf /`); the `_PARAM` regex truncated any value
+> containing the literal `</parameter>` into a plausible wrong value; and an
+> undeclared parameter name was accepted and coerced as a string. Each now
+> refuses. The regression tests for the three triggers live in
+> `test_toolcall.py` alongside the originals. The lesson is recorded rather
+> than tidied away: a passing suite is exactly where a fabricating parser
+> hides, so the negative space needs attacking, not just covering.
 
 - [ ] **Step 5: Mutation check**
 
