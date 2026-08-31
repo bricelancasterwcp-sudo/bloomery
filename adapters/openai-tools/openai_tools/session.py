@@ -37,10 +37,21 @@ class Session:
 
     @staticmethod
     def _is_extension(previous: list[dict], current: list[dict]) -> bool:
+        # Full message identity, not a role/content subset: an assistant
+        # turn carrying tool_calls has content "" or None, so two DIFFERENT
+        # tool-call turns can compare equal on role+content alone. That
+        # would misclassify a client's rewritten history as an append and
+        # silently corrupt the KV. `.get("tool_calls")` already treats a
+        # missing key and an explicit `None` as equivalent, since both
+        # return `None` -- no separate normalisation needed. When in doubt,
+        # this must refuse (reset) rather than accept: a false reset costs
+        # performance, a false append costs correctness.
         if len(current) < len(previous):
             return False
         for old, new in zip(previous, current):
-            if old.get("role") != new.get("role") or old.get("content") != new.get("content"):
+            if (old.get("role") != new.get("role")
+                    or old.get("content") != new.get("content")
+                    or old.get("tool_calls") != new.get("tool_calls")):
                 return False
         return True
 
@@ -51,7 +62,11 @@ class Session:
         appending to it — never on the first turn of a session, which is
         simply the initial render.
         """
-        messages = list(messages)
+        # A per-message copy, not just a copy of the outer list: a caller
+        # that mutates a message dict in place after this call must not be
+        # able to silently desync `_sent_messages` from the bytes actually
+        # sent (Finding 2).
+        messages = [dict(m) for m in messages]
         had_history = bool(self._sent_messages)
         is_extension = had_history and self._is_extension(self._sent_messages, messages)
 

@@ -27,6 +27,10 @@ TOOLS = [{"type": "function", "function": {
 U1 = {"role": "user", "content": "first"}
 U2 = {"role": "user", "content": "second"}
 GEN = "\nreasoning\n</think>\n\nan answer"
+TC_A = [{"id": "call_1", "type": "function",
+         "function": {"name": "terminal", "arguments": {"command": "ls"}}}]
+TC_B = [{"id": "call_2", "type": "function",
+         "function": {"name": "terminal", "arguments": {"command": "rm -rf /"}}}]
 
 
 class SessionTest(unittest.TestCase):
@@ -92,6 +96,34 @@ class SessionTest(unittest.TestCase):
         s.record_generation(GEN)
         assistant = {"role": "assistant", "content": GEN}
         _, reset = s.next_delta([U1, assistant, U2], TOOLS)
+        self.assertFalse(reset)
+
+    def test_a_rewritten_tool_call_turn_with_matching_empty_content_still_resets(self):
+        # Finding 1: content alone is not enough identity for a tool-call
+        # turn -- two different tool calls can both carry content "" (or
+        # None). If _is_extension only compared role/content, this would be
+        # misclassified as an append and the delta would be appended onto a
+        # KV cache whose actual contents no longer match -- silent context
+        # corruption. tool_calls must be part of the comparison.
+        self.s.next_delta([U1], TOOLS)
+        assistant_a = {"role": "assistant", "content": "", "tool_calls": TC_A}
+        self.s.next_delta([U1, assistant_a, U2], TOOLS)
+        # The client rewrote history: same position, same empty content,
+        # a DIFFERENT tool call.
+        assistant_b = {"role": "assistant", "content": "", "tool_calls": TC_B}
+        delta, reset = self.s.next_delta([U1, assistant_b, U2], TOOLS)
+        self.assertTrue(reset)
+        self.assertIn("<tools>", delta)   # a reset re-sends the full render
+
+    def test_omitted_and_explicit_none_tool_calls_are_treated_as_equivalent(self):
+        # A client that never sends tool_calls at all, and a client that
+        # sends tool_calls: None, must not be spuriously treated as having
+        # diverged from each other -- both mean "no tool calls here."
+        self.s.next_delta([U1], TOOLS)
+        assistant_omitted = {"role": "assistant", "content": GEN}
+        self.s.next_delta([U1, assistant_omitted, U2], TOOLS)
+        assistant_none = {"role": "assistant", "content": GEN, "tool_calls": None}
+        _, reset = self.s.next_delta([U1, assistant_none, U2], TOOLS)
         self.assertFalse(reset)
 
 
