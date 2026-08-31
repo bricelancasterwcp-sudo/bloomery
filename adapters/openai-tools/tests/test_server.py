@@ -625,6 +625,92 @@ class ServerTest(unittest.TestCase):
         self.assertTrue(
             any("unexpected-daemon-side-crash-sentinel" in entry for entry in logs.output))
 
+    # --- Amendment 2026-08-31 "the retry state" --------------------------
+    # From the live acceptance run: hermes sent a byte-identical request
+    # twice ([system, user], then the same [system, user] again). After
+    # the first succeeded, record_generation had appended the assistant
+    # turn, so the retry -- shorter than the tracked list -- was
+    # misclassified as a history rewrite: reset, fresh agent, and on a
+    # tight tier a 409. This block reproduces that exact sequence and
+    # pins the fix.
+
+    def test_byte_identical_retry_replays_without_a_second_inference_or_new_agent(self):
+        # Reproduces the captured hermes sequence. This is the RED this
+        # task exists to turn GREEN: before the fix, this fails because
+        # the retry is reset onto a second, different agent and re-runs
+        # inference.
+        port, fake = self._serve(PLAIN, fake_cls=_ResetTrackingBloomery)
+        payload = {"model": "m", "tools": TOOLS,
+                   "messages": [{"role": "system", "content": "sys"},
+                               {"role": "user", "content": "one"}]}
+        status1, body1 = _post(port, payload, "s1")
+        status2, body2 = _post(port, payload, "s1")  # byte-identical retry
+        self.assertEqual(status1, 200)
+        self.assertEqual(status2, 200)
+        self.assertEqual(body2, body1)                       # the SAME response
+        self.assertEqual(len(fake.infer_agent_ids), 1)       # no second inference
+        self.assertEqual(len(set(fake.infer_agent_ids)), 1)  # no new agent
+
+    def test_a_second_identical_retry_falls_through_and_reinfers(self):
+        # Bounded at one: after a single replay, a further identical
+        # request must NOT replay again -- it falls through to the
+        # ordinary path, is classified a rewrite by the existing rules
+        # (the tracked list is longer than the retry), and is re-inferred
+        # against a fresh agent. No second counting mechanism: this falls
+        # out of next_delta's own append/rewrite rules once the replay
+        # window has been used.
+        port, fake = self._serve(PLAIN, fake_cls=_ResetTrackingBloomery)
+        payload = {"model": "m", "tools": TOOLS,
+                   "messages": [{"role": "system", "content": "sys"},
+                               {"role": "user", "content": "one"}]}
+        _post(port, payload, "s1")                      # turn 1
+        _post(port, payload, "s1")                       # replay (bounded to one)
+        status3, _ = _post(port, payload, "s1")           # second identical retry
+        self.assertEqual(status3, 200)
+        self.assertEqual(len(fake.infer_agent_ids), 2)    # a real second inference happened
+        self.assertNotEqual(fake.infer_agent_ids[0], fake.infer_agent_ids[1])  # fresh agent
+
+    def test_retry_replay_is_logged(self):
+        port, fake = self._serve(PLAIN, fake_cls=_ResetTrackingBloomery)
+        payload = {"model": "m", "tools": TOOLS,
+                   "messages": [{"role": "user", "content": "one"}]}
+        _post(port, payload, "s1")
+        with self.assertLogs("openai_tools.server", level="INFO") as logs:
+            _post(port, payload, "s1")
+        self.assertTrue(any("retry_replayed" in entry for entry in logs.output))
+
+    def test_a_genuine_append_is_unaffected_by_retry_handling(self):
+        # A genuine follow-up turn (not a retry, not a rewrite) must still
+        # append onto the SAME agent and must not be misread as a retry
+        # replay of the prior response.
+        port, fake = self._serve(PLAIN, fake_cls=_ResetTrackingBloomery)
+        base = {"model": "m", "tools": TOOLS}
+        _, body1 = _post(port, dict(base, messages=[{"role": "user", "content": "one"}]), "s1")
+        own_message = body1["choices"][0]["message"]
+        status2, body2 = _post(port, dict(base, messages=[
+            {"role": "user", "content": "one"}, own_message,
+            {"role": "user", "content": "two"}]), "s1")
+        self.assertEqual(status2, 200)
+        self.assertEqual(len(fake.infer_agent_ids), 2)
+        self.assertEqual(len(set(fake.infer_agent_ids)), 1)   # same agent: append, not reset
+        self.assertNotIn("<tools>", fake.prompts[1])
+        self.assertNotEqual(body2, body1)
+
+    def test_retry_is_recognised_after_a_multi_turn_conversation(self):
+        # Not just turn 1: a retry of a later turn's request must also
+        # replay rather than reset.
+        port, fake = self._serve(PLAIN, fake_cls=_ResetTrackingBloomery)
+        base = {"model": "m", "tools": TOOLS}
+        m1 = [{"role": "user", "content": "one"}]
+        _, body1 = _post(port, dict(base, messages=m1), "s1")
+        own1 = body1["choices"][0]["message"]
+        m2 = m1 + [own1, {"role": "user", "content": "two"}]
+        _, body2 = _post(port, dict(base, messages=m2), "s1")
+        status3, body3 = _post(port, dict(base, messages=m2), "s1")  # retry of turn 2
+        self.assertEqual(status3, 200)
+        self.assertEqual(body3, body2)
+        self.assertEqual(len(fake.infer_agent_ids), 2)   # no third inference
+
 
 if __name__ == "__main__":
     unittest.main()
