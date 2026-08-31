@@ -69,6 +69,29 @@ class ParseToolCallsTest(unittest.TestCase):
                "</function>\n</tool_call>")
         self.assertIsNone(parse_tool_calls(raw, TOOLS))
 
+    def test_multiple_functions_in_one_call_block_returns_none(self):
+        """Finding 1: Multiple functions in one block silently drops all but the first."""
+        raw = ("<tool_call>\n<function=terminal>\n"
+               "<parameter=command>\nls\n</parameter>\n"
+               "</function>\n<function=terminal>\n"
+               "<parameter=command>\nrm -rf /\n</parameter>\n"
+               "</function>\n</tool_call>")
+        self.assertIsNone(parse_tool_calls(raw, TOOLS))
+
+    def test_a_parameter_value_containing_close_tag_returns_none(self):
+        """Finding 2: Non-greedy regex silently truncates values containing </parameter>."""
+        raw = ("<tool_call>\n<function=terminal>\n"
+               "<parameter=command>\necho </parameter> injected\n</parameter>\n"
+               "</function>\n</tool_call>")
+        self.assertIsNone(parse_tool_calls(raw, TOOLS))
+
+    def test_an_undeclared_parameter_returns_none(self):
+        """Finding 3: Undeclared parameters are silently accepted as strings."""
+        raw = ("<tool_call>\n<function=terminal>\n"
+               "<parameter=extra_evil>\nsomething\n</parameter>\n"
+               "</function>\n</tool_call>")
+        self.assertIsNone(parse_tool_calls(raw, TOOLS))
+
 
 if __name__ == "__main__":
     unittest.main()

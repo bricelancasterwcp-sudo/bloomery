@@ -72,15 +72,24 @@ def parse_tool_calls(visible: str, tools):
         return None
     calls = []
     for block in blocks:
-        func = _FUNC.search(block)
-        if not func:
-            return None
-        name, body = func.group(1), func.group(2)
+        # Finding 1: Require exactly one function per block
+        funcs = _FUNC.findall(block)
+        if len(funcs) != 1:
+            return None  # zero or more than one function per block
+        name, body = funcs[0]
         properties = _schema_for(tools, name)
         if properties is None:
             return None  # a name the caller never offered
+
+        # Finding 2: Detect truncated parameter values containing </parameter>
+        if body.count("<parameter=") != body.count("</parameter>"):
+            return None  # malformed parameters, likely truncated value
+
         args = {}
         for key, raw_value in _PARAM.findall(body):
+            # Finding 3: Reject undeclared parameters
+            if key not in properties:
+                return None  # parameter key not in schema
             try:
                 args[key] = _coerce(raw_value, properties.get(key))
             except (ValueError, json.JSONDecodeError):
