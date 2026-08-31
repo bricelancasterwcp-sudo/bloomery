@@ -64,6 +64,14 @@ class Session:
         self._sent_messages: list[dict] = []
         self._open_assistant_turn = False
         self._sent_tools = None
+        # Spec's 2026-08-31 amendment "the retry state": the KV view
+        # (_sent_messages) includes the assistant turn record_generation
+        # appends after a successful generation -- the client never sent
+        # that turn. _client_view is the message list exactly as the
+        # client last actually sent it, BEFORE that append, so a later
+        # byte-identical retry can be told apart from a genuine truncation
+        # (see is_retry). None until the first turn ever completes.
+        self._client_view: list[dict] | None = None
 
     @staticmethod
     def _normalize_tool_call(call, message_index: int):
@@ -162,6 +170,47 @@ class Session:
             identities.append((name, args_items))
         return tuple(identities)
 
+    def is_retry(self, messages: list[dict], tools) -> bool:
+        """True when `messages` is exactly the client view AND `tools`
+        matches what is actually resident, per the spec's 2026-08-31
+        amendment "the retry state" -- the missing third classification
+        the live acceptance run found: an ordinary client retry is
+        otherwise indistinguishable from a truncation once the adapter
+        has appended a turn the client never sent.
+
+        Deliberately reuses `_is_extension`'s own per-message comparison
+        for the `messages` half rather than a second, looser one, so the
+        two can never disagree: a retry is an EQUALITY check, and calling
+        `_is_extension` on two equal-length lists degenerates its
+        zip-and-compare loop into exactly that -- there is still only one
+        implementation of "do these two messages render the same bytes."
+
+        Fix round 1, Finding 1 (live-verified): the messages check alone
+        is not enough. A changed tool set means the resident `<tools>`
+        block is stale, and replaying would silently hide that --
+        divergence must outrank retry, not the other way round. Compared
+        against `_sent_tools`, the SAME store `next_delta`'s own
+        `tools_diverged` check already uses (plain equality, order-
+        sensitive, like the template itself) -- not a second notion of
+        tool identity that could disagree with it.
+
+        Returns False before any turn has ever completed successfully
+        (`_client_view` is still None -- there is nothing yet to retry
+        against). Normalizes `messages` the same way `next_delta` does
+        (arguments coerced to a mapping) before comparing, since
+        `_is_extension` expects that already-normalized shape; may raise
+        `UnrenderableMessage` for the same reason `next_delta` can, and
+        just as harmlessly -- neither this method nor a raise from it
+        mutates any session state.
+        """
+        if self._client_view is None:
+            return False
+        if tools != self._sent_tools:
+            return False
+        normalized = [Session._normalize_message(m, i) for i, m in enumerate(messages)]
+        return (len(normalized) == len(self._client_view)
+                and Session._is_extension(self._client_view, normalized))
+
     @staticmethod
     def _reasoning_identity(message: dict):
         """The template only uses `reasoning_content` when it `is string`
@@ -253,6 +302,7 @@ class Session:
             opener = "<|im_end|>\n" if self._open_assistant_turn else ""
             delta = opener + self.template.render_turns(new) + self.template.GENERATION_SUFFIX
             self._sent_messages = messages
+            self._client_view = messages
             self._open_assistant_turn = True
             return delta, False
 
@@ -269,6 +319,7 @@ class Session:
         # client's fault, so was_reset must stay False.
         delta = self.template.render_initial(messages, tools)
         self._sent_messages = messages
+        self._client_view = messages
         self._sent_tools = tools
         self._open_assistant_turn = True
         was_reset = had_history and not is_extension
@@ -282,15 +333,22 @@ class Session:
         undo `next_delta`'s mutation and leave the session byte-for-byte as
         it was. Treat the return value as opaque; it is a plain tuple only
         so `Session` never needs a second, parallel state-holding type.
+
+        Includes `_client_view`: `next_delta` mutates it eagerly, same as
+        `_sent_messages`, so an undone send must roll back the client view
+        too -- otherwise a retry check right after a failed attempt would
+        compare against the wrong prior state.
         """
-        return (self._sent_messages, self._open_assistant_turn, self._sent_tools)
+        return (self._sent_messages, self._open_assistant_turn, self._sent_tools,
+                self._client_view)
 
     def restore(self, snapshot: tuple) -> None:
         """Undo the mutation of a `next_delta` (and, if it was also called,
         `record_generation`) call whose output bytes were never actually
         accepted downstream. `snapshot` must be a value previously returned
         by `self.snapshot()`, taken before that call."""
-        self._sent_messages, self._open_assistant_turn, self._sent_tools = snapshot
+        (self._sent_messages, self._open_assistant_turn, self._sent_tools,
+         self._client_view) = snapshot
 
     def record_generation(self, raw) -> None:
         """The generated turn is already in the KV; record it so the next

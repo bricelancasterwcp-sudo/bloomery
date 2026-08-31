@@ -166,6 +166,15 @@ class _SessionEntry:
         # so a failed-then-retried first turn is still correctly treated as
         # the first turn.
         self.turns_committed = 0
+        # Amendment 2026-08-31 "the retry state": the exact response
+        # object last returned for this session, and whether it has
+        # already been replayed once. Both are updated ONLY on a
+        # successful real turn (never on a failed attempt, and never by
+        # the replay path itself) -- see _infer_and_respond. Bounding
+        # replay at one is this single flag, reset every time a real turn
+        # actually commits; no second counting mechanism.
+        self.last_response = None
+        self.replayed_once = False
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -315,8 +324,55 @@ class _Handler(BaseHTTPRequestHandler):
         cap = self.server.config.get("max_tokens_cap", 4096)
         return min(requested, cap)
 
+    def _send_invalid_tool_arguments(self, session_key, agent_id, exc) -> None:
+        # Requirement C: a malformed `arguments` string is a CLIENT error
+        # under the OpenAI wire format (which defines `arguments` as
+        # JSON) -- surfaced as 400, not left to escape as an unhandled 500
+        # that would blame the server for the client's request. `str(exc)`
+        # never carries the raw malformed payload (see UnrenderableMessage's
+        # own docstring and session.py's test for it). Shared by both
+        # `session.is_retry` and `session.next_delta`'s raise paths --
+        # neither mutates session state before raising, so no restore is
+        # needed either way.
+        self._log_event(session_key, agent_id, None, None, "invalid_tool_arguments")
+        self._send_json(400, _error_body(
+            "invalid_request_error", "invalid_tool_arguments", str(exc)))
+
     def _infer_and_respond(self, entry, session_key, messages, tools, model, max_tokens):
         session = entry.session
+
+        # Amendment 2026-08-31 "the retry state", checked BEFORE
+        # next_delta per the spec: session.is_retry reuses
+        # _is_extension's own per-message comparison for the messages
+        # half rather than a second, looser one, so retry detection and
+        # next_delta's append/rewrite classification can never disagree.
+        # Fix round 1, Finding 1: is_retry also requires the incoming
+        # `tools` to match what is resident (session._sent_tools, the
+        # same store next_delta's own tools_diverged check uses) -- a
+        # changed tool set means the resident <tools> block is stale, and
+        # that divergence must outrank the retry rule, not lose to it. A
+        # replay touches neither the KV nor the agent -- no session
+        # mutation, no bloomery call. Bounded at one PER INFERENCE (not
+        # per session, per Fix round 1's Finding 3 ruling) by
+        # entry.replayed_once, which is cleared again only when a REAL
+        # turn actually commits (below); a second identical request
+        # therefore falls through to the ordinary path unchanged, where
+        # next_delta classifies it a rewrite (the tracked list is longer)
+        # and it is re-inferred against a fresh agent -- no second
+        # counting mechanism. Sustained identical retries therefore
+        # alternate real inference and replay rather than looping on
+        # either one.
+        try:
+            retry = session.is_retry(messages, tools)
+        except UnrenderableMessage as exc:
+            self._send_invalid_tool_arguments(session_key, entry.agent_id, exc)
+            return
+
+        if retry and not entry.replayed_once:
+            entry.replayed_once = True
+            self._log_event(session_key, entry.agent_id, False, None, "retry_replayed")
+            self._send_json(200, entry.last_response)
+            return
 
         # Critical 2: snapshot BEFORE next_delta -- next_delta itself still
         # mutates immediately (every existing session.py test relies on
@@ -327,18 +383,9 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             delta, was_reset = session.next_delta(messages, tools)
         except UnrenderableMessage as exc:
-            # Requirement C: a malformed `arguments` string is a CLIENT
-            # error under the OpenAI wire format (which defines
-            # `arguments` as JSON) -- surfaced as 400, not left to escape
-            # as an unhandled 500 that would blame the server for the
-            # client's request. `str(exc)` never carries the raw
-            # malformed payload (see UnrenderableMessage's own docstring
-            # and session.py's test for it). next_delta itself never
-            # mutates before raising, so no restore is needed here.
-            self._log_event(session_key, entry.agent_id, None, None,
-                            "invalid_tool_arguments")
-            self._send_json(400, _error_body(
-                "invalid_request_error", "invalid_tool_arguments", str(exc)))
+            # next_delta itself never mutates before raising, so no
+            # restore is needed here.
+            self._send_invalid_tool_arguments(session_key, entry.agent_id, exc)
             return
 
         # Critical 1: a delta from the full-render path must land on an
@@ -360,6 +407,24 @@ class _Handler(BaseHTTPRequestHandler):
 
         try:
             if needs_fresh_agent:
+                # Fix round 1, Finding 2 (live-verified): suspend the
+                # OUTGOING agent BEFORE creating its replacement, not
+                # after. The pager's static budget on this tier places
+                # exactly one context at a time (docs/superpowers/
+                # evidence/2026-08-31-openai-adapter-acceptance.md §3);
+                # create-before-suspend makes both agents momentarily
+                # resident, which the live acceptance run showed fails
+                # placement outright (409) -- and recurs on every reset
+                # under sustained retries. Safe specifically because this
+                # is a reset: the outgoing agent's KV is already stale and
+                # about to be abandoned, so losing it a moment early costs
+                # nothing. If the subsequent create or infer still fails,
+                # entry.agent_id still names the (now-suspended) old
+                # agent -- suspend_best_effort on the next attempt is a
+                # harmless no-op, and the session recovers via this same
+                # path on the client's next request. Still best-effort;
+                # only the ORDER changed.
+                self._suspend_best_effort(entry.agent_id)
                 created_agent_id = self.server.client.create_agent(
                     model, self.server.config.get("window_cap"))
                 send_agent_id = created_agent_id
@@ -373,8 +438,10 @@ class _Handler(BaseHTTPRequestHandler):
             session.restore(snapshot)
             if created_agent_id is not None:
                 # Never used for anything (infer to it failed); abandon it
-                # rather than leaking it. The OLD agent (entry.agent_id) is
-                # untouched -- it was never actually replaced.
+                # rather than leaking it. The OLD agent was already
+                # suspended above (best-effort) -- entry.agent_id still
+                # names it, so a later attempt on this session suspends it
+                # again (harmless no-op) and tries a fresh create.
                 self._suspend_best_effort(created_agent_id)
             self._log_event(session_key, send_agent_id, was_reset, len(delta),
                             f"bloomery_error_{exc.status}")
@@ -382,10 +449,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(status, body)
             return
 
-        # Success: the daemon has accepted the bytes. Only now does the
-        # agent swap (if any) actually take effect.
+        # Success: the daemon has accepted the bytes. The outgoing agent
+        # (if any) was already suspended above, before the create -- only
+        # the entry's own bookkeeping still needs to catch up.
         if created_agent_id is not None:
-            self._suspend_best_effort(entry.agent_id)
             entry.agent_id = created_agent_id
         entry.turns_committed += 1
 
@@ -419,10 +486,19 @@ class _Handler(BaseHTTPRequestHandler):
         # extension for this task; _is_extension itself is untouched).
         session.record_generation(message)
 
+        # Amendment 2026-08-31 "the retry state": cache the EXACT response
+        # object just returned, and clear replayed_once -- this turn just
+        # became the new committed state, so a retry of THIS turn earns
+        # its own fresh replay allowance. Only reached on success, same as
+        # entry.turns_committed above.
+        body = self._envelope(model, message, finish_reason, result)
+        entry.last_response = body
+        entry.replayed_once = False
+
         self._log_event(session_key, entry.agent_id, was_reset, len(delta), "ok",
                         prompt_tokens=result.get("prompt_tokens"),
                         completion_tokens=result.get("completion_tokens"))
-        self._send_json(200, self._envelope(model, message, finish_reason, result))
+        self._send_json(200, body)
 
     def _log_event(self, session_key, agent_id, was_reset, delta_bytes, outcome,
                    prompt_tokens=None, completion_tokens=None) -> None:
