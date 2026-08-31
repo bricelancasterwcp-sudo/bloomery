@@ -194,6 +194,94 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _send_sse(self, status: int, text: str) -> None:
+        """Write a pre-rendered, already-complete SSE body in one shot.
+
+        This is the ONE place `Content-Type: text/event-stream` is sent --
+        `text` is built by `_render_sse` before this is ever called, so
+        nothing here decides wire shape, only framing. Because the whole
+        body is known upfront (spec §8 amendment: buffered, not token-
+        incremental), a real `Content-Length` is honest and correct here,
+        same as `_send_json`.
+        """
+        raw = text.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def _send_completion(self, envelope: dict, stream: bool, include_usage: bool) -> None:
+        """The single fork between the two presentations of a successful
+        turn -- ordinary JSON or buffered SSE -- built from the SAME
+        envelope dict either way. Used both by the normal success path and
+        by the retry-replay path (`entry.last_response`), so a streaming
+        client's replayed turn is rendered as SSE too: streaming is a
+        presentation concern only, never a second code path for the
+        session logic underneath (spec §8 amendment).
+
+        Ordering note this method depends on: it must only ever be called
+        AFTER inference has actually succeeded. A refusal that happens
+        before any chunk would be emitted stays an ordinary JSON error
+        response via `_send_json` directly (see `_infer_and_respond`'s
+        `BloomeryError` branch and `_send_invalid_tool_arguments`) --
+        never routed through here, so SSE headers are never written until
+        the daemon has accepted the bytes and produced a real reply.
+        """
+        if not stream:
+            self._send_json(200, envelope)
+            return
+        self._send_sse(200, self._render_sse(envelope, include_usage))
+
+    @staticmethod
+    def _render_sse(envelope: dict, include_usage: bool) -> str:
+        """Buffered SSE, exactly the shape spec §8's amendment calls for
+        (matching bloomery's own `/v1` `render_sse` in shape and in being
+        buffered rather than token-incremental -- see `api_v1.rs`,
+        "Streaming (D3)"): one `chat.completion.chunk` carrying the whole
+        reply in `delta`, a final chunk carrying `finish_reason` with an
+        empty `delta`, an optional usage-only chunk with empty `choices`,
+        then the terminal `data: [DONE]`.
+
+        Built from `envelope` -- the exact same dict `_send_json` would
+        have sent non-streamed -- so streaming can never drift from the
+        non-streaming reply it presents differently.
+        """
+        choice = envelope["choices"][0]
+        message = choice["message"]
+        finish_reason = choice["finish_reason"]
+
+        delta = {"role": "assistant"}
+        if message.get("content") is not None:
+            delta["content"] = message["content"]
+        tool_calls = message.get("tool_calls")
+        if tool_calls:
+            # The detail that most often breaks a client: each entry needs
+            # its own `index` alongside `id`, `type`, and
+            # `function.{name,arguments}` -- omitting it is the usual
+            # reason a client silently drops a streamed tool call.
+            delta["tool_calls"] = [
+                {"index": i, **call} for i, call in enumerate(tool_calls)
+            ]
+
+        base = {
+            "id": envelope["id"],
+            "object": "chat.completion.chunk",
+            "created": envelope["created"],
+            "model": envelope["model"],
+        }
+        delta_chunk = {**base, "choices": [
+            {"index": 0, "delta": delta, "finish_reason": None}]}
+        final_chunk = {**base, "choices": [
+            {"index": 0, "delta": {}, "finish_reason": finish_reason}]}
+
+        events = [delta_chunk, final_chunk]
+        if include_usage:
+            events.append({**base, "choices": [], "usage": envelope["usage"]})
+
+        rendered = "".join(f"data: {json.dumps(event)}\n\n" for event in events)
+        return rendered + "data: [DONE]\n\n"
+
     def do_GET(self):
         if self.path == "/v1/models":
             model = self.server.config["model"]
@@ -299,11 +387,22 @@ class _Handler(BaseHTTPRequestHandler):
         model = payload.get("model") or self.server.config["model"]
         max_tokens = self._resolve_max_tokens(payload)
 
+        # Spec §8 amendment: `stream` and `stream_options.include_usage`
+        # are read here and threaded through as plain values, never
+        # re-derived downstream -- `stream_options` may be absent, `None`,
+        # or (a malformed client) not even a dict, so it is never blindly
+        # `.get()`-ed.
+        stream = bool(payload.get("stream"))
+        stream_options = payload.get("stream_options")
+        include_usage = bool(
+            isinstance(stream_options, dict) and stream_options.get("include_usage"))
+
         session_key = self.headers.get("X-Session-Id") or _first_user_message_key(messages)
         entry = self._get_session(session_key, model)
 
         with entry.lock:
-            self._infer_and_respond(entry, session_key, messages, tools, model, max_tokens)
+            self._infer_and_respond(entry, session_key, messages, tools, model, max_tokens,
+                                    stream, include_usage)
 
     def _resolve_max_tokens(self, payload: dict) -> int:
         """Minor fix: `max_completion_tokens` is honoured as an alias for
@@ -338,7 +437,8 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_json(400, _error_body(
             "invalid_request_error", "invalid_tool_arguments", str(exc)))
 
-    def _infer_and_respond(self, entry, session_key, messages, tools, model, max_tokens):
+    def _infer_and_respond(self, entry, session_key, messages, tools, model, max_tokens,
+                           stream, include_usage):
         session = entry.session
 
         # Amendment 2026-08-31 "the retry state", checked BEFORE
@@ -371,7 +471,7 @@ class _Handler(BaseHTTPRequestHandler):
         if retry and not entry.replayed_once:
             entry.replayed_once = True
             self._log_event(session_key, entry.agent_id, False, None, "retry_replayed")
-            self._send_json(200, entry.last_response)
+            self._send_completion(entry.last_response, stream, include_usage)
             return
 
         # Critical 2: snapshot BEFORE next_delta -- next_delta itself still
@@ -498,7 +598,7 @@ class _Handler(BaseHTTPRequestHandler):
         self._log_event(session_key, entry.agent_id, was_reset, len(delta), "ok",
                         prompt_tokens=result.get("prompt_tokens"),
                         completion_tokens=result.get("completion_tokens"))
-        self._send_json(200, body)
+        self._send_completion(body, stream, include_usage)
 
     def _log_event(self, session_key, agent_id, was_reset, delta_bytes, outcome,
                    prompt_tokens=None, completion_tokens=None) -> None:

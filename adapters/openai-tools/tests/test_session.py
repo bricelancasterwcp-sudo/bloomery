@@ -246,6 +246,139 @@ class SessionTest(unittest.TestCase):
         _, reset = s.next_delta([U1, assistant_dict, U2], TOOLS)
         self.assertFalse(reset)
 
+    def test_a_whitespace_only_difference_in_tool_call_arguments_is_still_an_append(self):
+        # Live finding (2026-08-31, measured against hermes): the adapter
+        # serialises tool_calls[].function.arguments via json.dumps(args)
+        # (toolcall.py's parse_tool_calls), which uses Python's default
+        # separators -- a space after both `:` and `,`. hermes echoes the
+        # same call back re-serialised COMPACTLY (no spaces). Both strings
+        # parse to the identical dict, in the identical key order (json.loads
+        # is whitespace-insensitive and preserves the order keys appear in
+        # the source text), so this must compare equal and stay an append --
+        # not force a reset and a needless full <tools> re-render.
+        s = Session("whitespace", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        spaced = '{"content": "world", "path": "/tmp/x.txt"}'
+        generated = {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "call_1", "type": "function",
+             "function": {"name": "write_file", "arguments": spaced}}]}
+        s.record_generation(generated)
+        compact = '{"content":"world","path":"/tmp/x.txt"}'
+        echoed = {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "call_1", "type": "function",
+             "function": {"name": "write_file", "arguments": compact}}]}
+        tool_result = {"role": "tool", "tool_call_id": "call_1", "content": "ok"}
+        delta, reset = s.next_delta([U1, echoed, tool_result], TOOLS)
+        self.assertFalse(reset)
+        self.assertNotIn("<tools>", delta)
+
+    def test_tool_call_arguments_with_a_different_key_order_is_still_an_append(self):
+        # REVERSED 2026-08-31 (was
+        # test_tool_call_arguments_with_a_different_key_order_still_resets):
+        # live-captured against a real hermes trajectory, the adapter emits
+        # tool_calls[].function.arguments in the order the model produced
+        # the parameters; the client echoes the SAME call back with its
+        # keys reordered. Order-sensitivity here was justified by "the
+        # template renders arguments|items in dict order, so reordering
+        # changes the rendered bytes" -- true, but irrelevant: the append
+        # path never re-renders history at all (the KV already holds the
+        # bytes this adapter itself produced; only the NEW turns are sent),
+        # and the reset path re-renders everything from the client's
+        # CURRENT messages self-consistently regardless of order. So key
+        # order in a client's echo can never actually change what the model
+        # sees, and comparing it order-sensitively bought no correctness
+        # while forcing a reset (and a full <tools> re-render, ~6.2k
+        # tokens) on every single turn of a real client trajectory. This is
+        # an authorised expectation change, not a weakened test: the SAME
+        # key/value pairs in a DIFFERENT key order must now be an append.
+        s = Session("arg_order", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        call_1 = [{"id": "call_1", "type": "function",
+                   "function": {"name": "write_file",
+                                 "arguments": '{"content": "world", "path": "/tmp/x.txt"}'}}]
+        assistant_1 = {"role": "assistant", "content": "", "tool_calls": call_1}
+        s.next_delta([U1, assistant_1, U2], TOOLS)
+        call_2 = [{"id": "call_1", "type": "function",
+                   "function": {"name": "write_file",
+                                 "arguments": '{"path": "/tmp/x.txt", "content": "world"}'}}]
+        assistant_2 = {"role": "assistant", "content": "", "tool_calls": call_2}
+        delta, reset = s.next_delta([U1, assistant_2, U2], TOOLS)
+        self.assertFalse(reset)
+        self.assertNotIn("<tools>", delta)
+
+    def test_a_real_hermes_trajectory_key_reorder_is_an_append_not_a_reset(self):
+        # THE reproduction: captured live against a real hermes
+        # trajectory. The adapter emits arguments in the order the model
+        # produced them; hermes echoes the same call back with the keys
+        # reordered. This must be an APPEND (was_reset False) and must NOT
+        # re-render the <tools> preamble.
+        s = Session("hermes_live", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        emitted = [{"id": "call_1", "type": "function",
+                    "function": {"name": "write_file",
+                                 "arguments": '{"path": "/tmp/x.txt", "content": "hello"}'}}]
+        generated = {"role": "assistant", "content": None, "tool_calls": emitted}
+        s.record_generation(generated)
+        echoed = [{"id": "call_1", "type": "function",
+                   "function": {"name": "write_file",
+                                "arguments": '{"content":"hello","path":"/tmp/x.txt"}'}}]
+        echoed_message = {"role": "assistant", "content": "", "tool_calls": echoed}
+        tool_result = {"role": "tool", "tool_call_id": "call_1", "content": "ok"}
+        delta, reset = s.next_delta([U1, echoed_message, tool_result], TOOLS)
+        self.assertFalse(reset)
+        self.assertNotIn("<tools>", delta)
+
+    def test_tool_call_arguments_with_a_different_value_still_resets(self):
+        # Second over-normalisation guard: same key, DIFFERENT value, via
+        # the JSON-string shape the whitespace fix touches.
+        s = Session("arg_value", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        call_1 = [{"id": "call_1", "type": "function",
+                   "function": {"name": "write_file",
+                                 "arguments": '{"content": "world", "path": "/tmp/x.txt"}'}}]
+        assistant_1 = {"role": "assistant", "content": "", "tool_calls": call_1}
+        s.next_delta([U1, assistant_1, U2], TOOLS)
+        call_2 = [{"id": "call_1", "type": "function",
+                   "function": {"name": "write_file",
+                                 "arguments": '{"content": "moon", "path": "/tmp/x.txt"}'}}]
+        assistant_2 = {"role": "assistant", "content": "", "tool_calls": call_2}
+        delta, reset = s.next_delta([U1, assistant_2, U2], TOOLS)
+        self.assertTrue(reset)
+        self.assertIn("<tools>", delta)
+
+    def test_tool_call_arguments_with_a_different_key_set_still_resets(self):
+        # Third over-normalisation guard: same size, DIFFERENT key set.
+        s = Session("arg_keyset", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        call_1 = [{"id": "call_1", "type": "function",
+                   "function": {"name": "write_file",
+                                 "arguments": '{"content": "world", "path": "/tmp/x.txt"}'}}]
+        assistant_1 = {"role": "assistant", "content": "", "tool_calls": call_1}
+        s.next_delta([U1, assistant_1, U2], TOOLS)
+        call_2 = [{"id": "call_1", "type": "function",
+                   "function": {"name": "write_file",
+                                 "arguments": '{"content": "world", "mode": "w"}'}}]
+        assistant_2 = {"role": "assistant", "content": "", "tool_calls": call_2}
+        delta, reset = s.next_delta([U1, assistant_2, U2], TOOLS)
+        self.assertTrue(reset)
+        self.assertIn("<tools>", delta)
+
+    def test_tool_call_identity_never_equates_two_malformed_arguments_strings(self):
+        # Defense in depth for the whitespace fix's own parsing: even if
+        # _tool_call_identity were ever reached with a malformed `arguments`
+        # string (in the actual request path this is moot --
+        # _normalize_tool_call already refuses it with UnrenderableMessage
+        # before any identity comparison happens, see the malformed-JSON
+        # tests below), two separately-computed identities for the SAME
+        # malformed text must never compare equal to each other. Silently
+        # treating a malformed call as "the same as before" is exactly the
+        # unsafe shortcut this fix must not introduce.
+        broken = [{"id": "call_1", "type": "function",
+                   "function": {"name": "terminal", "arguments": "{not valid json"}}]
+        identity_1 = Session._tool_call_identity(broken)
+        identity_2 = Session._tool_call_identity(broken)
+        self.assertNotEqual(identity_1, identity_2)
+
     def test_malformed_json_arguments_raises_and_names_the_tool_call(self):
         # Round 4 supersedes Round 3's "blank it and reset" behaviour: the
         # coordinator overruled that as a silent misrepresentation (the
@@ -391,6 +524,65 @@ class SessionTest(unittest.TestCase):
         self.assertFalse(reset)
         self.assertNotIn("<tools>", delta)
 
+    def test_none_content_echoed_back_as_empty_string_is_still_an_append(self):
+        # Live finding (2026-08-31, measured against hermes): the adapter
+        # returns content: None on a tool-call turn (correct per the
+        # OpenAI shape, since content and tool_calls are mutually
+        # exclusive on the wire). hermes echoes that same turn back with
+        # content: "". Both spellings mean "no text" -- exactly the case
+        # for a tool-call turn -- so they must compare equal. Before this
+        # fix, `None != ""` made _is_extension see every tool-call turn as
+        # changed, forcing a reset (and a full <tools> re-render) on every
+        # single turn -- silently defeating the prefill-once property that
+        # is this adapter's entire economic justification.
+        s = Session("none_vs_empty", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        generated = {"role": "assistant", "content": None, "tool_calls": TC_A}
+        s.record_generation(generated)
+        echoed = {"role": "assistant", "content": "", "tool_calls": TC_A}
+        tool_result = {"role": "tool", "tool_call_id": "call_1", "content": "ok"}
+        delta, reset = s.next_delta([U1, echoed, tool_result], TOOLS)
+        self.assertFalse(reset)
+        self.assertNotIn("<tools>", delta)
+
+    def test_empty_string_content_echoed_back_as_none_is_still_an_append(self):
+        # The mirror direction of the same equivalence: an adapter-side ""
+        # echoed back by a client as None must also be an append, not a
+        # reset -- the normalization is symmetric.
+        s = Session("empty_vs_none", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        generated = {"role": "assistant", "content": "", "tool_calls": TC_A}
+        s.record_generation(generated)
+        echoed = {"role": "assistant", "content": None, "tool_calls": TC_A}
+        tool_result = {"role": "tool", "tool_call_id": "call_1", "content": "ok"}
+        delta, reset = s.next_delta([U1, echoed, tool_result], TOOLS)
+        self.assertFalse(reset)
+        self.assertNotIn("<tools>", delta)
+
+    def test_content_x_vs_empty_string_still_resets(self):
+        # Guard against over-normalising: the equivalence is only between
+        # the two EMPTY spellings (None and ""). A turn with actual text
+        # is not "no text" under either spelling and must still reset.
+        s = Session("x_vs_empty", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        assistant_x = {"role": "assistant", "content": "x"}
+        s.next_delta([U1, assistant_x, U2], TOOLS)
+        assistant_empty = {"role": "assistant", "content": ""}
+        delta, reset = s.next_delta([U1, assistant_empty, U2], TOOLS)
+        self.assertTrue(reset)
+        self.assertIn("<tools>", delta)
+
+    def test_content_x_vs_none_still_resets(self):
+        # Same guard, the other empty spelling.
+        s = Session("x_vs_none", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        assistant_x = {"role": "assistant", "content": "x"}
+        s.next_delta([U1, assistant_x, U2], TOOLS)
+        assistant_none = {"role": "assistant", "content": None}
+        delta, reset = s.next_delta([U1, assistant_none, U2], TOOLS)
+        self.assertTrue(reset)
+        self.assertIn("<tools>", delta)
+
 
 class RetryStateTest(unittest.TestCase):
     """Spec's 2026-08-31 amendment "the retry state" (from the live
@@ -504,6 +696,25 @@ class RetryStateTest(unittest.TestCase):
         self.s.record_generation(GEN)
         same_tools_new_list = list(TOOLS)
         self.assertTrue(self.s.is_retry([U1], same_tools_new_list))
+
+    def test_is_retry_recognises_a_retry_differing_only_by_none_vs_empty_content(self):
+        # is_retry reuses _is_extension's own per-message comparison rather
+        # than a second one (see the class docstring) -- so the None/""
+        # content normalization must be inherited automatically, not
+        # re-implemented. A retry whose only difference from the client
+        # view is None vs "" content on the assistant turn must still be
+        # recognised as a retry.
+        s = Session("retry_none_vs_empty", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        s.record_generation({"role": "assistant", "content": None, "tool_calls": TC_A})
+        tool_result = {"role": "tool", "tool_call_id": "call_1", "content": "ok"}
+        turn2_request = [U1, {"role": "assistant", "content": None, "tool_calls": TC_A},
+                          tool_result]
+        s.next_delta(turn2_request, TOOLS)
+        s.record_generation(GEN)
+        retried_with_empty_content = [U1, {"role": "assistant", "content": "",
+                                            "tool_calls": TC_A}, tool_result]
+        self.assertTrue(s.is_retry(retried_with_empty_content, TOOLS))
 
 
 if __name__ == "__main__":

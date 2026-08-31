@@ -133,13 +133,108 @@ class Session:
         return new_message
 
     @staticmethod
+    def _arguments_identity(arguments):
+        """The key/value SET one tool call's `arguments` renders as (see
+        `_tool_call_identity`) -- compares the PARSED value, never the raw
+        form `arguments` happens to be in, and never the KEY ORDER it
+        happens to be in either.
+
+        Live finding (2026-08-31, measured against hermes): the adapter
+        serialises `arguments` via `json.dumps(args)` (toolcall.py's
+        `parse_tool_calls`), Python's default separators, which include a
+        space after both `:` and `,`. A client may echo the same call back
+        re-serialised COMPACTLY (no spaces) -- e.g. `{"content": "world",
+        "path": "/tmp/x.txt"}` vs `{"content":"world","path":"/tmp/x.txt"}`.
+        Both are valid JSON encodings of the SAME object with the SAME key
+        order; comparing them as raw strings registers the whitespace
+        difference alone as a changed call, forcing a needless reset (and
+        a full `<tools>` re-render) on an otherwise ordinary append. This
+        method parses both sides before comparing, so only a difference in
+        the parsed value -- not its encoding -- can change the identity.
+
+        REVERSED 2026-08-31 (this method previously kept comparison
+        order-SENSITIVE; see git history for that version). That ruling
+        reasoned that the chat template renders `arguments|items` in dict
+        order, so two argument objects with the same pairs in a different
+        order render to different bytes -- true, but it does not follow
+        that this comparison must be order-sensitive, because order-
+        sensitivity only matters if the adapter ever RE-RENDERS a
+        historical assistant turn, and it never does:
+          - on the APPEND path (`next_delta`'s `is_extension` branch),
+            history is never re-rendered at all -- the KV already holds
+            the bytes THIS ADAPTER ITSELF produced, and only the new
+            turns are sent. The key order in the client's ECHO of that
+            turn is therefore irrelevant to what the model already saw.
+          - on the RESET path (`render_initial`), everything is
+            re-rendered from the client's CURRENT messages, so whatever
+            order the client supplies is exactly what gets rendered --
+            self-consistently, regardless of what this comparison
+            decides.
+        So order-sensitivity bought no correctness, while costing a reset
+        (and a full `<tools>` re-render, ~6.2k tokens) on every turn of a
+        real client trajectory: live-captured against hermes, the client
+        echoes `tool_calls[].function.arguments` back with its keys
+        reordered relative to what the adapter emitted, and the previous
+        order-sensitive comparison misclassified every such echo as a
+        rewrite. Comparing the same key/value PAIRS regardless of order
+        fixes this without weakening any other guard below.
+
+        Handles the three shapes this codebase sees for `arguments`:
+          - an already-parsed dict: its items, sorted by key;
+          - a JSON-encoded string: parsed with `json.loads`, then its
+            items, sorted by key -- so two encodings of the same object,
+            in ANY key order, always produce the same result;
+          - a string that is not valid JSON, or that parses to something
+            other than an object: this is a CLIENT error under the OpenAI
+            wire format, and `_normalize_tool_call` already refuses it
+            with `UnrenderableMessage` before session state changes at
+            all, so this is never actually reached via `next_delta` or
+            `is_retry` for a malformed string. But this method does not
+            depend on that upstream check having run -- it must still be
+            SAFE if ever reached directly: a fresh, unique marker is
+            returned rather than an empty tuple, so a malformed value is
+            never silently treated as equal to a call with no arguments,
+            nor to another (even byte-identical) malformed value.
+
+        Sorted BY KEY ONLY (`key=lambda pair: pair[0]`), never by comparing
+        values -- JSON object keys are always strings (always orderable),
+        but values may be lists or nested objects, which are not orderable
+        with `<` in Python and would raise `TypeError` if the sort ever
+        had to fall back to comparing them. A DIFFERENT value for the same
+        key still changes the resulting tuple (the pair itself differs),
+        and a DIFFERENT key set still changes it (different keys and/or a
+        different length) -- both must still compare unequal here, same
+        as before this reversal. Absent `arguments` (`None` or missing) is
+        not malformed -- it renders as "no parameters," the same as `{}`,
+        so both map to the same empty tuple as before this method existed.
+        """
+        if isinstance(arguments, dict):
+            return tuple(sorted(arguments.items(), key=lambda pair: pair[0]))
+        if isinstance(arguments, str):
+            try:
+                parsed = json.loads(arguments)
+            except (json.JSONDecodeError, ValueError):
+                return (("<unparseable>", object()),)
+            if isinstance(parsed, dict):
+                return tuple(sorted(parsed.items(), key=lambda pair: pair[0]))
+            return (("<unparseable>", object()),)
+        return ()
+
+    @staticmethod
     def _tool_call_identity(tool_calls) -> tuple:
         """The subset of a `tool_calls` list the template
         (`templates/qwen36-reap48-ours.jinja`, lines ~105-127) actually
-        renders: each call's function `name` and `arguments`, in order
-        (order-sensitive, since the template iterates `arguments|items` in
-        dict order -- a reordering changes the rendered bytes). Never the
-        call's `id` or `type`: the template never references either.
+        renders: each call's function `name` and `arguments`. The list of
+        calls itself, and the calls' `name`s, are still compared in ORDER
+        (a reordered call list, or a call under a different name, changes
+        the rendered bytes). `arguments` KEY order is deliberately NOT
+        part of the comparison -- see `_arguments_identity`'s 2026-08-31
+        reversal for why order-insensitivity there is still correct here:
+        the append path never re-renders a historical turn (so a client's
+        echoed key order never reaches the model), and the reset path
+        re-renders the client's current messages self-consistently
+        regardless of order. Never the call's `id` or `type`: the template
+        never references either.
 
         Three spellings of "no tool calls" all render nothing and must
         collapse to the same identity: an absent field, an explicit `None`,
@@ -148,11 +243,10 @@ class Session:
         `arguments: {}` both render zero `<parameter>` blocks, so both
         normalise to an empty tuple of argument pairs.
 
-        Expects `tool_calls` to already be `_normalize_tool_call`-clean --
-        `arguments` is always a dict here, never a string, since an
-        unparseable string is refused at normalization time (raised as
-        `UnrenderableMessage`) rather than ever reaching identity
-        comparison in some substituted or blanked form.
+        `arguments` is compared via `_arguments_identity`, which parses
+        JSON itself rather than assuming `tool_calls` is already
+        `_normalize_tool_call`-clean -- see that method for why (the
+        2026-08-31 whitespace finding).
         """
         if not tool_calls:
             return ()
@@ -165,8 +259,7 @@ class Session:
             if not isinstance(fn, dict):
                 fn = {}
             name = fn.get("name")
-            arguments = fn.get("arguments")
-            args_items = tuple(arguments.items()) if isinstance(arguments, dict) else ()
+            args_items = Session._arguments_identity(fn.get("arguments"))
             identities.append((name, args_items))
         return tuple(identities)
 
@@ -226,6 +319,25 @@ class Session:
         return reasoning_content if isinstance(reasoning_content, str) else None
 
     @staticmethod
+    def _content_identity(content):
+        """Two spellings of "no text" collapse to the same identity:
+        `None` and `""`. This is exactly the shape of a tool-call turn --
+        the OpenAI wire format defines `content` and `tool_calls` as
+        alternatives, so this adapter returns `content: None` when
+        `tool_calls` are present, while a client (live-measured against
+        hermes) may echo that same turn back with `content: ""`, or vice
+        versa. The template renders either as zero visible characters
+        (`render_content` treats `none` as `''`, and `''|trim` is also
+        `''`), so they are the SAME rendered bytes and must compare equal.
+
+        Any actual string, including a non-empty one, is returned as-is:
+        the equivalence is only between the two empty spellings -- `"x"`
+        vs `""` and `"x"` vs `None` must still compare unequal, the same
+        as before this normalization existed.
+        """
+        return None if content is None or content == "" else content
+
+    @staticmethod
     def _is_extension(previous: list[dict], current: list[dict]) -> bool:
         # Full SEMANTIC message identity: everything the template actually
         # renders for a message, not a role/content subset. An assistant
@@ -241,7 +353,8 @@ class Session:
             return False
         for old, new in zip(previous, current):
             if (old.get("role") != new.get("role")
-                    or old.get("content") != new.get("content")
+                    or (Session._content_identity(old.get("content"))
+                        != Session._content_identity(new.get("content")))
                     or Session._reasoning_identity(old) != Session._reasoning_identity(new)
                     or (Session._tool_call_identity(old.get("tool_calls"))
                         != Session._tool_call_identity(new.get("tool_calls")))):
