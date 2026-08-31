@@ -133,6 +133,64 @@ class Session:
         return new_message
 
     @staticmethod
+    def _arguments_identity(arguments):
+        """The key/value sequence one tool call's `arguments` renders as
+        (see `_tool_call_identity`) -- compares the PARSED value, never
+        the raw form `arguments` happens to be in.
+
+        Live finding (2026-08-31, measured against hermes): the adapter
+        serialises `arguments` via `json.dumps(args)` (toolcall.py's
+        `parse_tool_calls`), Python's default separators, which include a
+        space after both `:` and `,`. A client may echo the same call back
+        re-serialised COMPACTLY (no spaces) -- e.g. `{"content": "world",
+        "path": "/tmp/x.txt"}` vs `{"content":"world","path":"/tmp/x.txt"}`.
+        Both are valid JSON encodings of the SAME object with the SAME key
+        order; comparing them as raw strings registers the whitespace
+        difference alone as a changed call, forcing a needless reset (and
+        a full `<tools>` re-render) on an otherwise ordinary append. This
+        method parses both sides before comparing, so only a difference in
+        the parsed value -- not its encoding -- can change the identity.
+
+        Handles the three shapes this codebase sees for `arguments`:
+          - an already-parsed dict: used directly, in its OWN order;
+          - a JSON-encoded string: parsed with `json.loads`, which is
+            whitespace/separator-insensitive and preserves the order keys
+            appear in the source text -- so two encodings of the same
+            object, in the same key order, always produce the same
+            result;
+          - a string that is not valid JSON, or that parses to something
+            other than an object: this is a CLIENT error under the OpenAI
+            wire format, and `_normalize_tool_call` already refuses it
+            with `UnrenderableMessage` before session state changes at
+            all, so this is never actually reached via `next_delta` or
+            `is_retry` for a malformed string. But this method does not
+            depend on that upstream check having run -- it must still be
+            SAFE if ever reached directly: a fresh, unique marker is
+            returned rather than an empty tuple, so a malformed value is
+            never silently treated as equal to a call with no arguments,
+            nor to another (even byte-identical) malformed value.
+
+        Deliberately does NOT sort keys or compare a set of pairs: the
+        chat template renders `arguments|items` in dict order, so two
+        argument objects with the same pairs in a DIFFERENT key order
+        render to DIFFERENT bytes and must still compare unequal here.
+        Absent `arguments` (`None` or missing) is not malformed -- it
+        renders as "no parameters," the same as `{}`, so both map to the
+        same empty tuple as before this method existed.
+        """
+        if isinstance(arguments, dict):
+            return tuple(arguments.items())
+        if isinstance(arguments, str):
+            try:
+                parsed = json.loads(arguments)
+            except (json.JSONDecodeError, ValueError):
+                return (("<unparseable>", object()),)
+            if isinstance(parsed, dict):
+                return tuple(parsed.items())
+            return (("<unparseable>", object()),)
+        return ()
+
+    @staticmethod
     def _tool_call_identity(tool_calls) -> tuple:
         """The subset of a `tool_calls` list the template
         (`templates/qwen36-reap48-ours.jinja`, lines ~105-127) actually
@@ -148,11 +206,10 @@ class Session:
         `arguments: {}` both render zero `<parameter>` blocks, so both
         normalise to an empty tuple of argument pairs.
 
-        Expects `tool_calls` to already be `_normalize_tool_call`-clean --
-        `arguments` is always a dict here, never a string, since an
-        unparseable string is refused at normalization time (raised as
-        `UnrenderableMessage`) rather than ever reaching identity
-        comparison in some substituted or blanked form.
+        `arguments` is compared via `_arguments_identity`, which parses
+        JSON itself rather than assuming `tool_calls` is already
+        `_normalize_tool_call`-clean -- see that method for why (the
+        2026-08-31 whitespace finding).
         """
         if not tool_calls:
             return ()
@@ -165,8 +222,7 @@ class Session:
             if not isinstance(fn, dict):
                 fn = {}
             name = fn.get("name")
-            arguments = fn.get("arguments")
-            args_items = tuple(arguments.items()) if isinstance(arguments, dict) else ()
+            args_items = Session._arguments_identity(fn.get("arguments"))
             identities.append((name, args_items))
         return tuple(identities)
 

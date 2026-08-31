@@ -246,6 +246,104 @@ class SessionTest(unittest.TestCase):
         _, reset = s.next_delta([U1, assistant_dict, U2], TOOLS)
         self.assertFalse(reset)
 
+    def test_a_whitespace_only_difference_in_tool_call_arguments_is_still_an_append(self):
+        # Live finding (2026-08-31, measured against hermes): the adapter
+        # serialises tool_calls[].function.arguments via json.dumps(args)
+        # (toolcall.py's parse_tool_calls), which uses Python's default
+        # separators -- a space after both `:` and `,`. hermes echoes the
+        # same call back re-serialised COMPACTLY (no spaces). Both strings
+        # parse to the identical dict, in the identical key order (json.loads
+        # is whitespace-insensitive and preserves the order keys appear in
+        # the source text), so this must compare equal and stay an append --
+        # not force a reset and a needless full <tools> re-render.
+        s = Session("whitespace", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        spaced = '{"content": "world", "path": "/tmp/x.txt"}'
+        generated = {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "call_1", "type": "function",
+             "function": {"name": "write_file", "arguments": spaced}}]}
+        s.record_generation(generated)
+        compact = '{"content":"world","path":"/tmp/x.txt"}'
+        echoed = {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "call_1", "type": "function",
+             "function": {"name": "write_file", "arguments": compact}}]}
+        tool_result = {"role": "tool", "tool_call_id": "call_1", "content": "ok"}
+        delta, reset = s.next_delta([U1, echoed, tool_result], TOOLS)
+        self.assertFalse(reset)
+        self.assertNotIn("<tools>", delta)
+
+    def test_tool_call_arguments_with_a_different_key_order_still_resets(self):
+        # Guard against over-normalising: the whitespace fix above must NOT
+        # loosen this too. The SAME pairs in a DIFFERENT key order render
+        # DIFFERENT bytes (the template renders `arguments|items` in dict
+        # order), so this must still reset. Order-sensitivity is
+        # load-bearing, not incidental.
+        s = Session("arg_order", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        call_1 = [{"id": "call_1", "type": "function",
+                   "function": {"name": "write_file",
+                                 "arguments": '{"content": "world", "path": "/tmp/x.txt"}'}}]
+        assistant_1 = {"role": "assistant", "content": "", "tool_calls": call_1}
+        s.next_delta([U1, assistant_1, U2], TOOLS)
+        call_2 = [{"id": "call_1", "type": "function",
+                   "function": {"name": "write_file",
+                                 "arguments": '{"path": "/tmp/x.txt", "content": "world"}'}}]
+        assistant_2 = {"role": "assistant", "content": "", "tool_calls": call_2}
+        delta, reset = s.next_delta([U1, assistant_2, U2], TOOLS)
+        self.assertTrue(reset)
+        self.assertIn("<tools>", delta)
+
+    def test_tool_call_arguments_with_a_different_value_still_resets(self):
+        # Second over-normalisation guard: same key, DIFFERENT value, via
+        # the JSON-string shape the whitespace fix touches.
+        s = Session("arg_value", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        call_1 = [{"id": "call_1", "type": "function",
+                   "function": {"name": "write_file",
+                                 "arguments": '{"content": "world", "path": "/tmp/x.txt"}'}}]
+        assistant_1 = {"role": "assistant", "content": "", "tool_calls": call_1}
+        s.next_delta([U1, assistant_1, U2], TOOLS)
+        call_2 = [{"id": "call_1", "type": "function",
+                   "function": {"name": "write_file",
+                                 "arguments": '{"content": "moon", "path": "/tmp/x.txt"}'}}]
+        assistant_2 = {"role": "assistant", "content": "", "tool_calls": call_2}
+        delta, reset = s.next_delta([U1, assistant_2, U2], TOOLS)
+        self.assertTrue(reset)
+        self.assertIn("<tools>", delta)
+
+    def test_tool_call_arguments_with_a_different_key_set_still_resets(self):
+        # Third over-normalisation guard: same size, DIFFERENT key set.
+        s = Session("arg_keyset", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        call_1 = [{"id": "call_1", "type": "function",
+                   "function": {"name": "write_file",
+                                 "arguments": '{"content": "world", "path": "/tmp/x.txt"}'}}]
+        assistant_1 = {"role": "assistant", "content": "", "tool_calls": call_1}
+        s.next_delta([U1, assistant_1, U2], TOOLS)
+        call_2 = [{"id": "call_1", "type": "function",
+                   "function": {"name": "write_file",
+                                 "arguments": '{"content": "world", "mode": "w"}'}}]
+        assistant_2 = {"role": "assistant", "content": "", "tool_calls": call_2}
+        delta, reset = s.next_delta([U1, assistant_2, U2], TOOLS)
+        self.assertTrue(reset)
+        self.assertIn("<tools>", delta)
+
+    def test_tool_call_identity_never_equates_two_malformed_arguments_strings(self):
+        # Defense in depth for the whitespace fix's own parsing: even if
+        # _tool_call_identity were ever reached with a malformed `arguments`
+        # string (in the actual request path this is moot --
+        # _normalize_tool_call already refuses it with UnrenderableMessage
+        # before any identity comparison happens, see the malformed-JSON
+        # tests below), two separately-computed identities for the SAME
+        # malformed text must never compare equal to each other. Silently
+        # treating a malformed call as "the same as before" is exactly the
+        # unsafe shortcut this fix must not introduce.
+        broken = [{"id": "call_1", "type": "function",
+                   "function": {"name": "terminal", "arguments": "{not valid json"}}]
+        identity_1 = Session._tool_call_identity(broken)
+        identity_2 = Session._tool_call_identity(broken)
+        self.assertNotEqual(identity_1, identity_2)
+
     def test_malformed_json_arguments_raises_and_names_the_tool_call(self):
         # Round 4 supersedes Round 3's "blank it and reset" behaviour: the
         # coordinator overruled that as a silent misrepresentation (the
