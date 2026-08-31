@@ -92,6 +92,40 @@ class ParseToolCallsTest(unittest.TestCase):
                "</function>\n</tool_call>")
         self.assertIsNone(parse_tool_calls(raw, TOOLS))
 
+    def test_balanced_fake_parameter_tags_in_value_returns_none(self):
+        """Finding 2 (refined): Losslessness check.
+
+        A value containing <parameter= or </parameter> is ambiguous and
+        must be refused. This bypass has balanced tag counts but still
+        silently truncates the SECRET_TAIL.
+        """
+        raw = ("<tool_call>\n<function=terminal>\n"
+               "<parameter=command>\nsome text <parameter=x>content</parameter> more text SECRET_TAIL\n</parameter>\n"
+               "</function>\n</tool_call>")
+        self.assertIsNone(parse_tool_calls(raw, TOOLS))
+
+    def test_legitimate_two_parameter_call_still_parses(self):
+        """Verify we have not over-refused: two declared parameters must work."""
+        raw = ("<tool_call>\n<function=terminal>\n"
+               "<parameter=command>\nls\n</parameter>\n"
+               "<parameter=timeout>\n30\n</parameter>\n"
+               "</function>\n</tool_call>")
+        calls = parse_tool_calls(raw, TOOLS)
+        self.assertIsNotNone(calls)
+        args = json.loads(calls[0]["function"]["arguments"])
+        self.assertEqual(args["command"], "ls")
+        self.assertEqual(args["timeout"], 30)
+
+    def test_value_containing_word_parameter_still_parses(self):
+        """Verify we reject only the delimiters, not the word 'parameter' in ordinary text."""
+        raw = ("<tool_call>\n<function=terminal>\n"
+               "<parameter=command>\nshow parameters\n</parameter>\n"
+               "</function>\n</tool_call>")
+        calls = parse_tool_calls(raw, TOOLS)
+        self.assertIsNotNone(calls)
+        args = json.loads(calls[0]["function"]["arguments"])
+        self.assertEqual(args["command"], "show parameters")
+
 
 if __name__ == "__main__":
     unittest.main()

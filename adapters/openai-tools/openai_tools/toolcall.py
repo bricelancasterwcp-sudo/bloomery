@@ -81,19 +81,42 @@ def parse_tool_calls(visible: str, tools):
         if properties is None:
             return None  # a name the caller never offered
 
-        # Finding 2: Detect truncated parameter values containing </parameter>
-        if body.count("<parameter=") != body.count("</parameter>"):
-            return None  # malformed parameters, likely truncated value
-
         args = {}
         for key, raw_value in _PARAM.findall(body):
             # Finding 3: Reject undeclared parameters
             if key not in properties:
                 return None  # parameter key not in schema
             try:
-                args[key] = _coerce(raw_value, properties.get(key))
+                coerced = _coerce(raw_value, properties.get(key))
             except (ValueError, json.JSONDecodeError):
                 return None  # loudly, rather than passing a wrong type
+            # Finding 2 (refined): Enforce losslessness — reject values containing
+            # <parameter= or </parameter>, as these substrings cannot occur in a
+            # well-formed value and indicate the delimiters are ambiguous.
+            if isinstance(coerced, str) and ("<parameter=" in coerced or "</parameter>" in coerced):
+                return None  # ambiguous delimiters, value cannot be trusted
+            args[key] = coerced
+
+        # Finding 2 (full consumption): Verify the function body is fully consumed
+        # by the parameter blocks. Reconstruct what the body should look like from
+        # the matched parameters, then check if everything outside those blocks is
+        # whitespace-only. This catches truncated values and malformed parameter tags.
+        covered = set()
+        for match in _PARAM.finditer(body):
+            start, end = match.span()
+            covered.add((start, end))
+
+        # Mark covered ranges
+        is_covered = [False] * len(body)
+        for start, end in covered:
+            for i in range(start, end):
+                is_covered[i] = True
+
+        # Check that everything outside covered ranges is whitespace
+        for i, char in enumerate(body):
+            if not is_covered[i] and not char.isspace():
+                return None  # non-whitespace outside parameter blocks
+
         calls.append({
             "id": f"call_{uuid.uuid4().hex[:24]}",
             "type": "function",
