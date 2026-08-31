@@ -126,6 +126,43 @@ class ParseToolCallsTest(unittest.TestCase):
         args = json.loads(calls[0]["function"]["arguments"])
         self.assertEqual(args["command"], "show parameters")
 
+    def test_junk_before_function_in_block_returns_none(self):
+        """Finding 2 (block level): Junk before function tag in block is silently dropped."""
+        raw = ("<tool_call>\nPRECEDING_JUNK<function=terminal>\n"
+               "<parameter=command>\nls\n</parameter>\n"
+               "</function>\n</tool_call>")
+        self.assertIsNone(parse_tool_calls(raw, TOOLS))
+
+    def test_junk_after_function_in_block_returns_none(self):
+        """Finding 2 (block level): Junk after function tag in block is silently dropped."""
+        raw = ("<tool_call>\n<function=terminal>\n"
+               "<parameter=command>\nls\n</parameter>\n"
+               "</function>\nSECRET_TAIL_NO_FAKE_TAG\n</tool_call>")
+        self.assertIsNone(parse_tool_calls(raw, TOOLS))
+
+    def test_fake_incomplete_tag_in_block_returns_none(self):
+        """Finding 2 (block level): Incomplete fake tag in block is silently dropped."""
+        raw = ("<tool_call>\n<function=terminal>\n"
+               "<parameter=command>\nls\n</parameter>\n"
+               "</function>\nSECRET<function=incomplete>\n</tool_call>")
+        self.assertIsNone(parse_tool_calls(raw, TOOLS))
+
+    def test_call_with_preceding_prose_still_parses(self):
+        """Verify we do not over-refuse: prose before <tool_call> is legitimate."""
+        raw = "I will list the files.\n<tool_call>\n<function=terminal>\n<parameter=command>\nls\n</parameter>\n</function>\n</tool_call>"
+        calls = parse_tool_calls(raw, TOOLS)
+        self.assertIsNotNone(calls)
+        args = json.loads(calls[0]["function"]["arguments"])
+        self.assertEqual(args["command"], "ls")
+
+    def test_call_with_surrounding_whitespace_still_parses(self):
+        """Verify we do not over-refuse: whitespace around <tool_call> blocks is legitimate."""
+        raw = "   \n  <tool_call>\n<function=terminal>\n<parameter=command>\nls\n</parameter>\n</function>\n</tool_call>  \n  "
+        calls = parse_tool_calls(raw, TOOLS)
+        self.assertIsNotNone(calls)
+        args = json.loads(calls[0]["function"]["arguments"])
+        self.assertEqual(args["command"], "ls")
+
 
 if __name__ == "__main__":
     unittest.main()

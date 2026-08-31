@@ -81,6 +81,17 @@ def parse_tool_calls(visible: str, tools):
         if properties is None:
             return None  # a name the caller never offered
 
+        # Finding 2 (block level): Verify block is fully consumed by the function.
+        # The function match must cover all non-whitespace content in the block.
+        func_match = _FUNC.search(block)
+        if not func_match:
+            return None  # Should never happen given findall check above
+        func_start, func_end = func_match.span()
+        # Check that everything outside the function span in the block is whitespace
+        for i, char in enumerate(block):
+            if (i < func_start or i >= func_end) and not char.isspace():
+                return None  # non-whitespace outside function span in block
+
         args = {}
         for key, raw_value in _PARAM.findall(body):
             # Finding 3: Reject undeclared parameters
@@ -90,16 +101,15 @@ def parse_tool_calls(visible: str, tools):
                 coerced = _coerce(raw_value, properties.get(key))
             except (ValueError, json.JSONDecodeError):
                 return None  # loudly, rather than passing a wrong type
-            # Finding 2 (refined): Enforce losslessness — reject values containing
+            # Finding 2 (parameter level): Enforce losslessness — reject values containing
             # <parameter= or </parameter>, as these substrings cannot occur in a
             # well-formed value and indicate the delimiters are ambiguous.
             if isinstance(coerced, str) and ("<parameter=" in coerced or "</parameter>" in coerced):
                 return None  # ambiguous delimiters, value cannot be trusted
             args[key] = coerced
 
-        # Finding 2 (full consumption): Verify the function body is fully consumed
-        # by the parameter blocks. Reconstruct what the body should look like from
-        # the matched parameters, then check if everything outside those blocks is
+        # Finding 2 (parameter-body level): Verify the function body is fully consumed
+        # by the parameter blocks. Check if everything outside those blocks is
         # whitespace-only. This catches truncated values and malformed parameter tags.
         covered = set()
         for match in _PARAM.finditer(body):
