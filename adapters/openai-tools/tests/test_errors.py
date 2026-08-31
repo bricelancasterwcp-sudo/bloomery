@@ -46,6 +46,25 @@ class ErrorMappingTest(unittest.TestCase):
         self.assertEqual(status, 502)
         self.assertIn("weird", body["error"]["message"])
 
+    def test_json_list_body_is_normalised_not_raising(self):
+        status, body = to_openai_error(BloomeryError(500, [1, 2, 3]))
+        self.assertEqual(status, 502)
+        self.assertIn("1", body["error"]["message"])
+
+    def test_non_empty_string_body_is_normalised_not_raising(self):
+        status, body = to_openai_error(BloomeryError(500, "something failed"))
+        self.assertEqual(status, 502)
+        self.assertIn("something failed", body["error"]["message"])
+
+    def test_bare_number_body_is_normalised_not_raising(self):
+        status, body = to_openai_error(BloomeryError(500, 42))
+        self.assertEqual(status, 502)
+        self.assertIn("42", body["error"]["message"])
+
+    def test_empty_dict_body_does_not_raise(self):
+        status, body = to_openai_error(BloomeryError(500, {}))
+        self.assertEqual(status, 502)
+
 
 if __name__ == "__main__":
     unittest.main()

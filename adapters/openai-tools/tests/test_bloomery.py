@@ -15,6 +15,7 @@
 #
 
 import json
+import socket
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -57,6 +58,7 @@ class BloomeryClientTest(unittest.TestCase):
             self.assertEqual(client.create_agent("m"), "a7")
         finally:
             srv.shutdown()
+            srv.server_close()
 
     def test_infer_returns_the_reply_body(self):
         srv = _serve({"/agents/a7/infer": (200, {
@@ -67,6 +69,7 @@ class BloomeryClientTest(unittest.TestCase):
             self.assertEqual(client.infer("a7", "p", 16)["text"], "hello")
         finally:
             srv.shutdown()
+            srv.server_close()
 
     def test_a_refusal_is_raised_as_BloomeryError_carrying_the_body(self):
         srv = _serve({"/agents/a7/infer": (413, {
@@ -79,6 +82,32 @@ class BloomeryClientTest(unittest.TestCase):
             self.assertEqual(caught.exception.body["needed_tokens"], 9)
         finally:
             srv.shutdown()
+            srv.server_close()
+
+    def test_a_real_413_still_maps_to_413_even_after_urlerror_handling(self):
+        srv = _serve({"/agents/test/infer": (413, {
+            "error": "prompt_too_large", "needed_tokens": 50, "window_tokens": 20})})
+        try:
+            client = BloomeryClient(f"http://127.0.0.1:{srv.server_port}")
+            with self.assertRaises(BloomeryError) as caught:
+                client.infer("test", "p", 100)
+            self.assertEqual(caught.exception.status, 413)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_connection_refused_becomes_BloomeryError_with_503(self):
+        # Find a closed port by creating and immediately closing a socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        # Port is now closed; trying to connect will refuse
+        client = BloomeryClient(f"http://127.0.0.1:{port}")
+        with self.assertRaises(BloomeryError) as caught:
+            client.create_agent("m")
+        self.assertEqual(caught.exception.status, 503)
+        self.assertEqual(caught.exception.body.get("error"), "connection_failed")
 
 
 if __name__ == "__main__":

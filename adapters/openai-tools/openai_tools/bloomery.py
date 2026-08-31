@@ -13,6 +13,8 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
+# Commercial licensing is available as an alternative to the AGPL — see
+# LICENSING.md.
 
 """A small client for bloomery's native agent API.
 
@@ -47,6 +49,10 @@ class BloomeryClient:
             except json.JSONDecodeError:
                 body = {"error": text}
             raise BloomeryError(exc.code, body) from exc
+        except urllib.error.URLError as exc:
+            detail = str(exc.reason) if exc.reason else str(exc)
+            body = {"error": "connection_failed", "detail": detail}
+            raise BloomeryError(503, body) from exc
 
     def create_agent(self, model: str, window_cap: int | None = None) -> str:
         payload: dict = {"model": model}

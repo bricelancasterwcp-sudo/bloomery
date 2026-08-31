@@ -13,6 +13,8 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
+# Commercial licensing is available as an alternative to the AGPL — see
+# LICENSING.md.
 
 """bloomery refusals, translated without losing the arithmetic.
 
@@ -23,10 +25,14 @@ where a bare 500 leaves it guessing. Nothing here rounds them off.
 
 
 class BloomeryError(Exception):
-    def __init__(self, status: int, body: dict):
+    def __init__(self, status: int, body):
         super().__init__(f"bloomery {status}: {body}")
         self.status = status
-        self.body = body or {}
+        # Normalize body to dict so to_openai_error can safely call .get()
+        if isinstance(body, dict):
+            self.body = body
+        else:
+            self.body = {"error": str(body)} if body else {}
 
 
 def _envelope(kind: str, code: str, message: str) -> dict:
@@ -50,5 +56,9 @@ def to_openai_error(err: BloomeryError) -> tuple[int, dict]:
                               f"token budget exhausted: {body}")
     if err.status == 404:
         return 404, _envelope("invalid_request_error", "model_not_found", f"{body}")
+    if err.status == 503 or kind == "connection_failed":
+        return 503, _envelope(
+            "server_error", "unavailable",
+            f"bloomery daemon is unreachable: {body.get('detail', 'connection refused')}")
     return 502, _envelope("server_error", "upstream_error",
                           f"bloomery returned {err.status}: {body}")
