@@ -18,7 +18,7 @@
 
 import unittest
 
-from openai_tools.session import Session
+from openai_tools.session import Session, UnrenderableMessage
 from openai_tools.template import ChatTemplate
 
 TPL = "adapters/openai-tools/templates/qwen36-reap48-ours.jinja"
@@ -246,23 +246,60 @@ class SessionTest(unittest.TestCase):
         _, reset = s.next_delta([U1, assistant_dict, U2], TOOLS)
         self.assertFalse(reset)
 
-    def test_malformed_json_arguments_do_not_crash_and_force_a_reset(self):
-        # A string that fails to parse as JSON must not crash the render,
-        # and must not be silently treated as "no arguments" (which would
-        # risk two DIFFERENT malformed payloads comparing equal). The safe
-        # branch is a reset.
+    def test_malformed_json_arguments_raises_and_names_the_tool_call(self):
+        # Round 4 supersedes Round 3's "blank it and reset" behaviour: the
+        # coordinator overruled that as a silent misrepresentation (the
+        # blanked <function=...></function> with zero parameters is the
+        # exact byte string that would be sent to the model, showing it a
+        # tool call that did not happen). A malformed `arguments` string is
+        # a CLIENT error under the OpenAI wire format; the honest response
+        # is a typed, controlled refusal, not an invisible repair.
         s = Session("malformed", ChatTemplate.load(TPL))
         s.next_delta([U1], TOOLS)
-        call_ok = [{"id": "call_1", "type": "function",
-                    "function": {"name": "terminal", "arguments": {"command": "ls"}}}]
-        assistant_ok = {"role": "assistant", "content": "", "tool_calls": call_ok}
-        s.next_delta([U1, assistant_ok, U2], TOOLS)
         call_broken = [{"id": "call_1", "type": "function",
                         "function": {"name": "terminal", "arguments": "{not valid json"}}]
         assistant_broken = {"role": "assistant", "content": "", "tool_calls": call_broken}
-        delta, reset = s.next_delta([U1, assistant_broken, U2], TOOLS)  # must not raise
-        self.assertTrue(reset)
-        self.assertIn("<tools>", delta)
+        with self.assertRaises(UnrenderableMessage) as ctx:
+            s.next_delta([U1, assistant_broken, U2], TOOLS)
+        self.assertEqual(ctx.exception.function_name, "terminal")
+
+    def test_the_raw_malformed_string_never_appears_in_the_exception_message(self):
+        # The malformed payload is untrusted client data; it must not be
+        # forced into logs via this exception's own message.
+        s = Session("malformed_secret", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        secret_marker = "TOTALLY_NOT_VALID_JSON_SENTINEL_XYZ"
+        call_broken = [{"id": "call_1", "type": "function",
+                        "function": {"name": "terminal", "arguments": secret_marker}}]
+        assistant_broken = {"role": "assistant", "content": "", "tool_calls": call_broken}
+        with self.assertRaises(UnrenderableMessage) as ctx:
+            s.next_delta([U1, assistant_broken, U2], TOOLS)
+        self.assertNotIn(secret_marker, str(ctx.exception))
+
+    def test_a_raise_leaves_session_state_unchanged_for_a_retry(self):
+        # A caller that fixes its request and retries must not be stuck
+        # with half-mutated tracking: session state after the raise must
+        # be exactly what it was before the failed call was attempted.
+        s = Session("malformed_retry", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        call_broken = [{"id": "call_1", "type": "function",
+                        "function": {"name": "terminal", "arguments": "{not valid json"}}]
+        assistant_broken = {"role": "assistant", "content": "", "tool_calls": call_broken}
+        with self.assertRaises(UnrenderableMessage):
+            s.next_delta([U1, assistant_broken, U2], TOOLS)
+
+        # A subsequent well-formed call must behave exactly as if the bad
+        # call had never been attempted: compare against a fresh session
+        # that only ever saw the same successful first turn.
+        fresh = Session("fresh_control", ChatTemplate.load(TPL))
+        fresh.next_delta([U1], TOOLS)
+        expected_delta, expected_reset = fresh.next_delta(
+            [U1, {"role": "assistant", "content": GEN}, U2], TOOLS)
+
+        actual_delta, actual_reset = s.next_delta(
+            [U1, {"role": "assistant", "content": GEN}, U2], TOOLS)
+        self.assertEqual(actual_delta, expected_delta)
+        self.assertEqual(actual_reset, expected_reset)
 
     def test_keep_reasoning_false_renders_tool_call_history_without_raising(self):
         # keep_reasoning=False takes the full render (render_initial) path

@@ -28,6 +28,34 @@ a prefix extension of what was actually sent.
 import json
 
 
+class UnrenderableMessage(ValueError):
+    """A message cannot be rendered faithfully to the model. Raised
+    instead of either letting a `TypeError` escape from the template or
+    silently rewriting what the client sent -- a malformed `arguments`
+    string is a CLIENT error under the OpenAI wire format (which defines
+    `arguments` as JSON), and the honest response is a typed, controlled
+    refusal, not an invisible repair. This is this codebase's central
+    idiom: bloomery refuses oversized prompts rather than truncating them,
+    its `/v1` shim rejects rather than silently dropping `tools`, and this
+    adapter's own parser returns `None` rather than fabricating a call.
+
+    Carries `message_index` and `function_name` so a caller can act on the
+    failure without re-deriving what went wrong, and `reason` for a short
+    human-readable cause. Deliberately never carries the raw malformed
+    payload itself -- that is untrusted client data and must not be forced
+    into logs via this exception's own message.
+    """
+
+    def __init__(self, message_index: int, function_name, reason: str):
+        self.message_index = message_index
+        self.function_name = function_name
+        self.reason = reason
+        name = function_name if function_name is not None else "<unknown>"
+        super().__init__(
+            f"message[{message_index}]: tool call {name!r} cannot be rendered ({reason})"
+        )
+
+
 class Session:
     def __init__(self, agent_id: str, template, keep_reasoning: bool = True):
         self.agent_id = agent_id
@@ -37,76 +65,63 @@ class Session:
         self._open_assistant_turn = False
 
     @staticmethod
-    def _normalize_tool_call(call):
+    def _normalize_tool_call(call, message_index: int):
         """Coerce one tool call's `arguments` to the mapping the template
         requires (it renders `arguments|items`), accepting BOTH wire
         shapes: an already-parsed dict, and the JSON-encoded STRING that
         Task 2's `parse_tool_calls` actually emits (`json.dumps(args)`) --
         the shape a client echoing history back will therefore send. The
         real OpenAI wire format is the string shape, so this is not an
-        edge case; it is the common one.
+        edge case; it is the common one. `arguments` missing or `None` is
+        not malformed -- it renders as "no parameters," same as `{}`.
 
-        Returns `(normalized_call, unparseable)`. `unparseable` is True
-        iff `arguments` was a string that failed to parse as a JSON
-        object. That failure is NEVER treated as "no arguments" -- doing
-        so would silently discard a real, if malformed, payload and risk
-        two DIFFERENT malformed payloads comparing equal (a false append
-        onto a stale KV, the same catastrophic direction as the tool_calls
-        Critical already fixed). It is also never handed to the template
-        as a raw string, since `arguments|items` raises TypeError on
-        anything but a mapping. Instead the call's `arguments` is
-        re-pointed at `{}` for RENDERING (so a delta can still be sent
-        rather than crashing) while the original string survives under an
-        internal `__raw_arguments__` key that the template never looks at
-        but `_tool_call_identity` does -- so two genuinely different
-        malformed payloads still compare unequal, and neither is ever
-        misread as "no arguments."
+        Raises `UnrenderableMessage` if `arguments` is a string that fails
+        to parse as a JSON object. There is no fallback here: the call is
+        never rendered with blanked-out or substituted arguments, and
+        never handed to the template as a raw string (which would raise a
+        bare `TypeError`). A malformed payload is a client error under the
+        OpenAI wire format, and the honest response is to say so, not to
+        silently show the model a tool call that did not happen.
 
         Never mutates the caller's dicts: builds new ones throughout.
         """
         if not isinstance(call, dict):
-            return call, False
+            return call
         new_call = dict(call)
         wrapped = isinstance(new_call.get("function"), dict)
         fn = dict(new_call["function"]) if wrapped else new_call
         arguments = fn.get("arguments")
-        unparseable = False
         if isinstance(arguments, str):
             try:
                 parsed = json.loads(arguments)
             except (json.JSONDecodeError, ValueError):
                 parsed = None
-            if isinstance(parsed, dict):
-                fn["arguments"] = parsed
-            else:
-                unparseable = True
-                fn["__raw_arguments__"] = arguments
-                fn["arguments"] = {}
+            if not isinstance(parsed, dict):
+                raise UnrenderableMessage(
+                    message_index, fn.get("name"), "arguments was not valid JSON"
+                )
+            fn["arguments"] = parsed
         if wrapped:
             new_call["function"] = fn
         else:
             new_call = fn
-        return new_call, unparseable
+        return new_call
 
     @staticmethod
-    def _normalize_message(message: dict) -> tuple[dict, bool]:
+    def _normalize_message(message: dict, message_index: int) -> dict:
         """A new copy of `message` with every tool call's `arguments`
-        normalized to a mapping (see `_normalize_tool_call`), plus whether
-        any call's `arguments` was an unparseable string. Non-assistant
+        normalized to a mapping (see `_normalize_tool_call`), or raises
+        `UnrenderableMessage` if that is not possible. Non-assistant
         messages, and assistant messages without tool_calls, pass through
         as a plain per-message copy (already required by Finding 2)."""
         new_message = dict(message)
         tool_calls = new_message.get("tool_calls")
         if new_message.get("role") != "assistant" or not tool_calls:
-            return new_message, False
-        new_calls = []
-        had_unparseable = False
-        for call in tool_calls:
-            normalized_call, unparseable = Session._normalize_tool_call(call)
-            new_calls.append(normalized_call)
-            had_unparseable = had_unparseable or unparseable
-        new_message["tool_calls"] = new_calls
-        return new_message, had_unparseable
+            return new_message
+        new_message["tool_calls"] = [
+            Session._normalize_tool_call(call, message_index) for call in tool_calls
+        ]
+        return new_message
 
     @staticmethod
     def _tool_call_identity(tool_calls) -> tuple:
@@ -124,14 +139,11 @@ class Session:
         `arguments: {}` both render zero `<parameter>` blocks, so both
         normalise to an empty tuple of argument pairs.
 
-        Expects `tool_calls` to already be `_normalize_tool_call`-clean
-        (arguments is always a dict, with `__raw_arguments__` set exactly
-        when the original was an unparseable string). A `__raw_arguments__`
-        marker is folded into the identity instead of the (empty) rendered
-        `arguments`, so two DIFFERENT unparseable payloads -- both
-        substituted with `{}` for rendering safety -- still compare
-        unequal rather than being silently read as the same "no
-        arguments" call.
+        Expects `tool_calls` to already be `_normalize_tool_call`-clean --
+        `arguments` is always a dict here, never a string, since an
+        unparseable string is refused at normalization time (raised as
+        `UnrenderableMessage`) rather than ever reaching identity
+        comparison in some substituted or blanked form.
         """
         if not tool_calls:
             return ()
@@ -144,9 +156,6 @@ class Session:
             if not isinstance(fn, dict):
                 fn = {}
             name = fn.get("name")
-            if "__raw_arguments__" in fn:
-                identities.append((name, ("__unparseable__", fn["__raw_arguments__"])))
-                continue
             arguments = fn.get("arguments")
             args_items = tuple(arguments.items()) if isinstance(arguments, dict) else ()
             identities.append((name, args_items))
@@ -195,6 +204,14 @@ class Session:
         `was_reset` is True only when the client rewrote history rather than
         appending to it — never on the first turn of a session, which is
         simply the initial render.
+
+        Raises `UnrenderableMessage` if any assistant message's tool_calls
+        cannot be rendered faithfully (an `arguments` string that is not
+        valid JSON). This happens BEFORE any session state is touched --
+        `self._sent_messages` and `self._open_assistant_turn` are only
+        ever assigned after normalization has fully succeeded -- so a
+        caller that fixes the bad request and retries finds this session
+        exactly as it was.
         """
         # A per-message copy, not just a copy of the outer list: a caller
         # that mutates a message dict in place after this call must not be
@@ -202,21 +219,12 @@ class Session:
         # sent (Finding 2). `_normalize_message` also coerces each tool
         # call's `arguments` to a mapping, accepting the JSON-string wire
         # shape the real OpenAI format (and Task 2's own parser) actually
-        # uses, so it never reaches the template as a bare string.
-        normalized = [Session._normalize_message(m) for m in messages]
-        messages = [m for m, _ in normalized]
-        had_unparseable_arguments = any(bad for _, bad in normalized)
+        # uses, so it never reaches the template as a bare string -- or
+        # raises `UnrenderableMessage` rather than ever rendering a call
+        # that did not happen.
+        messages = [Session._normalize_message(m, i) for i, m in enumerate(messages)]
         had_history = bool(self._sent_messages)
-        # An unparseable `arguments` string makes this turn's messages
-        # un-trustworthy as an append target: we cannot tell whether it
-        # matches the resident KV, and appending onto a mismatch would be
-        # silent corruption. Force the safe branch -- reset, not append --
-        # rather than let `_is_extension`'s tuple comparison decide, since
-        # `_tool_call_identity` deliberately makes an unparseable call
-        # compare unequal to everything except a byte-identical repeat of
-        # the same malformed string, which is exactly "we cannot be sure."
-        is_extension = (had_history and not had_unparseable_arguments
-                         and self._is_extension(self._sent_messages, messages))
+        is_extension = had_history and self._is_extension(self._sent_messages, messages)
 
         if is_extension and self.keep_reasoning:
             new = messages[len(self._sent_messages):]
