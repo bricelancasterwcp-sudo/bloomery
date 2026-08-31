@@ -44,6 +44,14 @@ CASCADE = ("\nthinking\n</think>\n\n<tool_call>\n<function=terminal>\n"
 
 PLAIN = "\nreasoning\n</think>\n\nsure, here is the answer"
 
+# A tool call with genuine natural-language prose BEFORE it (the template
+# explicitly permits this: "You may provide optional reasoning for your
+# function call in natural language BEFORE the function call"), so
+# `content` for this reply is non-empty and checkable for leftover markup.
+CALL_WITH_PREAMBLE = ("\nthinking\n</think>\n\nI'll check that for you.\n\n"
+                      "<tool_call>\n<function=terminal>\n<parameter=command>\n"
+                      "ls /tmp\n</parameter>\n</function>\n</tool_call>")
+
 
 class _FakeBloomery:
     """Stands in for the daemon: records prompts, returns a scripted reply."""
@@ -131,12 +139,21 @@ class ServerTest(unittest.TestCase):
         self.assertIn("cannot", choice["message"]["content"])
 
     def test_the_preamble_is_sent_once_across_two_turns(self):
+        # AUTHORISED CHANGE (Task 5, review round 1): originally hand-fed
+        # {"role": "assistant", "content": CALL} (the raw model text) as
+        # turn two -- which is exactly the shape record_generation used to
+        # be limited to, and proved nothing about what a REAL client
+        # actually echoes back (content + a separate tool_calls array).
+        # Now feeds back the adapter's own returned `message` object,
+        # making this a second genuine round trip rather than a
+        # coincidental string match.
         port, fake = self._serve(CALL)
         base = {"model": "m", "tools": TOOLS}
-        _post(port, dict(base, messages=[{"role": "user", "content": "one"}]))
+        _, body1 = _post(port, dict(base, messages=[{"role": "user", "content": "one"}]))
+        own_message = body1["choices"][0]["message"]
         _post(port, dict(base, messages=[
             {"role": "user", "content": "one"},
-            {"role": "assistant", "content": CALL},
+            own_message,
             {"role": "user", "content": "two"}]))
         self.assertIn("<tools>", fake.prompts[0])
         self.assertNotIn("<tools>", fake.prompts[1])
@@ -154,6 +171,31 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(choice["message"]["tool_calls"][0]["function"]["name"], "terminal")
         self.assertIn("note: that command clears the temp directory",
                       choice["message"]["content"])
+
+    # --- Finding 1: content is client-visible text, never raw markup --
+
+    def test_content_never_contains_reasoning_or_tool_call_markup_for_plain_text(self):
+        port, _ = self._serve(PLAIN)
+        status, body = _post(port, {"model": "m", "tools": TOOLS,
+                                    "messages": [{"role": "user", "content": "hi"}]})
+        content = body["choices"][0]["message"]["content"]
+        self.assertEqual(content, "sure, here is the answer")
+        self.assertNotIn("<think>", content)
+        self.assertNotIn("</think>", content)
+        self.assertNotIn("<tool_call>", content)
+
+    def test_content_never_contains_reasoning_or_tool_call_markup_for_a_tool_call(self):
+        port, _ = self._serve(CALL_WITH_PREAMBLE)
+        status, body = _post(port, {"model": "m", "tools": TOOLS,
+                                    "messages": [{"role": "user", "content": "ls"}]})
+        choice = body["choices"][0]
+        self.assertEqual(choice["finish_reason"], "tool_calls")
+        content = choice["message"]["content"]
+        self.assertEqual(content, "I'll check that for you.")
+        self.assertNotIn("<think>", content)
+        self.assertNotIn("</think>", content)
+        self.assertNotIn("<tool_call>", content)
+        self.assertNotIn("</tool_call>", content)
 
     # --- Requirement B: the KV benefit survives a REAL round trip ----
 
@@ -200,6 +242,30 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(body["error"]["type"], "invalid_request_error")
         self.assertNotIn(secret_marker, raw)
         self.assertEqual(fake.prompts, [])  # never reached bloomery at all
+
+    # --- Finding 3: client-supplied tool_calls are never dropped -----
+
+    def test_hybrid_content_and_tool_calls_history_preserves_the_tool_call(self):
+        # A client-authored assistant turn with BOTH non-empty content AND
+        # a real tool_calls array -- the exact shape an earlier
+        # stripping heuristic would have silently discarded tool_calls
+        # from. There is no such stripping any more: incoming history
+        # reaches Session unmodified, so this renders via Session's own
+        # native tool_calls handling (the function name shows up in the
+        # rendered prompt) rather than vanishing.
+        port, fake = self._serve(CALL)
+        hybrid = {"role": "assistant", "content": "here's what I'll do",
+                  "tool_calls": [{"id": "call_1", "type": "function",
+                                  "function": {"name": "terminal",
+                                               "arguments": json.dumps({"command": "ls"})}}]}
+        status, body = _post(port, {
+            "model": "m", "tools": TOOLS,
+            "messages": [{"role": "user", "content": "one"}, hybrid,
+                         {"role": "user", "content": "two"}]})
+        self.assertEqual(status, 200)
+        prompt = fake.prompts[0]
+        self.assertIn("here's what I'll do", prompt)
+        self.assertIn("<function=terminal>", prompt)
 
     # --- Also wired, per the brief -----------------------------------
 

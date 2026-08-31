@@ -313,6 +313,38 @@ class SessionTest(unittest.TestCase):
         delta, _ = s.next_delta([U1, assistant, U2], TOOLS)  # must not raise
         self.assertIn("<tools>", delta)
 
+    def test_record_generation_also_accepts_a_full_assistant_message_dict(self):
+        # Task 5 authorised extension: a content-only string can never
+        # carry tool_calls, so a caller returning {content, tool_calls}
+        # to its own client has no way to make what is tracked here
+        # match a later real echo of that object -- only the dict form
+        # can. The dict is normalized the same way next_delta normalizes
+        # incoming history, so a real client's echo (arguments as a JSON
+        # string, the actual OpenAI wire shape) compares correctly.
+        s = Session("dict_record", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        generated = {"role": "assistant", "content": None,
+                     "tool_calls": [{"id": "call_1", "type": "function",
+                                     "function": {"name": "terminal",
+                                                  "arguments": '{"command": "ls"}'}}]}
+        s.record_generation(generated)
+        # A real client echoes the exact object back (arguments still a
+        # JSON string, since that is what was handed out over the wire).
+        delta, reset = s.next_delta([U1, generated, U2], TOOLS)
+        self.assertFalse(reset)
+        self.assertNotIn("<tools>", delta)
+
+    def test_record_generation_string_form_is_unchanged(self):
+        # The original contract: a plain string is still treated as a
+        # content-only assistant turn, exactly as before this extension.
+        s = Session("string_record", ChatTemplate.load(TPL))
+        s.next_delta([U1], TOOLS)
+        s.record_generation(GEN)
+        assistant = {"role": "assistant", "content": GEN}
+        delta, reset = s.next_delta([U1, assistant, U2], TOOLS)
+        self.assertFalse(reset)
+        self.assertNotIn("<tools>", delta)
+
 
 if __name__ == "__main__":
     unittest.main()

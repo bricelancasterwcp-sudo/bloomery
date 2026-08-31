@@ -32,42 +32,38 @@ reviews on this branch:
   scanner has no escaping mechanism, so a parameter value that happens to
   contain the literal cascade `</parameter></function></tool_call>` closes
   the block early; whatever the model meant to say next becomes ordinary
-  prose that `parse_tool_calls` never inspects again. Satisfied here as a
-  direct consequence of Requirement B's design (below): `content` is
-  always the model's full, verbatim output, so nothing after an
-  early-closed block is ever dropped.
+  prose that `parse_tool_calls` never inspects again. `_visible_content`
+  (below) builds `content` from the FULL visible span with only the
+  recognised `<tool_call>...</tool_call>` blocks removed, so that trailing
+  (or leading, or interstitial) prose is always kept, never discarded
+  because `tool_calls` is also present.
 
-  Requirement B (the KV benefit must survive a REAL round trip):
-  `Session.record_generation` (session.py, CLOSED, not modified here)
-  stores exactly `{"role": "assistant", "content": raw}` -- it has no
-  parameter for `tool_calls`, and this is also literally what the brief's
-  own `test_the_preamble_is_sent_once_across_two_turns` hand-feeds back on
-  turn two (`{"role": "assistant", "content": CALL}`, `CALL` being the
-  model's raw text). So the ONE representation `record_generation` can
-  ever produce is content-only, holding the model's raw bytes -- and that
-  is therefore the ONLY representation a later echo can be compared
-  against and match.
+  Requirement B (the KV benefit must survive a REAL round trip): a
+  content-only record can never carry `tool_calls`, so a caller that
+  returns `{content, tool_calls}` to its own client had no way, via a
+  plain string, to make what `Session` tracks match what that client will
+  later echo back -- only `content` could ever line up, never
+  `tool_calls`, and `Session._is_extension` requires both. Round 1 of this
+  task's review authorised extending `Session.record_generation` (still
+  the ONLY change to session.py; `_is_extension` itself is untouched) to
+  also accept a full assistant message dict, stored via the same
+  `_normalize_message` `next_delta` already uses for incoming history.
+  This handler now passes `record_generation` the EXACT dict it is about
+  to return to the client -- so the tracked record and a real client's
+  echo of that object are identical by construction, not by coincidence,
+  and no reset is forced on a genuine continuation.
 
-  This handler honours that constraint on BOTH sides instead of fighting
-  it: `message["content"]` in the response sent back to the client is
-  always the model's raw, unprocessed output (`raw`), whether or not
-  `tool_calls` also parsed -- never a stripped-down tail. That is what
-  makes Requirement A trivial (the raw text contains everything, always).
-  And before any incoming `messages` list is handed to `next_delta`,
-  `_prepare_incoming_messages` drops a `tool_calls` field from any
-  assistant turn that already carries non-empty `content` -- because, by
-  this adapter's own convention, that content is already the complete,
-  self-sufficient raw record of what happened, and `tool_calls` alongside
-  it is redundant for anything Session needs to compare or render. A
-  client faithfully echoing this server's own response therefore reduces,
-  turn after turn, to exactly the content-only shape `record_generation`
-  stored -- an honest match, not a coincidence -- so `_is_extension`
-  recognises the real continuation and the `<tools>` preamble is never
-  resent. (An assistant turn with tool_calls but EMPTY content -- the more
-  common shape for an external client building history from scratch
-  rather than round-tripping this adapter -- is left untouched, and
-  Session's own native tool_calls handling, already covered by
-  session.py's test suite, applies to it normally.)
+  `content` itself is never the model's raw bytes: it is built by
+  `_visible_content`, which strips the `<think>...</think>` reasoning
+  block (via `toolcall.split_reasoning`) and, when tool calls parsed,
+  removes the `<tool_call>...</tool_call>` XML too -- leaving only the
+  natural-language text the template explicitly permits before a call.
+  Client-visible text never contains reasoning scaffolding or tool-call
+  markup. Incoming history is passed to `next_delta` completely
+  unmodified -- there is no longer any stripping of a caller-supplied
+  `tool_calls` field; `Session`'s own native tool_calls handling (already
+  covered by session.py's test suite) applies to every incoming message
+  exactly as written.
 """
 import hashlib
 import json
@@ -87,34 +83,38 @@ def _error_body(kind: str, code: str, message: str) -> dict:
     return {"error": {"type": kind, "code": code, "message": message}}
 
 
-def _prepare_incoming_messages(messages):
-    """A new list, with `tool_calls` dropped from any assistant message
-    that already carries non-empty `content`.
+_TOOL_CALL_OPEN = "<tool_call>"
+_TOOL_CALL_CLOSE = "</tool_call>"
 
-    This adapter's own responses always set `content` to the model's raw,
-    unprocessed output (see the module docstring's Requirement B section)
-    -- so for a turn THIS adapter generated, `content` alone is already a
-    complete, self-sufficient record, and a `tool_calls` field alongside
-    it is redundant. Stripping it here, before the message ever reaches
-    `Session`, is what lets a client's faithful echo of our own response
-    be recognised as a plain content-only continuation -- exactly the
-    shape `Session.record_generation` itself produces -- instead of
-    forcing a reset every tool-using turn.
 
-    An assistant message with tool_calls but EMPTY/absent content -- the
-    ordinary shape for a client building history from scratch rather than
-    round-tripping this adapter -- is left untouched, so `Session`'s own
-    native tool_calls handling applies normally.
+def _visible_content(visible: str, call_count: int) -> str:
+    """The client-visible `content` for a generation: `visible` (already
+    reasoning-stripped by `toolcall.split_reasoning`) with its first
+    `call_count` `<tool_call>...</tool_call>` spans removed.
 
-    Never mutates the caller's messages; builds new dicts throughout.
+    Found with the same left-to-right literal-substring search
+    toolcall.py's own scanner uses, so the split points agree with what
+    the parser actually consumed -- without needing toolcall.py to expose
+    the spans it walked. `parse_tool_calls` reports names and arguments,
+    not positions, and a successfully-parsed call can still leave real
+    prose around it: the template explicitly permits natural-language
+    reasoning BEFORE a call, and a parameter value containing the literal
+    closing cascade `</parameter></function></tool_call>` can end a block
+    early (no escaping in this grammar), leaving whatever the model meant
+    to say next as ordinary text here rather than lost (Requirement A).
+
+    When `call_count` is 0, this is just `visible` itself -- the plain-text
+    reply case.
     """
-    prepared = []
-    for message in messages:
-        if (isinstance(message, dict) and message.get("role") == "assistant"
-                and message.get("tool_calls") and message.get("content")):
-            message = {k: v for k, v in message.items() if k != "tool_calls"}
-        prepared.append(message)
-    return prepared
+    pieces = []
+    pos = 0
+    for _ in range(call_count):
+        start = visible.find(_TOOL_CALL_OPEN, pos)
+        pieces.append(visible[pos:start])
+        end = visible.find(_TOOL_CALL_CLOSE, start)
+        pos = end + len(_TOOL_CALL_CLOSE)
+    pieces.append(visible[pos:])
+    return "".join(pieces).strip()
 
 
 def _first_user_message_key(messages) -> str:
@@ -233,7 +233,6 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _infer_and_respond(self, entry, messages, tools, model, max_tokens):
         session = entry.session
-        messages = _prepare_incoming_messages(messages)
 
         try:
             delta, _was_reset = session.next_delta(messages, tools)
@@ -257,27 +256,34 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         raw = result["text"]
-        session.record_generation(raw)
-
         _reasoning, visible = split_reasoning(raw)
         calls = parse_tool_calls(visible, tools)
 
-        # Requirement A + B: `content` is always the model's raw,
-        # unprocessed output -- see the module docstring. This both
-        # guarantees any trailing text after an early-closed tool_call
-        # block is preserved (it is a substring of `raw`, always) and
-        # keeps a round-tripped client echo byte-identical to what
-        # `record_generation` just stored.
+        # Requirement A: `content` is client-visible text only -- the
+        # reasoning block is stripped by split_reasoning above, and (when
+        # calls parsed) the <tool_call> XML is stripped by
+        # _visible_content too, leaving just the natural-language prose
+        # the template permits before a call. Any text after an
+        # early-closed block (the cascade case) is still part of
+        # `visible` and therefore still kept.
         if calls is not None:
-            message = {"role": "assistant", "content": raw, "tool_calls": calls}
+            content = _visible_content(visible, len(calls)) or None
+            message = {"role": "assistant", "content": content, "tool_calls": calls}
             finish_reason = "tool_calls"
         else:
             # Never fabricate: an unparsed generation is returned as plain
             # content, never as a synthesized tool_calls entry.
-            message = {"role": "assistant", "content": raw}
+            message = {"role": "assistant", "content": visible}
             completion_tokens = result.get("completion_tokens")
             hit_cap = completion_tokens is not None and completion_tokens >= max_tokens
             finish_reason = "length" if hit_cap else "stop"
+
+        # Requirement B: record_generation gets the EXACT dict about to be
+        # returned to the client -- so what Session tracks and what a
+        # real client echoes back next turn are identical by
+        # construction, not by coincidence (session.py's authorised
+        # extension for this task; _is_extension itself is untouched).
+        session.record_generation(message)
 
         self._send_json(200, self._envelope(model, message, finish_reason, result))
 
