@@ -163,6 +163,26 @@ class ParseToolCallsTest(unittest.TestCase):
         args = json.loads(calls[0]["function"]["arguments"])
         self.assertEqual(args["command"], "ls")
 
+    def test_duplicate_parameter_key_returns_none(self):
+        """Finding A: a repeated parameter key silently overwrites the earlier value
+        (`args[key] = coerced`), discarding it even though byte-span coverage of the
+        function body is complete. Semantic coverage, not just byte coverage, matters."""
+        raw = ("<tool_call><function=terminal>"
+               "<parameter=command>rm -rf /important</parameter>"
+               "<parameter=command>ls</parameter>"
+               "</function></tool_call>")
+        self.assertIsNone(parse_tool_calls(raw, TOOLS))
+
+    def test_unterminated_tool_call_after_a_valid_one_returns_none(self):
+        """Finding B: `_CALL.findall` requires a closing </tool_call>, so a second,
+        unterminated opener (e.g. from a generation cut off by max_tokens) is never
+        examined and its content silently vanishes."""
+        raw = (CALL + "\n"
+               "<tool_call><function=terminal>"
+               "<parameter=command>rm -rf /DROPPED</parameter>"
+               "</function>")
+        self.assertIsNone(parse_tool_calls(raw, TOOLS))
+
 
 if __name__ == "__main__":
     unittest.main()
