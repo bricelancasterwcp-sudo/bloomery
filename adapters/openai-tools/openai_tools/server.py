@@ -255,11 +255,21 @@ class _Handler(BaseHTTPRequestHandler):
     def _suspend_best_effort(self, agent_id: str) -> None:
         try:
             self.server.client.suspend(agent_id)
-        except BloomeryError:
+        except Exception as exc:
             # VRAM-hygiene cleanup, not correctness for THIS request; do not
             # let a suspend failure block or fail the response it rides
-            # along with. Logged so it is not silently invisible either.
-            logger.warning(json.dumps({"event": "suspend_failed", "agent": agent_id}))
+            # along with. Widened from `except BloomeryError` (too narrow):
+            # `BloomeryClient._post` can also raise `json.JSONDecodeError`
+            # (a 200 with a non-JSON body) or `TimeoutError` (a socket read
+            # timeout after headers -- urllib does not wrap that in
+            # `URLError`), neither of which is a `BloomeryError`. This call
+            # runs on the SUCCESS path in `_infer_and_respond`, before
+            # `entry.agent_id`/`turns_committed` are updated and before
+            # `record_generation` -- an escape here would revert an
+            # already-successful turn's commit. Logged so a swallow here is
+            # never silent.
+            logger.warning(json.dumps({"event": "suspend_failed", "agent": agent_id,
+                                       "error": str(exc)}))
 
     def _handle_chat_completion(self):
         try:

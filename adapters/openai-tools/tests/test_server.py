@@ -97,6 +97,21 @@ class _ResetTrackingBloomery(_FakeBloomery):
         self.suspended.append(agent_id)
 
 
+class _ResetSuspendFailsBloomery(_ResetTrackingBloomery):
+    """`suspend` raises a non-`BloomeryError` -- `TimeoutError`, the
+    realistic case: a socket read timeout after headers, which `urllib`
+    does not wrap in `URLError`, so `BloomeryClient._post` lets it through
+    unchanged and it is not a `BloomeryError`. Used to prove
+    `_suspend_best_effort`'s SUCCESS-path call (the old agent, mid-swap in
+    `_infer_and_respond`) cannot revert an already-successful turn. The
+    call is still recorded in `self.suspended` before raising, so a test
+    can confirm suspend really was attempted."""
+
+    def suspend(self, agent_id):
+        self.suspended.append(agent_id)
+        raise TimeoutError("suspend timed out")
+
+
 class _FailNBloomery(_FakeBloomery):
     """Critical 2: fails the Nth `infer` call(s) (1-indexed, `fail_calls` a
     set of attempt numbers) with a routine `BloomeryError` (a 413, exactly
@@ -463,6 +478,55 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(len(set(fake.infer_agent_ids)), 3)
         for prompt in fake.prompts:
             self.assertIn("<tools>", prompt)   # every turn is a full render
+
+    # --- Fix wave: a non-BloomeryError from suspend must not revert a ---
+    # --- successful turn (_suspend_best_effort runs on the SUCCESS ------
+    # --- path, before entry.agent_id/turns_committed are updated) -------
+
+    def test_suspend_timeout_on_the_success_path_does_not_revert_the_commit(self):
+        # _suspend_best_effort's call on the reset swap (suspending the
+        # OLD agent) sits on the SUCCESS path in _infer_and_respond,
+        # BEFORE entry.agent_id is reassigned to the new agent and BEFORE
+        # record_generation. If suspend raises something that is not a
+        # BloomeryError, it must still not be allowed to turn an infer
+        # that already succeeded into a failed response, an orphaned new
+        # agent, or a next turn silently appended onto the OLD agent's
+        # stale KV.
+        port, fake = self._serve(PLAIN, fake_cls=_ResetSuspendFailsBloomery)
+        base = {"model": "m", "tools": TOOLS}
+        status1, body1 = _post(
+            port, dict(base, messages=[{"role": "user", "content": "one"}]), "s1")
+        self.assertEqual(status1, 200)
+        old_agent = fake.infer_agent_ids[0]
+
+        # A history rewrite (genuine divergence) on turn 2 forces the
+        # reset swap -- which is what makes _suspend_best_effort run on
+        # the SUCCESS path for old_agent while a fresh agent is created.
+        status2, body2 = _post(
+            port, dict(base, messages=[{"role": "user", "content": "compressed"}]), "s1")
+
+        # 1) the response is 200, not 500, even though suspend blew up.
+        self.assertEqual(status2, 200)
+        # 2) this turn's own content is correct and unaffected.
+        self.assertEqual(body2["choices"][0]["message"]["content"],
+                         "sure, here is the answer")
+        self.assertIn(old_agent, fake.suspended)  # suspend really was attempted
+        new_agent = fake.infer_agent_ids[1]
+        self.assertNotEqual(old_agent, new_agent)
+
+        # 3) session state afterwards is consistent: one more turn must be
+        # an APPEND to the NEW agent (proving entry.agent_id really was
+        # updated, i.e. the commit was not reverted) and not a fresh
+        # full-render (proving turns_committed really was incremented
+        # too) -- never routed back onto the old agent's stale KV.
+        own_message = body2["choices"][0]["message"]
+        status3, _ = _post(port, dict(base, messages=[
+            {"role": "user", "content": "compressed"}, own_message,
+            {"role": "user", "content": "three"}]), "s1")
+        self.assertEqual(status3, 200)
+        self.assertEqual(len(fake.infer_agent_ids), 3)
+        self.assertEqual(fake.infer_agent_ids[2], new_agent)
+        self.assertNotIn("<tools>", fake.prompts[2])
 
     # --- Important 3: a changed tool set is divergence too --------------
 
