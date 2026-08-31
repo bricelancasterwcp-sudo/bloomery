@@ -1838,3 +1838,59 @@ binding) was the turn's one HIGH and was closed with its own attack as
 the regression test BEFORE the floors locked; every review finding was
 closed pre-lock at zero amendment cost — the hold-until-verified
 discipline keeps paying.
+
+## `/v1` honest refusal of unimplemented fields (2026-08-31)
+
+Found by the hermes-consumer spike of 2026-08-30, live and not by review:
+a request carrying 37 tool definitions was accepted, its `tools` array
+silently dropped (`ChatCompletionReq` has no `deny_unknown_fields`), and
+answered **HTTP 200 with empty content and `finish_reason: "stop"`** — a
+success envelope asserting normal completion for a request whose meaning
+never reached the model. That is the silent-truncation class the README's
+opening paragraph condemns in other people's serving layers, inside
+bloomery's own shim, and reachable by any OpenAI client rather than only by
+hermes.
+
+**DELIVERED** — `reject_unsupported` refuses, by name and with `param` set,
+every field whose meaning this shim would otherwise discard: `tools`,
+`tool_choice`, legacy `functions`/`function_call`, `temperature`, `top_p`,
+`n`, `stop`, `response_format`, `logprobs`, plus the message shapes it
+cannot render (`role: "tool"`, assistant `tool_calls`, and `content` that is
+`null` or an array of parts — the last two previously surfaced as an opaque
+`invalid_json` parse failure that told the caller nothing).
+
+The governing rule is **accept the no-op value, refuse the meaningful one**:
+a value that happens to describe what bloomery already does is honest to
+accept, so `tools: []`, `temperature: 0`, `top_p: 1`, `n: 1`,
+`response_format: {"type":"text"}` and `logprobs: false` all still pass. The
+sampling entries matter more than they look — the substrate samples with
+`LlamaSampler::greedy()`, so a `temperature: 0.8` was previously honored in
+appearance only, which is the same defect as the `tools` drop wearing
+plausible clothes.
+
+17 tests, TDD'd (the first was watched failing against exactly the 200-with-
+dropped-tools body quoted above). Three mutants killed: dropping the
+empty-check from the `tools` guard, widening the `temperature` guard to
+reject `0`, and disabling the content-shape check — each killed by exactly
+the accept-side test written to guard against over-rejection, and by no
+other.
+
+**Carried, not fixed here:**
+
+- **The pager lock is held across `infer`** (`api_v1.rs`, `lock_pager_v1`
+  then `p.infer`). Observed live on 2026-08-30: while one inference was
+  stuck, `GET /status` hung too — so any slow or stuck inference takes down
+  the whole HTTP surface, including the endpoint an operator would use to
+  diagnose it. Blast radius is a design property and is independent of
+  whatever stalled that day; its own slice.
+- **The stall itself did not reproduce.** Six subsequent inferences
+  succeeded, including a byte-for-byte replay of the failing request on a
+  cold boot. Best-supported but unproven explanation is a one-time Vulkan
+  pipeline compile (NVIDIA `[vkrt]`/`[vkps]` driver threads were present,
+  `~/.cache/nvidia/GLCache` open); CPU at ~0% argues against it. Do not
+  chase without a fresh occurrence.
+- **`/v1` still implements no tool calling.** This slice makes the refusal
+  honest, nothing more. The adapter that would actually serve a
+  tool-calling client is specified in
+  `docs/superpowers/specs/2026-08-31-openai-tools-adapter-design.md` and
+  deliberately lives outside the daemon.

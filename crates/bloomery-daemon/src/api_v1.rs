@@ -103,7 +103,15 @@ impl V1Result {
 #[derive(serde::Deserialize)]
 struct ChatMessage {
     role: String,
-    content: String,
+    /// A `Value` rather than a `String` so the two shapes OpenAI permits but
+    /// this shim cannot render — `null` (which pairs with `tool_calls`) and
+    /// an array of content parts (multimodal) — are *named* by
+    /// [`reject_unsupported`] instead of surfacing as an opaque
+    /// `invalid_json` parse failure.
+    #[serde(default)]
+    content: Option<Value>,
+    #[serde(default)]
+    tool_calls: Option<Vec<Value>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -114,6 +122,158 @@ struct ChatCompletionReq {
     max_tokens: Option<u32>,
     #[serde(default)]
     stream: Option<bool>,
+    // Every field below is declared so it can be *refused*, never honored.
+    // See [`reject_unsupported`].
+    #[serde(default)]
+    tools: Option<Vec<Value>>,
+    #[serde(default)]
+    tool_choice: Option<Value>,
+    #[serde(default)]
+    functions: Option<Vec<Value>>,
+    #[serde(default)]
+    function_call: Option<Value>,
+    #[serde(default)]
+    temperature: Option<f64>,
+    #[serde(default)]
+    top_p: Option<f64>,
+    #[serde(default)]
+    n: Option<u32>,
+    #[serde(default)]
+    stop: Option<Value>,
+    #[serde(default)]
+    response_format: Option<Value>,
+    #[serde(default)]
+    logprobs: Option<bool>,
+}
+
+/// One refusal, in the envelope law 2 requires.
+fn unsupported(param: &'static str, detail: &str) -> V1Result {
+    V1Result::json(
+        400,
+        error_envelope(
+            "invalid_request_error",
+            "unsupported_parameter",
+            detail.to_string(),
+            Some(param),
+        ),
+    )
+}
+
+/// Refuse any field whose meaning this shim would otherwise discard.
+///
+/// Found live on 2026-08-30: a hermes request carrying 37 tool definitions
+/// was accepted, its `tools` array silently dropped (this struct has no
+/// `deny_unknown_fields`), and answered `200` with empty content and
+/// `finish_reason: "stop"` — a success envelope asserting normal completion
+/// for a request whose meaning never reached the model. That is precisely
+/// the silent-truncation failure the README's opening paragraph condemns.
+///
+/// The rule is *accept the no-op value, refuse the meaningful one*: a field
+/// whose value happens to describe what bloomery already does is honest to
+/// accept (an empty `tools` array asks for nothing), while any value that
+/// would change the reply is refused by name rather than ignored.
+fn reject_unsupported(req: &ChatCompletionReq) -> Option<V1Result> {
+    // --- tool calling: not implemented at all.
+    if req.tools.as_ref().is_some_and(|t| !t.is_empty()) {
+        return Some(unsupported(
+            "tools",
+            "this endpoint does not implement tool calling; it would otherwise drop \
+             `tools` and answer as though none had been sent",
+        ));
+    }
+    if req.tool_choice.as_ref().is_some_and(|v| v != "none") {
+        return Some(unsupported(
+            "tool_choice",
+            "this endpoint does not implement tool calling; only `\"none\"` is honest here",
+        ));
+    }
+    if req.functions.as_ref().is_some_and(|f| !f.is_empty()) {
+        return Some(unsupported(
+            "functions",
+            "the legacy function-calling API is not implemented",
+        ));
+    }
+    if req.function_call.as_ref().is_some_and(|v| v != "none") {
+        return Some(unsupported(
+            "function_call",
+            "the legacy function-calling API is not implemented",
+        ));
+    }
+
+    // --- sampling: the substrate samples with `LlamaSampler::greedy()`, so
+    // --- only the values that *describe* greedy decoding can be accepted.
+    if req.temperature.is_some_and(|t| t != 0.0) {
+        return Some(unsupported(
+            "temperature",
+            "decoding is greedy; only `0` is honest here, and any other value would be \
+             ignored while the reply looked sampled",
+        ));
+    }
+    if req.top_p.is_some_and(|p| p != 1.0) {
+        return Some(unsupported(
+            "top_p",
+            "decoding is greedy; only `1` is honest here",
+        ));
+    }
+    if req.n.is_some_and(|n| n != 1) {
+        return Some(unsupported(
+            "n",
+            "this endpoint returns exactly one choice; only `1` is honest here",
+        ));
+    }
+
+    // --- everything else this shim would silently discard.
+    let stop_requested = match req.stop.as_ref() {
+        None | Some(Value::Null) => false,
+        Some(Value::Array(a)) => !a.is_empty(),
+        Some(_) => true,
+    };
+    if stop_requested {
+        return Some(unsupported(
+            "stop",
+            "the substrate's infer takes no stop sequence on this path, so a stop string \
+             would be accepted and never applied",
+        ));
+    }
+    if req
+        .response_format
+        .as_ref()
+        .is_some_and(|v| v.get("type").and_then(Value::as_str) != Some("text"))
+    {
+        return Some(unsupported(
+            "response_format",
+            "only `{\"type\":\"text\"}` is implemented; structured output is not",
+        ));
+    }
+    if req.logprobs == Some(true) {
+        return Some(unsupported("logprobs", "logprobs are not implemented"));
+    }
+
+    // --- message shapes this shim cannot render.
+    for m in &req.messages {
+        if m.role == "tool" {
+            return Some(unsupported(
+                "messages[].role",
+                "tool-result messages cannot be rendered: this endpoint does not implement \
+                 tool calling",
+            ));
+        }
+        if m.tool_calls.as_ref().is_some_and(|c| !c.is_empty()) {
+            return Some(unsupported(
+                "messages[].tool_calls",
+                "an assistant turn carrying tool calls cannot be rendered: this endpoint \
+                 does not implement tool calling",
+            ));
+        }
+        if m.content.as_ref().and_then(Value::as_str).is_none() {
+            return Some(unsupported(
+                "messages[].content",
+                "message content must be a string; `null` and content-part arrays are not \
+                 rendered by this shim",
+            ));
+        }
+    }
+    None
 }
 
 /// Routes one `/v1` request. `segments` is the same `/`-split path
@@ -198,6 +358,9 @@ fn chat_completions<S: Substrate>(
             )
         }
     };
+    if let Some(refusal) = reject_unsupported(&req) {
+        return refusal;
+    }
     if req.messages.is_empty() {
         return V1Result::json(
             400,
@@ -364,7 +527,9 @@ fn fallback_prompt(messages: &[ChatMessage]) -> String {
     for m in messages {
         out.push_str(&m.role);
         out.push_str(": ");
-        out.push_str(&m.content);
+        // Guaranteed a string: `reject_unsupported` refuses any other shape
+        // before a prompt is ever built.
+        out.push_str(m.content.as_ref().and_then(Value::as_str).unwrap_or(""));
         out.push('\n');
     }
     out.push_str("assistant: ");
