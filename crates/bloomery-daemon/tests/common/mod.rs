@@ -1,8 +1,16 @@
+// Rust compiles each integration test file as its own binary and includes the
+// whole of this module in every one of them, so a helper used by three of the
+// `api_native_*` files is dead code in the others. The allow is the standard
+// price of a shared test-fixture module; it is scoped to this module only.
+#![allow(dead_code)]
+
 //! Shared std-only HTTP client for the daemon's integration tests: no
 //! reqwest/hyper dependency, just a raw `TcpStream` that speaks enough
 //! HTTP/1.1 to drive `bloomery-daemon`'s native API. Verbatim from the
 //! Task 14 brief, plus the chunked-response decoding described on
 //! [`dechunk`].
+
+pub mod native;
 
 use std::io::{Read, Write};
 
