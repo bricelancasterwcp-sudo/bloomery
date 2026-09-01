@@ -73,6 +73,14 @@ semantic store, appliance boot) is not built. See
 * **Refusals, never truncation.** Oversized prompts come back as `413` with
   the token arithmetic; unplaceable agents as `409` with bytes needed, free and
   reclaimable; exhausted budgets as `402`.
+* **A refusal says what would have worked.** The `409` also carries
+  `max_placeable_tokens`: the largest window that would place right now, so
+  recovery is a re-ask with `window_cap` rather than a guess. `0` is a real
+  answer and a different one — it means no window helps, because the blocker
+  is a model's weights or a resident sibling, not the context size. `null`
+  means no window is advisable at all (an unmeasured VRAM budget makes the
+  refusal residency-count-shaped rather than byte-shaped), never a confident
+  zero for a number nobody computed.
 * **Boot-time POST.** The daemon probes *itself* with [assay](https://github.com/bricelancasterwcp-sudo/assay)
   and attaches the resulting capability profile, so admission can be gated on a
   measured verdict rather than a promise.

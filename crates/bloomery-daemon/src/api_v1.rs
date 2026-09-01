@@ -698,6 +698,7 @@ fn map_error(e: &PagerError, bound_by: Option<&str>) -> (u16, Value) {
             needed,
             free,
             reclaimable,
+            max_placeable_tokens,
         } => (
             503,
             error_envelope(
@@ -705,7 +706,16 @@ fn map_error(e: &PagerError, bound_by: Option<&str>) -> (u16, Value) {
                 "residency_refused",
                 format!(
                     "residency refused: needed {needed} B, free {free} B, \
-                     reclaimable {reclaimable} B"
+                     reclaimable {reclaimable} B{advice}",
+                    // An OpenAI client has no `window_cap` to re-ask with —
+                    // this shim mints its agents itself — so the advice rides
+                    // in the message for an operator reading the error, not
+                    // as a field a caller could act on. Omitted entirely when
+                    // there is none, rather than rendered as "null" prose.
+                    advice = match max_placeable_tokens {
+                        Some(tokens) => format!(", largest placeable window {tokens} tokens"),
+                        None => String::new(),
+                    }
                 ),
                 None,
             ),

@@ -101,6 +101,70 @@ pub struct GeometryInput {
     pub measured_ceiling: Option<u32>,
 }
 
+/// The largest window, in tokens, that a residency request would actually be
+/// able to place right now — the advice a refusal carries so recovery is a
+/// re-ask rather than a guess.
+///
+/// Carried-debt item 7's "third half" is that the window law is blind to
+/// sibling residency: `usable_window` subtracts only *this* model's weights,
+/// while placement charges every loaded model's weights and every resident's
+/// reservation. An agent windowed against the roomier arithmetic can be
+/// permanently un-placeable, and the item's own complaint is that there is
+/// then "no smaller window to fall back to and no recovery".
+///
+/// This function is the recovery. It deliberately does **not** change the
+/// window law, and nothing here mutates an existing agent — a placement-time
+/// downsize was designed, reviewed and rejected on 2026-09-01 (see
+/// `docs/CARRIED-DEBT.md`; it destroyed suspended agents' KV images, among
+/// four other defects). Advising is safe precisely because it changes no
+/// state.
+///
+/// # Arguments
+///
+/// `headroom_bytes` is what placement could free at its most aggressive:
+/// `avail` plus everything this request is entitled to evict. The advice is
+/// therefore an upper bound that assumes maximum reclamation — the refusal
+/// reports `reclaimable` alongside it, so the assumption is visible rather
+/// than implied. `weights_bytes` is charged only when the model is cold (a
+/// loaded model's weights are already outside `avail`), and
+/// `per_ctx_extra_bytes` is the reservation beyond the KV cache itself
+/// (`ctx_overhead` plus any recurrent state).
+///
+/// # Honesty rules
+///
+/// - `None` **only** when `kv_per_token == 0`: with no per-token cost there
+///   is no VRAM-bound window to advise and the division is undefined. This is
+///   the same case `usable_window` handles by skipping its `Vram` candidate
+///   outright — never a confident zero.
+/// - `Some(0)` is a real answer: nothing places even after evicting
+///   everything eligible. The caller learns there is no window worth
+///   retrying, which is a different fact from "we could not work it out".
+/// - Never more than `window_cap_tokens`. The caller is recovering from a
+///   refusal, so advice above its own window would be advice to ask for
+///   something `training_ctx` / `user_cap` / `measured_ceiling` already ruled
+///   out.
+/// - Every subtraction saturates, so charges exceeding the headroom mean
+///   `Some(0)` rather than a vast window conjured by a `u64` underflow.
+pub fn max_placeable_window(
+    headroom_bytes: u64,
+    weights_bytes: u64,
+    per_ctx_extra_bytes: u64,
+    kv_per_token: u64,
+    window_cap_tokens: u32,
+) -> Option<u32> {
+    if kv_per_token == 0 {
+        return None;
+    }
+    let usable = headroom_bytes
+        .saturating_sub(weights_bytes)
+        .saturating_sub(per_ctx_extra_bytes);
+    let tokens = usable / kv_per_token;
+    // `min` before the narrowing cast: the cap is a u32, so a quotient beyond
+    // u32::MAX is clamped by it rather than truncated into a small, wrong
+    // number by an `as` conversion.
+    Some(tokens.min(u64::from(window_cap_tokens)) as u32)
+}
+
 /// Computes the usable context window: the minimum of every applicable
 /// constraint, always reporting which one bound it.
 ///
