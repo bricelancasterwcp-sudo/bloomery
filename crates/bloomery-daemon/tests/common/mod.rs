@@ -10,6 +10,7 @@
 //! Task 14 brief, plus the chunked-response decoding described on
 //! [`dechunk`].
 
+pub mod drift;
 pub mod native;
 
 use std::io::{Read, Write};

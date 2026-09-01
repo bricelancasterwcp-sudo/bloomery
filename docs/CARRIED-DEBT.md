@@ -1617,17 +1617,42 @@ requested context window; still unaddressed, unchanged by this turn.
   moves by one because a split removes one name from the list while adding
   files that were never on it.
 
-  **The recipe is now worked, and the remaining 20 are mechanical.** Split on
-  the file's existing `// ---` section rules; lift any helper used by more
-  than one resulting file into `tests/common/`; give the common module
-  `#![allow(dead_code)]` (Rust builds every integration test as its own
-  binary, so a helper used by three files is dead in the rest); then let
-  `cargo clippy --fix` prune the copied import block per target. The
-  second-worst, `drift_test.rs` (1983), splits the same way into four along
-  its Fixtures / gate / boot-wiring / verdict-gated-admission sections.
-  Deliberately left for its own PR: one PR per file keeps a
-  behaviour-preserving refactor reviewable, which is the only property that
-  makes this chore safe to do at all.
+  **Amended again 2026-09-01 (slice D, second PR).** `drift_test.rs`, 1983
+  lines and the second-worst offender, is split into four
+  (`drift_gate_test.rs` 584, `drift_boot_test.rs` 558, `drift_test.rs` 438
+  store mechanics, `drift_admission_test.rs` 177) over
+  `tests/common/drift.rs` (292). All 46 tests survive; workspace total
+  unchanged at 948. **20 → 19.**
+
+  This one needed a bigger shared module than `api_native` did, and the
+  reason is worth recording: `drift_test.rs` resisted a section-only split
+  because its fixtures were coupled *across* sections — `profile_doc` and
+  `boot` were each reached by three of the four resulting files, and the
+  lifting had to close transitively (a lifted helper's own callees, like
+  `scratch` and `value_of`, must come with it).
+
+  **The recipe, with the trap that nearly cost a test.** Split on the file's
+  existing `// ---` section rules; lift any helper used by more than one
+  resulting file into `tests/common/`, closing transitively over what those
+  helpers call; give the common module `#![allow(dead_code)]` (Rust builds
+  every integration test as its own binary, so a helper used by three files
+  is dead in the rest); then let `cargo clippy --fix` prune the copied import
+  block per target.
+
+  **Cut on the section rule, never on the first item's signature line.** A
+  test's `#[test]` attribute and doc comment sit *above* its `fn`, so a range
+  starting at the signature silently strips both — leaving a bare `fn` that
+  still compiles and still looks like a test in the file, but is no longer
+  run. It happened here to
+  `the_stores_current_path_is_the_file_post_actually_writes`, and it was
+  caught only because the per-file test counts were summed and compared:
+  45 where 46 were expected. **A lost test shows up as a smaller number, not
+  as a failure** — so the count is the check that matters for this chore, and
+  a dead-code warning is the corroborating signal. Verify by diffing the set
+  of test names before and after, not just the total.
+
+  One PR per file, deliberately: reviewability is the only property that
+  makes a refactor this size safe.
 
   **Amended 2026-08-31 (`agent-delete-endpoint`):** still open, and now
   **20** files over the ceiling — 13 test, 7 source — measured on the branch.
