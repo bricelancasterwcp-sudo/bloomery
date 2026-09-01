@@ -1598,6 +1598,37 @@ requested context window; still unaddressed, unchanged by this turn.
   over the ceiling. The original text stands as recorded; the swap-candidate
   section's *Recorded, not fixed* carries the full count as of 2026-08-19.
   The remedy is unchanged and now project-wide, not one file's chore.
+  **Amended 2026-09-01 (slice D, first PR).** The count is **21 → 20**, and
+  the *worst* offender is gone: `api_native_test.rs`, 2505 lines, is split
+  along its own section rules into five focused files
+  (`api_native_test.rs` 491 core routes + `/status`,
+  `api_native_bless_unblock_test.rs` 570, `api_native_swap_window_test.rs`
+  416, `api_native_swap_candidate_test.rs` 413, `api_native_poison_test.rs`
+  191), with the fixtures more than one of them needs lifted into
+  `tests/common/native.rs` (479) rather than duplicated. All 47 tests survive, the
+  workspace total is unchanged at 948, and the split is behaviour-preserving
+  by construction: no test body was edited, only moved.
+
+  Two honest notes. **One file crossed the ceiling this session**:
+  `api_native.rs` at 816, pushed over by slice 1's own `DELETE /agents/{id}`
+  handler — recorded here rather than quietly absorbed, since this entry's
+  whole history is a count nobody was watching. And **21 → 20 understates the
+  work**: the excess above the ceiling fell by ~1,700 lines, but the count
+  moves by one because a split removes one name from the list while adding
+  files that were never on it.
+
+  **The recipe is now worked, and the remaining 20 are mechanical.** Split on
+  the file's existing `// ---` section rules; lift any helper used by more
+  than one resulting file into `tests/common/`; give the common module
+  `#![allow(dead_code)]` (Rust builds every integration test as its own
+  binary, so a helper used by three files is dead in the rest); then let
+  `cargo clippy --fix` prune the copied import block per target. The
+  second-worst, `drift_test.rs` (1983), splits the same way into four along
+  its Fixtures / gate / boot-wiring / verdict-gated-admission sections.
+  Deliberately left for its own PR: one PR per file keeps a
+  behaviour-preserving refactor reviewable, which is the only property that
+  makes this chore safe to do at all.
+
   **Amended 2026-08-31 (`agent-delete-endpoint`):** still open, and now
   **20** files over the ceiling — 13 test, 7 source — measured on the branch.
   `pager_test.rs` is no longer the worst of them and has not been for some
