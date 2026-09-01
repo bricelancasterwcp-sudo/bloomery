@@ -106,6 +106,19 @@ struck — but it now carries what the fix can and cannot be. Recorded here
 rather than in an evidence doc because it is a change to a carried item's
 scope, which is what this file is for. No code changed.
 
+**Amended 2026-09-01** (slice C, branch `refusal-max-placeable`): **item 7's
+"third half" is half delivered, and the fix this file prescribed for it is
+withdrawn.** The item makes two complaints — the window law is blind to a
+resident sibling, and a refusal leaves no recovery — which turned out to want
+different fixes. The recovery half is closed (`max_placeable_tokens` on every
+residency refusal); the blindness half stays open, its regression test
+passing verbatim. The prescription (grow `GeometryInput` with sibling terms)
+is withdrawn with reasons, and the placement-time downsize designed to replace
+it is recorded as REJECTED with the five defects a four-lens adversarial
+review found — including a CRITICAL that destroyed suspended agents' KV
+images. Both rejections are written down in full at the item, because an
+unrecorded rejected design gets proposed again.
+
 ## Delivered in Phase 2a (2026-08-14)
 
 Struck through, never deleted: the original text stands as recorded, with
@@ -1451,6 +1464,77 @@ requested context window; still unaddressed, unchanged by this turn.
    otherwise-alone agent's reservation can no longer overflow its own
    budget (that's what closed); a second agent's window, sized blind to a
    resident sibling, still can be wrong (that's what's left).
+
+   **Amended 2026-09-01 (slice C, branch `refusal-max-placeable`). Half
+   delivered; the prescription above is WITHDRAWN.** This item makes two
+   complaints, and they turned out to want different fixes:
+
+   1. *the window law is blind to a resident sibling* — **still open**,
+      unchanged, and the regression test above still passes verbatim; and
+   2. *a refusal leaves "no smaller window to fall back to and no recovery"*
+      — **closed**. `PagerError::Refused` now carries `max_placeable_tokens`:
+      the largest window that would place, so recovery is a mechanical
+      re-ask rather than a guess. It appears in the native `409` body, in the
+      `/v1` `503` message, in `Display`, and in the journal's refusal detail.
+
+   **The prescription this item recorded — "`GeometryInput` also carrying the
+   other models' loaded weights and residents' reservations" — was
+   implemented in neither form, deliberately.** `GeometryInput` is unchanged
+   and `usable_window` is untouched. Two reasons, both found by reading code
+   this item predates:
+
+   - **It ignores reclamation.** `plan_residency` evicts idle,
+     strictly-lower-priority residents. Subtracting *all* resident
+     reservations would starve exactly the case eviction exists for: a
+     high-priority agent arriving to a pool of idle low-priority residents
+     would be sized against a budget those residents are consuming, though
+     placement would evict every one of them.
+   - **It bakes a transient into a permanent.** `usable_window` has exactly
+     one call site (`pager.rs`, in `create_agent`) and `Agent.window` is
+     written exactly once, so the reading taken at create time is permanent
+     for the agent's life — while the sibling pressure it corrects for is
+     momentary. It would trade a loud permanent refusal for a quiet permanent
+     degradation, which for this project is the worse failure.
+
+   **A placement-time downsize was designed as the replacement, reviewed, and
+   REJECTED — recorded here so it is not proposed a third time.** The idea:
+   on the `Refuse` arm, shrink a `Vram`-bound window to what actually fits and
+   retry. A four-lens adversarial review (2026-09-01, every finding
+   independently verified against code) found five distinct defects:
+
+   1. **CRITICAL — it destroys suspended agents' conversations.** `place()`
+      is reached from `ensure_resident` for *Suspended* agents, not only
+      Fresh ones: the early return covers only `AgentState::Resident`.
+      Shrinking the window changes the `n_ctx` `open_context` then creates;
+      `load_state` rejects an image holding more cells as
+      `STATE_SIZE_MISMATCH`; and `restore_image` deliberately does **not**
+      put those bytes back on that branch (`if !failure.contains(...)`), so it
+      cold-starts and returns `Ok` → HTTP 204. A refusal that *preserved* a
+      conversation becomes a success that *destroys* it. The no-put-back rule
+      is sound only while invalidation is a permanent property of the image;
+      a downsize makes it a transient function of sibling residency.
+   2. **HIGH — the bookkeeping desyncs.** `kv_bytes` and `reserved_bytes` are
+      derived from the window once, at creation. A downsize that does not
+      re-derive them leaves the agent charging the budget for a window it no
+      longer has, so it frees nothing for the siblings it exists to help.
+   3. **HIGH — the prompt gate reads the stale window.** `infer` reads
+      `a.window.tokens` and runs law 2's prompt check *before* calling
+      `ensure_resident`, so on the triggering call a prompt admitted at 4096
+      is sent to a context opened at 1200, and the refusal's own arithmetic
+      says the prompt fits.
+   4. **HIGH — sizing to `avail + reclaimable` is maximally evicting.** It
+      guarantees the re-plan evicts every idle lower-priority resident, when a
+      smaller window would have fit in `avail` alone and evicted nobody.
+   5. **HIGH — it is the same transient-into-permanent defect** used two
+      paragraphs above to reject this item's own prescription. The rejection
+      argument condemns the replacement just as hard.
+
+   Advising is safe precisely because it mutates nothing. **The remaining
+   sibling-blindness needs a design where the window is computed at the
+   moment the residency reading is valid** — deferring the VRAM term to first
+   placement, or placing at create time so the two coincide. Both change the
+   lazy-residency contract and belong to their own slice; neither is
+   scheduled.
 
 9. **Recorded scoring edges (protocol §3), item (b) of the 2026-08-15
    batch.** Two landing-score edge cases are pinned by test, not by
