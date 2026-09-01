@@ -76,6 +76,15 @@ struck somewhere it was never written. Turn 4's section is added below with
 its settled rulings, its deferred minors, and its process lessons. Nothing
 else in this file is touched.
 
+**Amended 2026-09-01** (pager-lock spike, read-only): the `/v1` section's
+"pager lock is held across `infer`" item gains the findings of a spike run
+*before* committing to the slice it names, because the spike narrowed the
+slice sharply and two of its conclusions are negative results that would
+otherwise be re-derived expensively. The item stays **open** — nothing is
+struck — but it now carries what the fix can and cannot be. Recorded here
+rather than in an evidence doc because it is a change to a carried item's
+scope, which is what this file is for. No code changed.
+
 ## Delivered in Phase 2a (2026-08-14)
 
 Struck through, never deleted: the original text stands as recorded, with
@@ -1883,6 +1892,61 @@ other.
   the whole HTTP surface, including the endpoint an operator would use to
   diagnose it. Blast radius is a design property and is independent of
   whatever stalled that day; its own slice.
+
+  **Spiked 2026-09-01, read-only, before committing to that slice — and the
+  spike narrowed it sharply. Five findings, recorded so none is re-derived:**
+
+  1. **`/status` is trivially separable.** `Pager::status()` takes `&self`
+     and is pure in-memory reads over the agent and model tables; it never
+     touches `self.substrate`. Its one call-like term, `(self.free_vram)()`,
+     is a boot-time captured constant — `main.rs` does a one-shot
+     `free_vram_bytes(...)` read and then `Box::new(move || probe)` — which
+     is the *Static VRAM budget convention* standing ruling holding. No I/O,
+     no FFI.
+  2. **A cheaper lock mode does not fix it.** `Mutex` → `RwLock` is the
+     obvious move and it fails: `infer` holds the write guard for the whole
+     generation, so readers queue exactly as they do now. Serving `/status`
+     during a stall requires state living *outside* the pager's lock, not a
+     different lock mode over the same state.
+  3. **The wedge-*relief* case is not reachable by any locking change,
+     including the actor rewrite.** `DELETE`/`suspend` need
+     `destroy_context`, a `Substrate` method on the very context the stuck
+     call is inside. The actor pattern that `llama_send.rs`'s safety clause
+     (d) names as the fallback does **not** help: the actor thread would be
+     blocked inside the FFI call, so a control message would sit in its
+     mailbox exactly as it now sits behind the mutex. **The blocking element
+     is the GPU call, not the lock.** Clause (d) offers the actor rewrite for
+     a *thread-affinity fault* — a different problem — and it should not be
+     spent on this one.
+  4. **Cancellation is the only real relief, and it is a substrate slice.**
+     `abort_callback` is a `llama_context_params` field and is present in the
+     bindgen'd `llama-cpp-sys-2` bindings, but the safe `llama-cpp-2`
+     `=0.1.154` API does not expose it at all (its only abort-capable
+     callback is model-*load* progress). Reaching it means building context
+     params at the sys level or patching/upgrading the wrapper, with its own
+     soundness argument — a `bloomery-substrate` change, not a daemon one.
+  5. **The cheap option leaves the `unsafe` block alone.** Publishing state
+     beside the pager lets no second thread touch the substrate, so
+     `SendLlama`'s property (a) — exclusive access is structural — holds
+     unamended. The two-tier-lock and actor options both *would* reopen that
+     argument.
+
+  **Recommendation of record: the observability fix, not the concurrency
+  fix.** Publish a status snapshot plus an in-flight record (route, agent id,
+  started-at) updated under the pager lock and read without it, with an
+  explicit `as_of` so it is honest about staleness rather than posing as
+  live. `/status` then answers during a wedge with what is stuck and for how
+  long, which is what the 2026-08-30 incident actually needed. It explicitly
+  does **not** let anyone delete or suspend the stuck agent; the only relief
+  stays a process restart, priced honestly in the README (KV images are
+  boot-scoped, so a restart is a cold start for every agent).
+
+  **Cancellation deliberately not built yet.** The very next item below
+  records that this stall never reproduced and says not to chase it without a
+  fresh occurrence. Building cancellation for a single unreproduced event
+  would be speculative; the observability fix is the right first move because
+  it is what makes a *next* occurrence diagnosable — the precondition that
+  item already sets.
 - **The stall itself did not reproduce.** Six subsequent inferences
   succeeded, including a byte-for-byte replay of the failing request on a
   cold boot. Best-supported but unproven explanation is a one-time Vulkan
