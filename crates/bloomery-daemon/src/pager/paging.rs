@@ -10,6 +10,7 @@
 
 use std::time::Instant;
 
+use bloomery_core::geometry::max_placeable_window;
 use bloomery_core::journal::{AgentId, PagerOpKind};
 use bloomery_core::scheduler::{plan_residency, Placement, ResidencyRequest, Resident};
 use bloomery_substrate::{
@@ -156,7 +157,7 @@ impl<S: Substrate> Pager<S> {
                 a.model.clone(),
             )
         };
-        let (model_loaded, weights_bytes, declared_label) = {
+        let (model_loaded, weights_bytes, declared_label, kv_per_token) = {
             let entry = self
                 .models
                 .get(&model)
@@ -174,6 +175,12 @@ impl<S: Substrate> Pager<S> {
                 entry.handle.is_some(),
                 entry.effective_weights_bytes(),
                 entry.declared_weights_label(),
+                // Read here, from the same entry as the weights charge, for
+                // the refusal's `max_placeable_tokens` advice below — the
+                // same `effective_kv_per_token()` `create_agent` windowed
+                // against, so the advice and the original window are drawn
+                // from one number rather than two that could drift.
+                entry.effective_kv_per_token(),
             )
         };
         // Loading is part of satisfying this request when the model is
@@ -277,13 +284,49 @@ impl<S: Substrate> Pager<S> {
                         ),
                         _ => format!("weights {weights_term} B"),
                     };
+                    // The advice this refusal carries (carried-debt item 7,
+                    // third half): the largest window that WOULD place, so
+                    // the caller re-asks with `window_cap` instead of
+                    // guessing. Sized against `avail + reclaimable` — what
+                    // placement could free at its most aggressive — and
+                    // clamped to the window this agent already had, since
+                    // advice above it would name something the other window
+                    // terms already ruled out.
+                    //
+                    // `None` when `budget` is unmeasured: that refusal is
+                    // residency-COUNT-shaped (capped at one agent), not
+                    // byte-shaped, so a byte-derived token figure would be a
+                    // confident answer to a question the arithmetic never
+                    // asked. `max_placeable_window` returns `None` for the
+                    // other unanswerable case, `kv_per_token == 0`.
+                    //
+                    // Nothing is mutated here. A placement-time *downsize*
+                    // was designed and rejected on 2026-09-01 — it destroyed
+                    // suspended agents' KV images, among four other defects
+                    // (docs/CARRIED-DEBT.md). Advising is safe exactly
+                    // because it changes no state.
+                    let max_placeable_tokens = budget.and_then(|_| {
+                        max_placeable_window(
+                            avail.saturating_add(reclaimable),
+                            weights_term,
+                            reserved_bytes.saturating_sub(kv_bytes),
+                            kv_per_token,
+                            window_tokens,
+                        )
+                    });
+                    let advice = match max_placeable_tokens {
+                        Some(tokens) => {
+                            format!(", largest placeable window {tokens} tokens")
+                        }
+                        None => String::new(),
+                    };
                     let detail = match budget {
                         Some(budget) => format!(
                             "residency: {weights_clause} + reserved {reserved_bytes} B \
                              (kv {kv_bytes} B + ctx overhead {ctx_overhead} B) vs budget \
                              {budget} B − overhead {overhead} B − loaded {loaded_weights} B − \
                              resident {resident_reserved} B (needed {needed} B, free {free} B, \
-                             reclaimable {reclaimable} B)",
+                             reclaimable {reclaimable} B{advice})",
                             ctx_overhead = reserved_bytes.saturating_sub(kv_bytes)
                         ),
                         None => format!(
@@ -302,6 +345,7 @@ impl<S: Substrate> Pager<S> {
                         needed,
                         free,
                         reclaimable,
+                        max_placeable_tokens,
                     })
                 }
             }

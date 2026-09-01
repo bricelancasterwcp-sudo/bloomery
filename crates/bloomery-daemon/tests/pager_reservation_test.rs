@@ -185,6 +185,7 @@ fn a_second_agents_reservation_not_just_its_kv_is_what_refuses_it() {
             needed,
             free,
             reclaimable,
+            max_placeable_tokens,
         }) => {
             assert_eq!(
                 needed, a2_reserved,
@@ -195,6 +196,21 @@ fn a_second_agents_reservation_not_just_its_kv_is_what_refuses_it() {
                 "avail is the budget minus loaded weights minus a1's whole reservation"
             );
             assert_eq!(reclaimable, 0, "a1 outranks a2, so nothing is reclaimable");
+            // Slice C's advice. `avail` here is exactly 32 MiB — and so is
+            // `ctx_overhead`, which every context reserves BEFORE its first
+            // KV token. The per-context reservation alone consumes the whole
+            // remainder, so there is no window at all, however small:
+            // `Some(0)`.
+            //
+            // This is the reservation-shaped sibling of the weights-shaped
+            // zero in `pager_weights_test.rs`. Both say the same actionable
+            // thing — do not retry with a smaller `window_cap`, free
+            // something first — which a bare 409 could not.
+            assert_eq!(
+                max_placeable_tokens,
+                Some(0),
+                "ctx_overhead alone eats the remaining budget: no window fits"
+            );
         }
         other => panic!("expected Refused, got {other:?}"),
     }
@@ -228,7 +244,7 @@ fn a_second_agents_reservation_not_just_its_kv_is_what_refuses_it() {
     let expected_detail = format!(
         "residency: weights 0 B + reserved {a2_reserved} B (kv {KV_BYTES} B + ctx overhead \
          {ctx_overhead} B) vs budget {budget} B − overhead 0 B − loaded {weights} B − \
-         resident {a1_reserved} B (needed {a2_reserved} B, free {avail} B, reclaimable 0 B)"
+         resident {a1_reserved} B (needed {a2_reserved} B, free {avail} B, reclaimable 0 B, largest placeable window 0 tokens)"
     );
     let events = replay(&jpath).unwrap();
     assert!(
@@ -525,6 +541,7 @@ fn a_sibling_blind_automatic_window_still_refuses_item_7_third_half() {
             needed,
             free,
             reclaimable,
+            max_placeable_tokens,
         }) => {
             assert_eq!(
                 needed, a2_reserved,
@@ -532,6 +549,26 @@ fn a_sibling_blind_automatic_window_still_refuses_item_7_third_half() {
             );
             assert_eq!(free, avail, "avail is exactly zero: a1 left nothing");
             assert_eq!(reclaimable, 0, "a1 outranks a2, so nothing is reclaimable");
+            // **What slice C changes about item 7's third half, asserted on
+            // the test that pins it.** The sibling-blindness is UNFIXED and
+            // this test still passes unaltered around this line: a2's window
+            // law is still blind to resident a1, still computes the same
+            // oversized window, and placement still refuses it.
+            //
+            // What is no longer true is the item's other complaint — "no
+            // smaller window to fall back to and no recovery". The refusal
+            // now says `Some(0)`, which is the honest answer here because
+            // `avail` is exactly zero: a1's automatic window consumed the
+            // entire budget, so no `window_cap` a2 could name would place
+            // while a1 is resident. The caller learns the blocker is the
+            // SIBLING, not its own window size — that is the recovery, and
+            // it is a different fact from the `Some(2048)` a caller gets when
+            // a smaller window really would work.
+            assert_eq!(
+                max_placeable_tokens,
+                Some(0),
+                "a1 left nothing, so no window a2 could ask for would place"
+            );
         }
         other => panic!("expected Refused, got {other:?}"),
     }
@@ -539,7 +576,7 @@ fn a_sibling_blind_automatic_window_still_refuses_item_7_third_half() {
     let expected_detail = format!(
         "residency: weights 0 B + reserved {a2_reserved} B (kv {kv} B + ctx overhead \
          {ctx_overhead} B) vs budget {budget} B − overhead 0 B − loaded {weights} B − \
-         resident {a1_reserved} B (needed {a2_reserved} B, free {avail} B, reclaimable 0 B)",
+         resident {a1_reserved} B (needed {a2_reserved} B, free {avail} B, reclaimable 0 B, largest placeable window 0 tokens)",
         kv = a1_tokens * kv_per_token,
     );
     let events = replay(&jpath).unwrap();

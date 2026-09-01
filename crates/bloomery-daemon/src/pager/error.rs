@@ -30,6 +30,19 @@ pub enum PagerError {
         needed: u64,
         free: u64,
         reclaimable: u64,
+        /// The largest window that WOULD place right now, so a refused caller
+        /// can re-ask instead of guessing — carried-debt item 7's "third
+        /// half" complains that a refusal leaves "no smaller window to fall
+        /// back to and no recovery", and this is the recovery.
+        ///
+        /// Assumes maximum reclamation (every resident this request may
+        /// evict); `reclaimable` sits beside it so that assumption is
+        /// visible. `Some(0)` means nothing places even then. `None` means no
+        /// window is advisable — either VRAM is unmeasured, so the refusal is
+        /// residency-count-shaped rather than byte-shaped, or `kv_per_token`
+        /// is 0 and no VRAM-bound window exists. Never a confident zero for
+        /// a number nobody computed.
+        max_placeable_tokens: Option<u32>,
     },
     PromptTooLarge {
         needed_tokens: u64,
@@ -57,10 +70,20 @@ impl std::fmt::Display for PagerError {
                 needed,
                 free,
                 reclaimable,
-            } => write!(
-                f,
-                "residency refused: needed {needed} B, free {free} B, reclaimable {reclaimable} B"
-            ),
+                max_placeable_tokens,
+            } => {
+                write!(
+                    f,
+                    "residency refused: needed {needed} B, free {free} B, reclaimable {reclaimable} B"
+                )?;
+                // Omitted rather than rendered as "none": a caller reading
+                // this line should see advice or nothing, never a word it has
+                // to interpret as an absent number.
+                match max_placeable_tokens {
+                    Some(tokens) => write!(f, "; largest placeable window {tokens} tokens"),
+                    None => Ok(()),
+                }
+            }
             PagerError::PromptTooLarge {
                 needed_tokens,
                 window_tokens,

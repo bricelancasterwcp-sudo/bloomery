@@ -741,7 +741,7 @@ fn status<S: Substrate>(pager: &Mutex<Pager<S>>, memory: Option<&MemoryContext>)
 /// | `UnknownModel` / `UnknownAgent` | 404 | `{error, model\|agent}` |
 /// | `Unprofiled` | 422 | `{error, model}` |
 /// | `DriftBlocked` | 422 | `{error, model, reference}` |
-/// | `Refused` | 409 | `{error, needed, free, reclaimable}` |
+/// | `Refused` | 409 | `{error, needed, free, reclaimable, max_placeable_tokens}` |
 /// | `PromptTooLarge` | 413 | `{error, needed_tokens, window_tokens}` |
 /// | `Budget` | 402 | `{error, remaining, requested}` |
 /// | `Contract` | 502 | `{error, kind, detail}` |
@@ -759,6 +759,7 @@ fn map_error(e: &PagerError) -> ApiResult {
             needed,
             free,
             reclaimable,
+            max_placeable_tokens,
         } => (
             409,
             json!({
@@ -766,6 +767,11 @@ fn map_error(e: &PagerError) -> ApiResult {
                 "needed": needed,
                 "free": free,
                 "reclaimable": reclaimable,
+                // Always present, `null` when no window is advisable — an
+                // absent key would be indistinguishable from a client that
+                // forgot to read it. `null` says "we did not compute one",
+                // which is a different fact from `0` ("nothing fits").
+                "max_placeable_tokens": max_placeable_tokens,
             }),
         ),
         PagerError::PromptTooLarge {

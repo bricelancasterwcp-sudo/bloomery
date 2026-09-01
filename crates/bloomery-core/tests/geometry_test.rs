@@ -278,3 +278,109 @@ fn kv_bytes_per_token_unstated_value_length_stays_dense() {
         "value_length: None must not change the pre-R9 dense figure"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `max_placeable_window` — the advice a residency refusal carries.
+//
+// Slice C (2026-09-01) answers carried-debt item 7's third half by making the
+// refusal actionable rather than by changing the window law. The refused
+// caller is told the largest window that WOULD place, so recovery is a
+// mechanical re-ask instead of a guess. The function is pure so the honesty
+// rules below are pinned without a pager.
+// ---------------------------------------------------------------------------
+
+/// The ordinary case: headroom minus the two non-KV charges, divided by the
+/// per-token cost. 100 MiB of headroom, 20 MiB of per-context reservation
+/// beyond KV, nothing to load, 1 MiB/token -> 80 tokens.
+#[test]
+fn advises_the_tokens_that_actually_fit() {
+    let mib = 1024 * 1024;
+    assert_eq!(
+        max_placeable_window(100 * mib, 0, 20 * mib, mib, 4096),
+        Some(80)
+    );
+}
+
+/// A cold model must fit its weights too — they are part of what the
+/// placement will charge, so they come off the headroom before the division.
+#[test]
+fn a_cold_models_weights_come_off_the_headroom_first() {
+    let mib = 1024 * 1024;
+    assert_eq!(
+        max_placeable_window(100 * mib, 50 * mib, 20 * mib, mib, 4096),
+        Some(30)
+    );
+}
+
+/// Never advise more than the agent already had. The caller is recovering
+/// from a refusal; advice above its own window would be advice to ask for
+/// something the other window terms (training_ctx, user_cap,
+/// measured_ceiling) already ruled out.
+#[test]
+fn the_advice_is_clamped_to_the_window_the_agent_already_had() {
+    let mib = 1024 * 1024;
+    assert_eq!(
+        max_placeable_window(10_000 * mib, 0, 0, mib, 512),
+        Some(512),
+        "9999 tokens of room must not become advice to ask for 9999"
+    );
+}
+
+/// Zero is a real answer, not a missing one: nothing places even with every
+/// eligible resident evicted. Saying `Some(0)` is the honest form — the
+/// caller learns there is no window to retry with, which is different from
+/// "we could not work it out".
+#[test]
+fn zero_is_advised_when_nothing_fits_at_all() {
+    let mib = 1024 * 1024;
+    assert_eq!(
+        max_placeable_window(10 * mib, 0, 20 * mib, mib, 4096),
+        Some(0)
+    );
+}
+
+/// `kv_per_token == 0` is the one case with no answer: with no per-token
+/// cost there is no VRAM-bound window to advise, and dividing by it is
+/// undefined. `None`, never a confident zero — the same rule
+/// `usable_window` follows when it skips the Vram candidate entirely.
+#[test]
+fn no_advice_when_a_token_costs_nothing() {
+    assert_eq!(max_placeable_window(1024, 0, 0, 0, 4096), None);
+}
+
+/// The subtractions saturate rather than wrap: charges larger than the
+/// headroom mean nothing fits, which is `Some(0)`, not a huge window from a
+/// u64 underflow.
+#[test]
+fn oversized_charges_saturate_to_zero_rather_than_wrapping() {
+    let mib = 1024 * 1024;
+    assert_eq!(
+        max_placeable_window(mib, 500 * mib, 500 * mib, 1024, 4096),
+        Some(0)
+    );
+}
+
+/// A quotient beyond `u32` is clamped by the window cap like any other, so
+/// the `u64 -> u32` narrowing can never truncate into a small, wrong number.
+#[test]
+fn an_enormous_quotient_is_capped_not_truncated() {
+    assert_eq!(max_placeable_window(u64::MAX, 0, 0, 1, 4096), Some(4096));
+}
+
+/// The division truncates DOWN, and a remainder is where that shows.
+///
+/// Every other case here divides evenly, which makes truncation and rounding
+/// indistinguishable — a mutation check (2026-09-01) caught exactly that:
+/// swapping `/` for `div_ceil` left all of them green. Rounding up would
+/// advise a window whose reservation exceeds the headroom by the remainder,
+/// so the caller retries and is refused a second time. One honest refusal
+/// must not become two.
+#[test]
+fn a_remainder_truncates_down_never_up() {
+    let mib = 1024 * 1024;
+    assert_eq!(
+        max_placeable_window(100 * mib + 1000, 0, 0, mib, 4096),
+        Some(100),
+        "1000 B of remainder must not buy a 101st token"
+    );
+}

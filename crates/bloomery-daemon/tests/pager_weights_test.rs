@@ -177,6 +177,7 @@ fn a_second_models_weights_that_cannot_fit_are_refused_with_the_arithmetic() {
             needed,
             free,
             reclaimable,
+            max_placeable_tokens,
         }) => {
             assert_eq!(
                 needed,
@@ -187,6 +188,22 @@ fn a_second_models_weights_that_cannot_fit_are_refused_with_the_arithmetic() {
             assert_eq!(
                 reclaimable, KV_BYTES,
                 "a1's ctx is the only reclaimable KV; weights are never auto-evicted"
+            );
+            // Slice C's advice, on the case where no window helps at all.
+            // Headroom even after reclaiming everything is
+            // `avail + reclaimable = 50 + 56 = 106 MiB`, and model B's cold
+            // weights alone are 250 MiB — so the subtraction saturates and
+            // the honest answer is `Some(0)`, not a small positive window.
+            //
+            // The distinction is the whole point of advising a number: `0`
+            // tells the caller the blocker is the model's WEIGHTS, so
+            // re-asking with any `window_cap` is futile and something must be
+            // unloaded instead. A positive figure would have sent them round
+            // a retry loop that could never succeed.
+            assert_eq!(
+                max_placeable_tokens,
+                Some(0),
+                "no window fits when the cold weights alone exceed the headroom"
             );
         }
         other => panic!("expected Refused, got {other:?}"),
@@ -219,7 +236,7 @@ fn a_second_models_weights_that_cannot_fit_are_refused_with_the_arithmetic() {
         "residency: weights {weights_b} B + reserved {KV_BYTES} B (kv {KV_BYTES} B + ctx \
          overhead 0 B) vs budget {budget} B − overhead 0 B − loaded {weights_a} B − resident \
          {KV_BYTES} B (needed {expected_needed} B, free {expected_free} B, reclaimable \
-         {expected_reclaimable} B)",
+         {expected_reclaimable} B, largest placeable window 0 tokens)",
         expected_needed = weights_b + KV_BYTES,
         expected_free = budget - weights_a - KV_BYTES,
         expected_reclaimable = KV_BYTES,

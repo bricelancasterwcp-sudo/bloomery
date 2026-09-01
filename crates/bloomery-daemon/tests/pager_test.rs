@@ -282,12 +282,28 @@ fn residency_refusal_is_pre_checked_and_never_touches_the_substrate() {
             needed,
             free,
             reclaimable,
+            max_placeable_tokens,
         }) => {
             assert_eq!(needed, 4096 * 57344);
             assert_eq!(free, 300 * 1024 * 1024 - 4096 * 57344);
             assert_eq!(
                 reclaimable, 0,
                 "a higher-priority resident is not reclaimable"
+            );
+            // Slice C's advice, on the case that truncates. Headroom is
+            // `free + reclaimable = 79,691,776 B` with nothing to reclaim,
+            // the model is already loaded (no weights term) and this fixture
+            // sets no ctx overhead, so the advice is
+            // `79,691,776 / 57,344 = 1389.71…`.
+            //
+            // 1389, not 1390: the division truncates DOWN, and it has to.
+            // 1390 tokens would reserve 79,708,160 B — 16,384 B more than
+            // exists — so rounding up would advise a window that refuses
+            // again, turning one honest refusal into two.
+            assert_eq!(
+                max_placeable_tokens,
+                Some(1389),
+                "advice must truncate down to a window that actually fits"
             );
         }
         other => panic!("expected Refused, got {other:?}"),
