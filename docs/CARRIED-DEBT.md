@@ -1706,6 +1706,34 @@ requested context window; still unaddressed, unchanged by this turn.
   `pager_remove_agent_test.rs` 137 -> 87 and `pager_reservation_test.rs`
   1000+ -> 636 without splitting either.
 
+  **Amended again 2026-09-01 (slice D, sixth PR — the memory pair).**
+  `memory_refalsify_test.rs` (1238) and `memory_task_test.rs` (995) become
+  four test files, none over 411, over three fixture modules. **15 -> 13.**
+
+  The divergence measurement paid off a second time and more sharply: across
+  the six `memory_*` files, `fresh_dir` had **six copies and six variants** --
+  every single one different. They turned out to differ *only* in a
+  hard-coded prefix string (`refalsify`, `memtask`, `memcapture`), so it
+  unified cleanly by taking the scope as an argument. Of the 17 helpers the
+  two big files shared by name, 12 were byte-identical and 5 were genuine
+  forks (`await_stamp`, `drive`, `sandbox`, `stamp_for`, plus `fresh_dir`);
+  only the identical twelve were pooled, and the forks stayed with their
+  callers. Unifying a fork is a behaviour decision, not a chore.
+
+  **Neither file split on sections, because neither had any.** They were ~50%
+  fixture header by line (621 and 315), so the boundary was found by grouping
+  tests semantically instead -- premise verdicts vs the skip/inconclusive
+  lanes; minting and contradiction vs the cases that must NOT be blamed on an
+  episode. Worth noting for the files still on this list: the `// ---` rule
+  is a convenience, not a prerequisite.
+
+  A cost this slice is accumulating, recorded before it gets worse:
+  `tests/common/mod.rs` now declares **nine** submodules, and every test
+  binary that says `mod common;` compiles all of them -- so a syntax error in
+  one shared fixture file fails every test target at once, as one did during
+  this PR. If it becomes painful the fix is per-file `#[path]` includes rather
+  than one aggregating module.
+
   One PR per file, deliberately: reviewability is the only property that
   makes a refactor this size safe.
 
