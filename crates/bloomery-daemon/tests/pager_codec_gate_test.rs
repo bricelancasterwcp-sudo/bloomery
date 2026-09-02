@@ -6,6 +6,8 @@
 //! Every test here is GPU-free against [`FakeSubstrate`], the same style as
 //! `pager_test.rs`.
 
+mod common;
+
 use bloomery_core::action::PatchCodec;
 use bloomery_core::journal::{replay, Event, Journal};
 use bloomery_core::profile::Profile;
@@ -13,35 +15,8 @@ use bloomery_daemon::agents::ImageStore;
 use bloomery_daemon::config::EnvelopeLens;
 use bloomery_daemon::pager::*;
 use bloomery_substrate::fake::FakeSubstrate;
+use common::pager::{fresh_dir, meta, write_gguf};
 use std::path::{Path, PathBuf};
-
-fn meta() -> bloomery_core::gguf::GgufMeta {
-    bloomery_core::gguf::GgufMeta {
-        arch: "qwen2".into(),
-        layers: 28,
-        attention_layers: 28,
-        kv_heads: 4,
-        head_dim: 128,
-        training_ctx: 4096,
-        weights_bytes: 1000,
-        value_length: None,
-        recurrent_state_bytes: 0,
-    }
-}
-
-/// A clean scratch dir per test, so runs never share journals or images.
-fn fresh_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(name);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
-fn write_gguf(dir: &Path, contents: &[u8]) -> PathBuf {
-    let gguf = dir.join("fake.gguf");
-    std::fs::write(&gguf, contents).unwrap();
-    gguf
-}
 
 /// A pager with a "qwen" model registered (no profile), roomy VRAM.
 fn pager_with_model(dir: &Path) -> (Pager<FakeSubstrate>, PathBuf) {
@@ -50,8 +25,8 @@ fn pager_with_model(dir: &Path) -> (Pager<FakeSubstrate>, PathBuf) {
     let images = ImageStore::new(&dir.join("img")).unwrap();
     let fake = FakeSubstrate::new();
     let mut p = Pager::new(fake, journal, images, Box::new(|| Some(10u64.pow(9))));
-    let gguf = write_gguf(dir, b"weights");
-    p.register_model("qwen", &gguf, meta(), None).unwrap();
+    let gguf = write_gguf(dir, "fake.gguf", b"weights");
+    p.register_model("qwen", &gguf, meta(1000), None).unwrap();
     (p, jpath)
 }
 

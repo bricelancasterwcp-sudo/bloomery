@@ -28,11 +28,11 @@
 //! numbers on every scenario, including the 330 MiB budget scenario 3 uses
 //! so *two* contexts fit before the third contends.
 
-use bloomery_core::journal::{replay, Event, Journal, PagerOpKind};
-use bloomery_daemon::agents::ImageStore;
+mod common;
+
+use bloomery_core::journal::{replay, Event, PagerOpKind};
 use bloomery_daemon::pager::*;
-use bloomery_substrate::{fake::FakeSubstrate, Reply};
-use std::path::{Path, PathBuf};
+use common::pager::{fresh_dir, meta, pager_in, write_gguf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -41,64 +41,6 @@ const MIB: u64 = 1024 * 1024;
 /// doc comment.
 const WINDOW_CAP: u32 = 1024;
 const WEIGHTS: u64 = 200 * MIB;
-
-fn ok(text: &str) -> Reply {
-    Reply {
-        text: text.into(),
-        prompt_tokens: Some(8),
-        completion_tokens: Some(4),
-        duration_ms: 3,
-    }
-}
-
-/// The shared "qwen" geometry (28 layers, 4 kv-heads, 128 head-dim — see the
-/// module doc comment).
-fn meta(weights_bytes: u64) -> bloomery_core::gguf::GgufMeta {
-    bloomery_core::gguf::GgufMeta {
-        arch: "qwen2".into(),
-        layers: 28,
-        attention_layers: 28,
-        kv_heads: 4,
-        head_dim: 128,
-        training_ctx: 4096,
-        weights_bytes,
-        value_length: None,
-        recurrent_state_bytes: 0,
-    }
-}
-
-/// A clean scratch dir per test, so runs never share journals or images.
-fn fresh_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(name);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
-/// Builds a pager over a fake substrate with `replies` scripted and a
-/// constant free-VRAM probe — the fixture's static reservation budget.
-fn pager_in(
-    dir: &Path,
-    replies: usize,
-    free_vram: Option<u64>,
-) -> (Pager<FakeSubstrate>, PathBuf, PathBuf) {
-    let jpath = dir.join("j.jsonl");
-    let journal = Journal::open(&jpath).unwrap();
-    let imgdir = dir.join("img");
-    let images = ImageStore::new(&imgdir).unwrap();
-    let mut fake = FakeSubstrate::new();
-    for _ in 0..replies {
-        fake.script_reply(ok("r"));
-    }
-    let p = Pager::new(fake, journal, images, Box::new(move || free_vram));
-    (p, jpath, imgdir)
-}
-
-fn write_gguf(dir: &Path, name: &str, contents: &[u8]) -> PathBuf {
-    let gguf = dir.join(name);
-    std::fs::write(&gguf, contents).unwrap();
-    gguf
-}
 
 /// A deterministic clock backed by a shared `AtomicU64`, per the brief.
 fn test_clock(t: Arc<AtomicU64>) -> ClockFn {

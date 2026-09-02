@@ -19,64 +19,16 @@
 //! budget below is an exact multiple of 1 MiB. GPU-free: everything drives
 //! `FakeSubstrate`.
 
-use bloomery_core::journal::{replay, Event, Journal, PagerOpKind};
-use bloomery_daemon::agents::ImageStore;
+mod common;
+
+use bloomery_core::journal::{replay, Event, PagerOpKind};
 use bloomery_daemon::pager::*;
-use bloomery_substrate::{fake::FakeSubstrate, Reply};
-use std::path::{Path, PathBuf};
+use common::pager::{fresh_dir, meta, pager_in, write_gguf};
 
 const MIB: u64 = 1024 * 1024;
 const WINDOW_CAP: u32 = 1024;
 /// 1024 tokens × 57_344 B = 56 MiB.
 const KV_BYTES: u64 = 1024 * 57_344;
-
-fn ok(text: &str) -> Reply {
-    Reply {
-        text: text.into(),
-        prompt_tokens: Some(8),
-        completion_tokens: Some(4),
-        duration_ms: 3,
-    }
-}
-
-fn meta(weights_bytes: u64) -> bloomery_core::gguf::GgufMeta {
-    bloomery_core::gguf::GgufMeta {
-        arch: "qwen2".into(),
-        layers: 28,
-        attention_layers: 28,
-        kv_heads: 4,
-        head_dim: 128,
-        training_ctx: 4096,
-        weights_bytes,
-        value_length: None,
-        recurrent_state_bytes: 0,
-    }
-}
-
-fn fresh_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(name);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
-fn pager_in(dir: &Path, replies: usize, free_vram: Option<u64>) -> (Pager<FakeSubstrate>, PathBuf) {
-    let jpath = dir.join("j.jsonl");
-    let journal = Journal::open(&jpath).unwrap();
-    let images = ImageStore::new(&dir.join("img")).unwrap();
-    let mut fake = FakeSubstrate::new();
-    for _ in 0..replies {
-        fake.script_reply(ok("r"));
-    }
-    let p = Pager::new(fake, journal, images, Box::new(move || free_vram));
-    (p, jpath)
-}
-
-fn write_gguf(dir: &Path, name: &str) -> PathBuf {
-    let gguf = dir.join(name);
-    std::fs::write(&gguf, b"weights").unwrap();
-    gguf
-}
 
 /// **The live run's failure, as arithmetic.**
 ///
@@ -129,9 +81,9 @@ fn a_second_agents_reservation_not_just_its_kv_is_what_refuses_it() {
     let weights = 200 * MIB;
     let ctx_overhead = 32 * MIB;
 
-    let (mut p, jpath) = pager_in(&dir, 2, Some(budget));
+    let (mut p, jpath, _) = pager_in(&dir, 2, Some(budget));
     p.set_ctx_overhead_bytes(ctx_overhead);
-    let gguf = write_gguf(&dir, "qwen.gguf");
+    let gguf = write_gguf(&dir, "qwen.gguf", b"weights");
     p.register_model("qwen", &gguf, meta(weights), None)
         .unwrap();
 
@@ -284,9 +236,9 @@ fn the_global_overhead_margin_is_subtracted_from_placement_too() {
         "precondition: the overhead is what forces the eviction"
     );
 
-    let (mut p, jpath) = pager_in(&dir, 2, Some(budget));
+    let (mut p, jpath, _) = pager_in(&dir, 2, Some(budget));
     p.set_overhead_bytes(overhead);
-    let gguf = write_gguf(&dir, "qwen.gguf");
+    let gguf = write_gguf(&dir, "qwen.gguf", b"weights");
     p.register_model("qwen", &gguf, meta(weights), None)
         .unwrap();
     let a1 = p
@@ -330,10 +282,10 @@ fn status_reports_reserved_bytes_and_both_overhead_terms() {
     let dir = fresh_dir("bloomery-pager-reservation-status");
     let ctx_overhead = 32 * MIB;
     let overhead = 16 * MIB;
-    let (mut p, _) = pager_in(&dir, 1, Some(4096 * MIB));
+    let (mut p, _, _) = pager_in(&dir, 1, Some(4096 * MIB));
     p.set_ctx_overhead_bytes(ctx_overhead);
     p.set_overhead_bytes(overhead);
-    let gguf = write_gguf(&dir, "qwen.gguf");
+    let gguf = write_gguf(&dir, "qwen.gguf", b"weights");
     p.register_model("qwen", &gguf, meta(200 * MIB), None)
         .unwrap();
     let a1 = p
@@ -368,9 +320,9 @@ fn status_reports_reserved_bytes_and_both_overhead_terms() {
 fn eviction_credits_the_whole_reservation_back() {
     let dir = fresh_dir("bloomery-pager-reservation-credit");
     let ctx_overhead = 32 * MIB;
-    let (mut p, _) = pager_in(&dir, 2, Some(4096 * MIB));
+    let (mut p, _, _) = pager_in(&dir, 2, Some(4096 * MIB));
     p.set_ctx_overhead_bytes(ctx_overhead);
-    let gguf = write_gguf(&dir, "qwen.gguf");
+    let gguf = write_gguf(&dir, "qwen.gguf", b"weights");
     p.register_model("qwen", &gguf, meta(200 * MIB), None)
         .unwrap();
     let a1 = p
@@ -421,9 +373,9 @@ fn a_vram_bound_window_is_placeable_item_7_regression() {
     let pre_fix_tokens = post_fix_tokens + ctx_overhead / kv_per_token; // 104
     let budget = weights + pre_fix_tokens * kv_per_token;
 
-    let (mut p, _) = pager_in(&dir, 1, Some(budget));
+    let (mut p, _, _) = pager_in(&dir, 1, Some(budget));
     p.set_ctx_overhead_bytes(ctx_overhead);
-    let gguf = write_gguf(&dir, "qwen.gguf");
+    let gguf = write_gguf(&dir, "qwen.gguf", b"weights");
     p.register_model("qwen", &gguf, meta(weights), None)
         .unwrap();
 
@@ -494,9 +446,9 @@ fn a_sibling_blind_automatic_window_still_refuses_item_7_third_half() {
     // because it never looks.
     let budget = weights + a1_tokens * kv_per_token + ctx_overhead;
 
-    let (mut p, jpath) = pager_in(&dir, 2, Some(budget));
+    let (mut p, jpath, _) = pager_in(&dir, 2, Some(budget));
     p.set_ctx_overhead_bytes(ctx_overhead);
-    let gguf = write_gguf(&dir, "qwen.gguf");
+    let gguf = write_gguf(&dir, "qwen.gguf", b"weights");
     p.register_model("qwen", &gguf, meta(weights), None)
         .unwrap();
 
@@ -607,9 +559,9 @@ fn hybrid_meta(weights_bytes: u64) -> bloomery_core::gguf::GgufMeta {
 #[test]
 fn recurrent_state_is_charged_per_context_and_reported() {
     let dir = fresh_dir("bloomery-resv-recurrent");
-    let (mut p, _j) = pager_in(&dir, 0, Some(4096 * MIB));
+    let (mut p, _j, _) = pager_in(&dir, 0, Some(4096 * MIB));
     p.set_ctx_overhead_bytes(8 * MIB);
-    let gguf = write_gguf(&dir, "h.gguf");
+    let gguf = write_gguf(&dir, "h.gguf", b"weights");
     p.register_model("h", &gguf, hybrid_meta(200 * MIB), None)
         .unwrap();
     let a = p.create_agent("h", 100, Some(WINDOW_CAP), 1000).unwrap();
@@ -657,9 +609,9 @@ fn recurrent_state_binds_the_vram_term_of_the_window_law() {
     let post_fix_tokens = 1_000u64;
     let free_vram = post_fix_tokens * kv_per_token + weights + ctx_overhead + recurrent;
 
-    let (mut p, _j) = pager_in(&dir, 0, Some(free_vram));
+    let (mut p, _j, _) = pager_in(&dir, 0, Some(free_vram));
     p.set_ctx_overhead_bytes(ctx_overhead);
-    let gguf = write_gguf(&dir, "h.gguf");
+    let gguf = write_gguf(&dir, "h.gguf", b"weights");
     p.register_model("h", &gguf, hybrid_meta(weights), None)
         .unwrap();
 
