@@ -1760,6 +1760,36 @@ requested context window; still unaddressed, unchanged by this turn.
   reverted. The count of *files touched* is as much a scope check as the count
   of tests preserved.
 
+  **Amended again 2026-09-01 (slice D, eighth PR — the Rust test category is
+  CLEAR).** `api_v1_test.rs` (811) and `geometry_conformance_test.rs` (837)
+  split; **11 -> 9**, and **every Rust test file in the repo is now under the
+  800-line ceiling.** `bloomery-core` gained its first `tests/common/`.
+
+  **Where the count started and where it stands: 21 -> 9.** Ten test files
+  became thirty-one, roughly 10,500 lines of excess removed, across eight PRs,
+  with the workspace total pinned at 948 passed / 0 failed at every step —
+  which is the only evidence that matters here, since a lost test shows up as
+  a smaller number rather than a failure.
+
+  **What remains is deliberately NOT more of the same**, and should not be
+  attempted with `tools/split_test_file.py`:
+
+  - **Three Python files** (`test_recompute.py` 1386, `test_recompute_v2.py`
+    875, `recompute_v2.py` 850). The tool is Rust-only. Two are tests; one is
+    *source*.
+  - **Six Rust source files** (`task/registry.rs` 1395, `pager.rs` 999,
+    `drift.rs` 985, `task/task_loop.rs` 912, `api_native.rs` 816,
+    `flywheel_tool.rs` 814). Splitting these changes module structure and
+    public paths — design work, not a mechanical sweep, and each deserves its
+    own decision about what the boundary *means*. `api_native.rs` is the one
+    this session put over the line itself.
+
+  A last tool gap, recorded unfixed: a helper called from the shared module
+  but referenced by only one target was still placed with that target
+  (`data_dir`, moved by hand). The closure promotes on *shared-body*
+  references, which misses the case where the caller's own placement changes
+  after the scan.
+
   One PR per file, deliberately: reviewability is the only property that
   makes a refactor this size safe.
 

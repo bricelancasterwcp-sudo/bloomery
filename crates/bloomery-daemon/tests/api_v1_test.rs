@@ -1,17 +1,158 @@
-//! `/v1` (OpenAI-compatible) integration tests: every request goes over a
-//! real `TcpStream` (`tests/common::http`) against a `serve_fake()`-provided
-//! ephemeral port, driving `Pager<FakeSubstrate>` end to end.
+//! The `/v1` OpenAI-compatible shim: the surface, its usage accounting, and
+//! the refusals that keep it honest.
 //!
-//! The first three tests are the Task 15 brief's own, verbatim. The rest
-//! pin the shim's remaining obligations: buffered SSE streaming (D3) and
-//! `X-Bloomery-Agent` session binding (an existing agent's KV/context is
-//! reused across two calls, proven via `FakeSubstrate::ctx_history`).
+//! Every request goes over a real `TcpStream`. `usage` is always the real
+//! `VerifiedReply` counts, an oversized prompt is a structured refusal rather
+//! than silent truncation (law 2), and every `PagerError` maps to exactly one
+//! status and envelope.
+//!
+//! **Split 2026-09-01** (carried-debt slice D): the unimplemented-field
+//! honesty table -- every parameter this shim refuses by name rather than
+//! discarding, and the accept-side guards against over-rejection -- is in
+//! `api_v1_honesty_test.rs`.
 
 mod common;
 
 use std::io::{Read, Write};
 
 use common::http;
+
+/// Builds a bare `Mutex<Pager<FakeSubstrate>>` (no socket) with one
+/// `qwen`-like model registered, profiled (so admission reaches the
+/// drift-block clause rather than stopping at `Unprofiled`), and its
+/// cumulative drift reading set to a `Confirmed` regression against
+/// baseline `"base42"`. Mirrors `pager_with_missing_stats_reply` and
+/// `api_native_test.rs::serve_drift_blocked_qwen`.
+fn pager_with_drift_blocked_qwen(
+) -> std::sync::Mutex<bloomery_daemon::pager::Pager<bloomery_substrate::fake::FakeSubstrate>> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "bloomery-v1-drift-blocked-test-{}-{seq}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    let journal = bloomery_core::journal::Journal::open(&dir.join("j.jsonl")).unwrap();
+    let images = bloomery_daemon::agents::ImageStore::new(&dir.join("img")).unwrap();
+    let mut fake = bloomery_substrate::fake::FakeSubstrate::new();
+    fake.script_reply(bloomery_substrate::Reply {
+        text: "ok".into(),
+        prompt_tokens: Some(8),
+        completion_tokens: Some(4),
+        duration_ms: 1,
+    });
+    let mut pager = bloomery_daemon::pager::Pager::new(
+        fake,
+        journal,
+        images,
+        Box::new(|| Some(1024 * 1024 * 1024)),
+    );
+    let gguf = dir.join("qwen.gguf");
+    std::fs::write(&gguf, b"weights").unwrap();
+    let meta = bloomery_core::gguf::GgufMeta {
+        arch: "qwen2".into(),
+        layers: 28,
+        attention_layers: 28,
+        kv_heads: 4,
+        head_dim: 128,
+        training_ctx: 4096,
+        weights_bytes: 1000,
+        value_length: None,
+        recurrent_state_bytes: 0,
+    };
+    pager.register_model("qwen", &gguf, meta, None).unwrap();
+    pager
+        .attach_profile(
+            "qwen",
+            bloomery_core::profile::Profile::from_json(
+                r#"{"assay_profile_version":3,"probe_version":"0.4.1","model":{"name":"qwen"},"verdicts":{}}"#,
+            )
+            .expect("fixture profile parses"),
+            false,
+        )
+        .unwrap();
+    pager
+        .set_drift(
+            "qwen",
+            bloomery_daemon::drift::ModelDrift {
+                step: bloomery_daemon::drift::DriftStatus::WithinNoise,
+                cumulative: bloomery_daemon::drift::DriftStatus::Confirmed {
+                    reference: "base42".to_string(),
+                },
+            },
+        )
+        .unwrap();
+    std::sync::Mutex::new(pager)
+}
+
+/// Sends one request carrying an `X-Bloomery-Agent` header. `http()` in
+/// `tests/common` doesn't take extra headers, so this is a local variant
+/// rather than widening that shared helper for one caller.
+fn http_with_agent(addr: &str, path: &str, body: &str, agent_id: &str) -> (u16, String) {
+    let mut s = std::net::TcpStream::connect(addr).unwrap();
+    write!(
+        s,
+        "POST {path} HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nX-Bloomery-Agent: {agent_id}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut buf = String::new();
+    s.read_to_string(&mut buf).unwrap();
+    let status: u16 = buf.split_whitespace().nth(1).unwrap().parse().unwrap();
+    let body = buf.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+    (status, body)
+}
+
+/// Builds a `Pager<FakeSubstrate>` with one `qwen`-like model and a single
+/// scripted reply that omits `prompt_tokens` — the one substrate-side
+/// condition `enforce_contract` classifies as `MissingStats`. Mirrors
+/// `api_native_test.rs::serve_with_missing_stats`, but returns a bare
+/// `Mutex<Pager<_>>` (no socket) so `dispatch_v1_fake` can drive it and the
+/// pager stays inspectable afterward.
+fn pager_with_missing_stats_reply(
+) -> std::sync::Mutex<bloomery_daemon::pager::Pager<bloomery_substrate::fake::FakeSubstrate>> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "bloomery-v1-contract-test-{}-{seq}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    let journal = bloomery_core::journal::Journal::open(&dir.join("j.jsonl")).unwrap();
+    let images = bloomery_daemon::agents::ImageStore::new(&dir.join("img")).unwrap();
+    let mut fake = bloomery_substrate::fake::FakeSubstrate::new();
+    fake.script_reply(bloomery_substrate::Reply {
+        text: "no stats".into(),
+        prompt_tokens: None,
+        completion_tokens: Some(4),
+        duration_ms: 1,
+    });
+    let mut pager = bloomery_daemon::pager::Pager::new(
+        fake,
+        journal,
+        images,
+        Box::new(|| Some(1024 * 1024 * 1024)),
+    );
+    let gguf = dir.join("qwen.gguf");
+    std::fs::write(&gguf, b"weights").unwrap();
+    let meta = bloomery_core::gguf::GgufMeta {
+        arch: "qwen2".into(),
+        layers: 28,
+        attention_layers: 28,
+        kv_heads: 4,
+        head_dim: 128,
+        training_ctx: 4096,
+        weights_bytes: 1000,
+        value_length: None,
+        recurrent_state_bytes: 0,
+    };
+    pager.register_model("qwen", &gguf, meta, None).unwrap();
+    std::sync::Mutex::new(pager)
+}
 
 #[test]
 fn chat_completion_has_real_usage() {
@@ -98,76 +239,6 @@ fn chat_completion_on_a_drift_blocked_model_returns_422() {
     assert_eq!(v["error"]["param"], "model");
     let msg = v["error"]["message"].as_str().unwrap();
     assert!(msg.contains("base42"), "{msg}");
-}
-
-/// Builds a bare `Mutex<Pager<FakeSubstrate>>` (no socket) with one
-/// `qwen`-like model registered, profiled (so admission reaches the
-/// drift-block clause rather than stopping at `Unprofiled`), and its
-/// cumulative drift reading set to a `Confirmed` regression against
-/// baseline `"base42"`. Mirrors `pager_with_missing_stats_reply` and
-/// `api_native_test.rs::serve_drift_blocked_qwen`.
-fn pager_with_drift_blocked_qwen(
-) -> std::sync::Mutex<bloomery_daemon::pager::Pager<bloomery_substrate::fake::FakeSubstrate>> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "bloomery-v1-drift-blocked-test-{}-{seq}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).expect("scratch dir");
-
-    let journal = bloomery_core::journal::Journal::open(&dir.join("j.jsonl")).unwrap();
-    let images = bloomery_daemon::agents::ImageStore::new(&dir.join("img")).unwrap();
-    let mut fake = bloomery_substrate::fake::FakeSubstrate::new();
-    fake.script_reply(bloomery_substrate::Reply {
-        text: "ok".into(),
-        prompt_tokens: Some(8),
-        completion_tokens: Some(4),
-        duration_ms: 1,
-    });
-    let mut pager = bloomery_daemon::pager::Pager::new(
-        fake,
-        journal,
-        images,
-        Box::new(|| Some(1024 * 1024 * 1024)),
-    );
-    let gguf = dir.join("qwen.gguf");
-    std::fs::write(&gguf, b"weights").unwrap();
-    let meta = bloomery_core::gguf::GgufMeta {
-        arch: "qwen2".into(),
-        layers: 28,
-        attention_layers: 28,
-        kv_heads: 4,
-        head_dim: 128,
-        training_ctx: 4096,
-        weights_bytes: 1000,
-        value_length: None,
-        recurrent_state_bytes: 0,
-    };
-    pager.register_model("qwen", &gguf, meta, None).unwrap();
-    pager
-        .attach_profile(
-            "qwen",
-            bloomery_core::profile::Profile::from_json(
-                r#"{"assay_profile_version":3,"probe_version":"0.4.1","model":{"name":"qwen"},"verdicts":{}}"#,
-            )
-            .expect("fixture profile parses"),
-            false,
-        )
-        .unwrap();
-    pager
-        .set_drift(
-            "qwen",
-            bloomery_daemon::drift::ModelDrift {
-                step: bloomery_daemon::drift::DriftStatus::WithinNoise,
-                cumulative: bloomery_daemon::drift::DriftStatus::Confirmed {
-                    reference: "base42".to_string(),
-                },
-            },
-        )
-        .unwrap();
-    std::sync::Mutex::new(pager)
 }
 
 /// `GET /v1/models` shapes each entry per the OpenAI list envelope, not
@@ -298,24 +369,6 @@ fn x_bloomery_agent_header_binds_two_calls_to_the_same_agent_over_http() {
     );
 
     h.shutdown();
-}
-
-/// Sends one request carrying an `X-Bloomery-Agent` header. `http()` in
-/// `tests/common` doesn't take extra headers, so this is a local variant
-/// rather than widening that shared helper for one caller.
-fn http_with_agent(addr: &str, path: &str, body: &str, agent_id: &str) -> (u16, String) {
-    let mut s = std::net::TcpStream::connect(addr).unwrap();
-    write!(
-        s,
-        "POST {path} HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nX-Bloomery-Agent: {agent_id}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    )
-    .unwrap();
-    let mut buf = String::new();
-    s.read_to_string(&mut buf).unwrap();
-    let status: u16 = buf.split_whitespace().nth(1).unwrap().parse().unwrap();
-    let body = buf.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
-    (status, body)
 }
 
 /// The ground-truth version of the header-binding claim, driven in-process
@@ -522,55 +575,6 @@ fn contract_violation_still_cleans_up_the_resident_ephemeral_agent() {
     );
 }
 
-/// Builds a `Pager<FakeSubstrate>` with one `qwen`-like model and a single
-/// scripted reply that omits `prompt_tokens` — the one substrate-side
-/// condition `enforce_contract` classifies as `MissingStats`. Mirrors
-/// `api_native_test.rs::serve_with_missing_stats`, but returns a bare
-/// `Mutex<Pager<_>>` (no socket) so `dispatch_v1_fake` can drive it and the
-/// pager stays inspectable afterward.
-fn pager_with_missing_stats_reply(
-) -> std::sync::Mutex<bloomery_daemon::pager::Pager<bloomery_substrate::fake::FakeSubstrate>> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "bloomery-v1-contract-test-{}-{seq}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).expect("scratch dir");
-
-    let journal = bloomery_core::journal::Journal::open(&dir.join("j.jsonl")).unwrap();
-    let images = bloomery_daemon::agents::ImageStore::new(&dir.join("img")).unwrap();
-    let mut fake = bloomery_substrate::fake::FakeSubstrate::new();
-    fake.script_reply(bloomery_substrate::Reply {
-        text: "no stats".into(),
-        prompt_tokens: None,
-        completion_tokens: Some(4),
-        duration_ms: 1,
-    });
-    let mut pager = bloomery_daemon::pager::Pager::new(
-        fake,
-        journal,
-        images,
-        Box::new(|| Some(1024 * 1024 * 1024)),
-    );
-    let gguf = dir.join("qwen.gguf");
-    std::fs::write(&gguf, b"weights").unwrap();
-    let meta = bloomery_core::gguf::GgufMeta {
-        arch: "qwen2".into(),
-        layers: 28,
-        attention_layers: 28,
-        kv_heads: 4,
-        head_dim: 128,
-        training_ctx: 4096,
-        weights_bytes: 1000,
-        value_length: None,
-        recurrent_state_bytes: 0,
-    };
-    pager.register_model("qwen", &gguf, meta, None).unwrap();
-    std::sync::Mutex::new(pager)
-}
-
 /// The `/v1` half of the same obligation: an ephemeral agent (no
 /// `X-Bloomery-Agent` header) is minted at the pager's configured defaults,
 /// so a `max_tokens` above a 5000-token configured budget is refused with
@@ -650,162 +654,4 @@ fn non_empty_tools_is_refused_not_silently_dropped() {
     assert_eq!(v["error"]["type"], "invalid_request_error");
     assert_eq!(v["error"]["code"], "unsupported_parameter");
     assert_eq!(v["error"]["param"], "tools");
-}
-
-// ---------------------------------------------------------------------------
-// The rest of the honesty table (2026-08-31). Same rule as `tools`: a field
-// whose value describes what bloomery already does is honest to accept; a
-// value that would change the reply is refused by name rather than dropped.
-// ---------------------------------------------------------------------------
-
-/// A minimal valid chat body with `extra` spliced in as further top-level
-/// fields, e.g. `r#""temperature":0.8"#`.
-fn chat_req(extra: &str) -> String {
-    let base = r#""model":"qwen","messages":[{"role":"user","content":"hi"}],"max_tokens":16"#;
-    if extra.is_empty() {
-        format!("{{{base}}}")
-    } else {
-        format!("{{{base},{extra}}}")
-    }
-}
-
-fn assert_refused(extra: &str, param: &str) {
-    let (port, _h) = bloomery_daemon::test_support::serve_fake();
-    let addr = format!("127.0.0.1:{port}");
-    let (st, body) = http(&addr, "POST", "/v1/chat/completions", &chat_req(extra));
-    assert_eq!(st, 400, "expected refusal for {extra}, got: {body}");
-    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(v["error"]["type"], "invalid_request_error", "{body}");
-    assert_eq!(v["error"]["code"], "unsupported_parameter", "{body}");
-    assert_eq!(v["error"]["param"], param, "{body}");
-}
-
-fn assert_accepted(extra: &str) {
-    let (port, _h) = bloomery_daemon::test_support::serve_fake();
-    let addr = format!("127.0.0.1:{port}");
-    let (st, body) = http(&addr, "POST", "/v1/chat/completions", &chat_req(extra));
-    assert_eq!(
-        st, 200,
-        "expected {extra} to be accepted as a no-op, got: {body}"
-    );
-}
-
-#[test]
-fn tool_choice_auto_is_refused() {
-    assert_refused(r#""tool_choice":"auto""#, "tool_choice");
-}
-
-#[test]
-fn legacy_functions_field_is_refused() {
-    assert_refused(r#""functions":[{"name":"f"}]"#, "functions");
-}
-
-#[test]
-fn nonzero_temperature_is_refused_because_the_sampler_is_greedy() {
-    assert_refused(r#""temperature":0.8"#, "temperature");
-}
-
-#[test]
-fn top_p_below_one_is_refused() {
-    assert_refused(r#""top_p":0.9"#, "top_p");
-}
-
-#[test]
-fn n_greater_than_one_is_refused() {
-    assert_refused(r#""n":2"#, "n");
-}
-
-#[test]
-fn stop_sequences_are_refused_because_infer_takes_none() {
-    assert_refused(r#""stop":["END"]"#, "stop");
-}
-
-#[test]
-fn json_response_format_is_refused() {
-    assert_refused(
-        r#""response_format":{"type":"json_object"}"#,
-        "response_format",
-    );
-}
-
-#[test]
-fn logprobs_true_is_refused() {
-    assert_refused(r#""logprobs":true"#, "logprobs");
-}
-
-// --- the accept side: these values ARE what bloomery does, so refusing them
-// --- would be its own dishonesty. Guards against over-rejection.
-
-#[test]
-fn empty_tools_array_is_accepted_it_asks_for_nothing() {
-    assert_accepted(r#""tools":[]"#);
-}
-
-#[test]
-fn temperature_zero_is_accepted_it_is_what_greedy_means() {
-    assert_accepted(r#""temperature":0"#);
-}
-
-#[test]
-fn top_p_one_and_n_one_are_accepted() {
-    assert_accepted(r#""top_p":1,"n":1"#);
-}
-
-#[test]
-fn text_response_format_and_false_logprobs_are_accepted() {
-    assert_accepted(r#""response_format":{"type":"text"},"logprobs":false"#);
-}
-
-// --- message-shape refusals
-
-#[test]
-fn tool_role_message_is_refused() {
-    let (port, _h) = bloomery_daemon::test_support::serve_fake();
-    let addr = format!("127.0.0.1:{port}");
-    let req = r#"{"model":"qwen","messages":[{"role":"tool","content":"result","tool_call_id":"c1"}],"max_tokens":16}"#;
-    let (st, body) = http(&addr, "POST", "/v1/chat/completions", req);
-    assert_eq!(st, 400, "{body}");
-    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(v["error"]["code"], "unsupported_parameter", "{body}");
-    assert_eq!(v["error"]["param"], "messages[].role", "{body}");
-}
-
-#[test]
-fn assistant_message_carrying_tool_calls_is_refused() {
-    let (port, _h) = bloomery_daemon::test_support::serve_fake();
-    let addr = format!("127.0.0.1:{port}");
-    let req = r#"{"model":"qwen","messages":[{"role":"assistant","content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"f","arguments":"{}"}}]}],"max_tokens":16}"#;
-    let (st, body) = http(&addr, "POST", "/v1/chat/completions", req);
-    assert_eq!(st, 400, "{body}");
-    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(v["error"]["code"], "unsupported_parameter", "{body}");
-    assert_eq!(v["error"]["param"], "messages[].tool_calls", "{body}");
-}
-
-/// Null content is legal OpenAI (it pairs with `tool_calls`). Today it is a
-/// serde parse failure reported as `invalid_json`, which tells the caller
-/// nothing about why. Name it.
-#[test]
-fn null_content_is_refused_by_name_not_as_a_json_parse_error() {
-    let (port, _h) = bloomery_daemon::test_support::serve_fake();
-    let addr = format!("127.0.0.1:{port}");
-    let req = r#"{"model":"qwen","messages":[{"role":"user","content":null}],"max_tokens":16}"#;
-    let (st, body) = http(&addr, "POST", "/v1/chat/completions", req);
-    assert_eq!(st, 400, "{body}");
-    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(v["error"]["code"], "unsupported_parameter", "{body}");
-    assert_eq!(v["error"]["param"], "messages[].content", "{body}");
-}
-
-/// Multimodal content parts, same treatment.
-#[test]
-fn array_content_parts_are_refused_by_name() {
-    let (port, _h) = bloomery_daemon::test_support::serve_fake();
-    let addr = format!("127.0.0.1:{port}");
-    let req = r#"{"model":"qwen","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],"max_tokens":16}"#;
-    let (st, body) = http(&addr, "POST", "/v1/chat/completions", req);
-    assert_eq!(st, 400, "{body}");
-    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(v["error"]["code"], "unsupported_parameter", "{body}");
-    assert_eq!(v["error"]["param"], "messages[].content", "{body}");
 }
