@@ -1790,6 +1790,30 @@ requested context window; still unaddressed, unchanged by this turn.
   references, which misses the case where the caller's own placement changes
   after the scan.
 
+  **Amended again 2026-09-01 (slice D, ninth PR — the first SOURCE split).**
+  `api_native.rs` (816) becomes a module directory: `mod.rs` 271,
+  `candidate.rs` 314, `agents.rs` 158, `models.rs` 142. **9 -> 8.**
+
+  Taken first of the six source files because **this session put it over the
+  line** — slice 1's own `DELETE /agents/{id}` handler is the 53 lines that
+  pushed 763 to 816. Fixing our own regression before touching anyone else's
+  is the right order.
+
+  It was also the cheapest of the six, and for a reason worth stating before
+  the rest are attempted: `api_native` is declared `mod api_native;`, so it is
+  **private to the crate**. No public path changes; `pub(crate)` items keep
+  their `crate::api_native::X` spelling through the directory module, which is
+  what `api_task.rs` and `api_v1.rs` import. The split was therefore bounded,
+  not architectural. **The remaining five are not all like this** — check the
+  declaration before assuming a source split is cheap.
+
+  What stayed in `mod.rs` is the point of the split rather than a leftover:
+  `dispatch`, `lock_pager`, `bad_request` and `map_error`. The module doc
+  calls `map_error` "the one place the Task 14 brief's error-code table
+  lives", so a split that scattered it across three files would have broken
+  the property the file is organised around. Handlers moved; the spine did
+  not.
+
   One PR per file, deliberately: reviewability is the only property that
   makes a refactor this size safe.
 
