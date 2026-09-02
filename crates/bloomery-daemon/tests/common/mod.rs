@@ -13,6 +13,8 @@
 pub mod codec;
 pub mod drift;
 pub mod native;
+pub mod pager;
+pub mod pager_weights;
 pub mod task;
 
 use std::io::{Read, Write};

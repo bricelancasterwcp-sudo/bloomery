@@ -1682,6 +1682,30 @@ requested context window; still unaddressed, unchanged by this turn.
   One residual manual step: a helper moved into `tests/common/` that called
   `common::http` needs that rewritten to `super::http`.
 
+  **Amended again 2026-09-01 (slice D, fifth PR — the pager family).**
+  `pager_test.rs` (1266) and `pager_weights_test.rs` (944) are split into six
+  files, none over 646, and the whole `pager_*` fixture layer is unified into
+  `tests/common/pager.rs` (101). **17 -> 15.**
+
+  **The duplication was worse than the count suggested, in a way worth
+  naming.** This entry has been citing "`fresh_dir` in 22 files, `meta` in
+  18" as *duplication*. Measured properly before touching anything, it was
+  **divergence**: `pager_in` existed in three distinct shapes, `write_gguf` in
+  three, `meta` in two. That is not one helper copied six times, it is one
+  helper *forked* six times — the more expensive kind, because every fork
+  reads as correct in isolation and only the set of them is wrong. Unifying
+  blind would have been a behaviour change, not a chore; each replacement
+  signature was checked to be a strict **superset** of the variants it
+  replaced, so no call site lost a capability or gained behaviour
+  (`meta()` -> `meta(1000)`, the literal the no-arg form hard-coded;
+  `write_gguf` -> the 3-arg form; `pager_in` -> the 3-tuple, with
+  `let (p, _, _)` where a caller wants less).
+
+  The lesson generalises to the rest of this list: **measure whether copies
+  are identical before calling them duplication.** The dedup alone shrank
+  `pager_remove_agent_test.rs` 137 -> 87 and `pager_reservation_test.rs`
+  1000+ -> 636 without splitting either.
+
   One PR per file, deliberately: reviewability is the only property that
   makes a refactor this size safe.
 
