@@ -1835,6 +1835,32 @@ requested context window; still unaddressed, unchanged by this turn.
   assumption it was one this session had created, without checking. **Read
   before you delete, even when the path looks like your own.**
 
+  **Amended again 2026-09-01 (slice D, eleventh PR — the Python trio).**
+  `test_recompute.py` (1386), `test_recompute_v2.py` (875) and
+  `recompute_v2.py` (850) split; **7 -> 4**, and **every Python file is under
+  the ceiling.** `tools/split_py_test_file.py` is the AST-based counterpart of
+  the Rust tool, with the same refuse-to-write-if-identities-change guard --
+  which fired immediately, on a class (`TreatmentIdentityTests`) a truncated
+  listing had hidden from the grouping.
+
+  `recompute_v2.py` became a package rather than a flat split, because
+  `recompute_pg.py`, `recompute_s5.py` and two test modules all import from it
+  by name; `__init__.py` re-exports everything, so not one import changed. Its
+  constants needed their own module: `arms.py` and `endpoints.py` both use
+  them and importing from the package root would be circular.
+
+  **A much better verification than the pass count, and worth adopting for the
+  rest of this list.** Brice's suggestion: record the suite with `sensorium`
+  before and after and compare. Across the trio the numbers are exact --
+  events 93,273 -> 93,283, CALL 46,887 -> 46,892, RETURN 46,336 -> 46,341,
+  **RAISE 24 -> 24 and HANDLED 26 -> 26**, hot-function counts identical to
+  the call. The `+5 CALL` is precisely the five new module-level frames the
+  split introduces. A pass count can only say "still green"; this says
+  *nothing but module structure changed*, which is the actual claim a
+  behaviour-preserving refactor makes. Also worth recording: these 176 Python
+  tests were never part of the 948 Rust total, so nothing in this session had
+  been running them until this PR — pytest was not even installed on the box.
+
   One PR per file, deliberately: reviewability is the only property that
   makes a refactor this size safe.
 
