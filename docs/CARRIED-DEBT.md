@@ -1734,6 +1734,32 @@ requested context window; still unaddressed, unchanged by this turn.
   this PR. If it becomes painful the fix is per-file `#[path]` includes rather
   than one aggregating module.
 
+  **Amended again 2026-09-01 (slice D, seventh PR).** `task_loop_test.rs`
+  (1040) and `swap_test.rs` (1021) become six test files, none over 421.
+  **13 -> 11.**
+
+  `swap_job_test.rs` landed at 794 on the first cut -- compliant, and **six
+  lines from not being**. It was split again rather than left there, because a
+  file parked just under a limit is how this count reached 21 in the first
+  place; the entry's own history is the argument.
+
+  Three further tool bugs surfaced, each found by the compiler and each now
+  fixed in `tools/split_test_file.py`: an item used by *no* target but called
+  by one that ships was dropped entirely (a fixture only other fixtures use);
+  an `impl` block is not matched by the item regex and stayed behind while its
+  `struct` moved; and a shared type's inherent methods and fields need
+  publishing or the callers that moved away cannot reach them. The tool has
+  now been wrong in three ways the prose recipe never was — which is the
+  argument for having written it down as code, not against it: each bug was
+  found once and fixed for every remaining file.
+
+  **A process note against myself.** An ad-hoc script written beside the tool
+  to dedupe import lists ran across *every* test file, not the two in scope,
+  quietly reordering imports in thirteen unrelated files. Caught by
+  `cargo fmt --check` reporting 18 drifted files where 4 were expected, and
+  reverted. The count of *files touched* is as much a scope check as the count
+  of tests preserved.
+
   One PR per file, deliberately: reviewability is the only property that
   makes a refactor this size safe.
 

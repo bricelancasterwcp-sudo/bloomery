@@ -26,6 +26,10 @@ import re
 import subprocess
 
 ITEM_RE = re.compile(r"(?:pub )?(?:fn|const|type|struct|enum) ([A-Za-z_][A-Za-z_0-9]*)")
+# trap 6: an `impl` block is not named by ITEM_RE but must travel with its
+# type. `impl Foo` and `impl Trait for Foo` both bind to Foo, so the block is
+# classified under the same name as the struct and lands in the same file.
+IMPL_RE = re.compile(r"impl(?:<[^>]*>)? (?:[A-Za-z_][A-Za-z_0-9:<>, ]*? for )?([A-Za-z_][A-Za-z_0-9]*)")
 
 
 def test_names(lines):
@@ -111,6 +115,7 @@ def split(path, targets, docs, common_path, common_doc, common_extra_imports="")
         if (m := ITEM_RE.match(l))
     ]
     helpers = [(n, i) for n, i, is_test in items if not is_test]
+    impls = [(m.group(1), k) for k, l in enumerate(src) if (m := IMPL_RE.match(l))]
 
     def users(name, defline):
         seen = set()
@@ -145,26 +150,63 @@ def split(path, targets, docs, common_path, common_doc, common_extra_imports="")
                 shared_names.add(name)
                 changed = True
 
+    # trap 5: an item used by NO target may still be called by one that IS
+    # emitted -- a fixture that only other fixtures use. Dropping it silently
+    # produces a missing symbol in whichever file inherited its caller, so
+    # place it with that caller (or share it if callers disagree).
+    placement = {}
+    for name, i in helpers:
+        u = users(name, i)
+        placement[name] = "shared" if name in shared_names else (next(iter(u)) if len(u) == 1 else None)
+    changed = True
+    while changed:
+        changed = False
+        for name, i in helpers:
+            if placement[name] is not None:
+                continue
+            # scan impl bodies too: a fixture called only from `impl Foo`
+            # is otherwise invisible here and gets dropped (found on swap_test).
+            scan = helpers + [(n2, i2) for n2, i2 in impls if placement.get(n2) is not None]
+            callers = {
+                placement.get(n2)
+                for n2, i2 in scan
+                if n2 != name
+                and placement.get(n2) is not None
+                and re.search(rf"\b{name}\b", "\n".join(src[slice(*item_span(src, i2))]))
+            }
+            callers.discard(None)
+            if not callers:
+                continue
+            placement[name] = "shared" if len(callers) > 1 else next(iter(callers))
+            changed = True
+
+    # an impl block inherits its type's placement, so the two never separate
+    for name, i in impls:
+        if placement.get(name) is not None:
+            helpers.append((name, i))
+
     consumed, shared_spans, home = set(), [], {}
     for name, i in helpers:
         a, b = item_span(src, i)
         if any(x in consumed for x in range(a, b + 1)):  # trap 3
             continue
-        if name in shared_names:
+        where = placement[name]
+        if where == "shared":
             shared_spans.append((a, b, name))
+        elif where is not None:
+            home.setdefault(where, []).append((a, b, name))
         else:
-            u = users(name, i)
-            if len(u) == 1:
-                home.setdefault(next(iter(u)), []).append((a, b, name))
-            else:
-                continue
+            continue
         consumed.update(range(a, b + 1))
 
     shared_spans.sort()
-    names = sorted(n for _, _, n in shared_spans)
+    names = sorted({n for _, _, n in shared_spans})  # a struct and its impl share a name
     body = "\n\n".join("\n".join(src[a : b + 1]) for a, b, _ in shared_spans)
     for n in names:
         body = re.sub(rf"(?m)^(fn|const|type|struct|enum) {n}\b", rf"pub \1 {n}", body)
+    # inherent methods on a shared type must be public too, or the callers that
+    # moved to another file cannot reach them (trap 7)
+    body = re.sub(r"(?m)^(    )fn ([a-z_][a-z_0-9]*)\(", r"\1pub fn \2(", body)
 
     written = {}
     written[common_path] = (
