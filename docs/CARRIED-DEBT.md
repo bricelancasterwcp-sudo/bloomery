@@ -1651,6 +1651,22 @@ requested context window; still unaddressed, unchanged by this turn.
   a dead-code warning is the corroborating signal. Verify by diffing the set
   of test names before and after, not just the total.
 
+  **Amended again 2026-09-01 (slice D, third PR).** `codec_probe_test.rs`,
+  1634 lines, is split into three (`codec_probe_boot_test.rs` 537,
+  `codec_probe_test.rs` 530 scoring rules, `codec_probe_status_test.rs` 430)
+  over `tests/common/codec.rs` (200). All 29 tests survive, verified by
+  name-set diff before the run rather than by total alone -- the check the
+  previous PR earned. **19 -> 18.**
+
+  Two mechanical traps this one added to the recipe, both caught by the
+  compiler rather than by review. **Grab multi-line `use` blocks whole**: an
+  import extractor that keeps only lines starting with `use ` truncates a
+  braced, wrapped import into an unclosed delimiter. And **an item's computed
+  span can swallow its neighbour** when a preceding `const` carries a
+  multi-line literal, which silently drops the next helper from every output
+  file; a guard that refuses to emit any line twice turns that into a missing
+  symbol at build time instead of a duplicate definition.
+
   One PR per file, deliberately: reviewability is the only property that
   makes a refactor this size safe.
 

@@ -10,6 +10,7 @@
 //! Task 14 brief, plus the chunked-response decoding described on
 //! [`dechunk`].
 
+pub mod codec;
 pub mod drift;
 pub mod native;
 
