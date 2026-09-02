@@ -18,7 +18,10 @@ pub mod native;
 pub mod pager;
 pub mod pager_weights;
 pub mod refalsify;
+pub mod swap;
+pub mod swap_job;
 pub mod task;
+pub mod task_loop;
 
 use std::io::{Read, Write};
 
