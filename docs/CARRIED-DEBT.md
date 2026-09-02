@@ -1814,6 +1814,27 @@ requested context window; still unaddressed, unchanged by this turn.
   the property the file is organised around. Handlers moved; the spine did
   not.
 
+  **Amended again 2026-09-01 (slice D, tenth PR).** `flywheel_tool.rs` (814)
+  gives up its four per-verb trajectory builders to
+  `flywheel_tool/trajectories.rs` (444), leaving 391. **8 -> 7.**
+
+  **This file had been split for this exact reason before.** `render.rs`'s own
+  doc says it was carved out "when turn 3's two new shapes pushed that file
+  past the repo's 800-line ceiling" — and the file grew back over it anyway.
+  A split is not a fix for a file that keeps accreting; it buys time. Worth
+  knowing before anyone treats this whole slice as having *solved* something.
+  The precedent did make this one cheap: the `#[path = "flywheel_tool/x.rs"]`
+  convention already existed, so the third submodule cost a declaration.
+
+  **A near-miss worth recording, because it was destructive rather than
+  merely wrong.** Reaching for a directory-module layout before reading the
+  file, an `rm -rf` on `src/bin/flywheel_tool/` deleted `render.rs` and
+  `scratch.rs` — two tracked files, 941 lines, that were already there. Git
+  restored them and the tree was verified byte-clean against HEAD before any
+  further work. The mistake was ordering: the directory was removed on the
+  assumption it was one this session had created, without checking. **Read
+  before you delete, even when the path looks like your own.**
+
   One PR per file, deliberately: reviewability is the only property that
   makes a refactor this size safe.
 
