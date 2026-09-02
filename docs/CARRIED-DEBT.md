@@ -1667,6 +1667,21 @@ requested context window; still unaddressed, unchanged by this turn.
   file; a guard that refuses to emit any line twice turns that into a missing
   symbol at build time instead of a duplicate definition.
 
+  **Amended again 2026-09-01 (slice D, fourth PR).** `api_task_test.rs`,
+  1295 lines, is split into three (`api_task_codec_test.rs` 485,
+  `api_task_test.rs` 471 the HTTP surface, `api_task_degrade_test.rs` 247)
+  over `tests/common/task.rs` (128). All 16 tests survive. **18 -> 17.**
+
+  **The recipe is now a script rather than prose**, because four
+  hand-executions produced four different mistakes. It encodes all four traps
+  and — the part that matters — it *refuses to write anything* if the set of
+  test names would change, so the failure that nearly slipped through on
+  `drift_test.rs` is now impossible to commit rather than merely likely to be
+  noticed. It also closes the shared set transitively by fixpoint, which is
+  what previously took three or four manual compile-and-lift rounds per file.
+  One residual manual step: a helper moved into `tests/common/` that called
+  `common::http` needs that rewritten to `super::http`.
+
   One PR per file, deliberately: reviewability is the only property that
   makes a refactor this size safe.
 

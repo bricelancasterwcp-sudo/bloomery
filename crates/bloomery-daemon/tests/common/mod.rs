@@ -13,6 +13,7 @@
 pub mod codec;
 pub mod drift;
 pub mod native;
+pub mod task;
 
 use std::io::{Read, Write};
 
