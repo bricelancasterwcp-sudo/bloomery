@@ -34,10 +34,13 @@ class BloomeryClient:
         self.timeout = timeout
 
     def _post(self, path: str, payload: dict) -> dict:
-        raw = json.dumps(payload).encode("utf-8")
+        return self._request("POST", path, payload)
+
+    def _request(self, method: str, path: str, payload: dict | None = None) -> dict:
+        raw = json.dumps(payload).encode("utf-8") if payload is not None else None
+        headers = {"Content-Type": "application/json"} if raw is not None else {}
         req = urllib.request.Request(
-            f"{self.base_url}{path}", data=raw,
-            headers={"Content-Type": "application/json"}, method="POST")
+            f"{self.base_url}{path}", data=raw, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 text = resp.read().decode("utf-8")
@@ -67,3 +70,11 @@ class BloomeryClient:
 
     def suspend(self, agent_id: str) -> None:
         self._post(f"/agents/{agent_id}/suspend", {})
+
+    def delete_agent(self, agent_id: str) -> None:
+        """`DELETE /agents/{id}` (bloomery `agent-delete-endpoint`, 2026-08-31):
+        204 with no body when the agent existed, 404 `unknown_agent` when it
+        did not. Unlike `suspend`, this frees the agent's window -- a parked
+        agent keeps its budget, which is why suspend never solved the
+        accumulation the 2026-09-07 dogfood hit."""
+        self._request("DELETE", f"/agents/{agent_id}")

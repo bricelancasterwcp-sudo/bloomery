@@ -6,6 +6,7 @@
   "max_tokens_cap": 4096,
   "window_cap": null,
   "keep_reasoning_in_history": true,
+  "idle_ttl_secs": 900,
   "host": "127.0.0.1",
   "port": 8000
 }

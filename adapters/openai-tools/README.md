@@ -23,8 +23,11 @@ local model served by the **bloomery** daemon.
 
 ## What it deliberately does not do
 
-- **No streaming.** Every response is a single, complete
-  `chat.completion`; there is no `stream: true` / SSE support.
+- **Buffered streaming only.** `stream: true` is honoured in the shape
+  bloomery's own `/v1` ships: the whole completion is generated first, then
+  rendered as SSE chunks (`stream_options.include_usage` respected). A
+  refusal before the first chunk still returns a real HTTP status, never a
+  streamed 200. There is no token-by-token streaming.
 - **No multi-model routing, no load balancing, no auth.** One adapter
   process talks to one bloomery daemon serving one resident model. Put a
   reverse proxy in front of it if you need TLS, auth, or fan-out.
@@ -69,6 +72,7 @@ bookkeeping, tool-call parsing, error mapping — be exercised in
 | `max_tokens_cap` | no (default `4096`) | Hard ceiling the resolved `max_tokens` is clamped to before it reaches bloomery. Real hermes requests carry `max_tokens` of 64000-128000; sent through unclamped against a ~98k-103k-token window, the daemon's window law 413s nearly every request. A smaller client-supplied value is still honoured verbatim; only the ceiling is enforced. |
 | `window_cap` | no | Passed through to `create_agent`'s `window_cap`, if bloomery should cap this agent's KV window below the model's default. |
 | `keep_reasoning_in_history` | no (default `true`) | See below. |
+| `idle_ttl_secs` | no (default `900`) | A session idle longer than this is reaped: its bloomery agent is `DELETE`d and the session forgotten, so its window is free for the next conversation. `null` disables the sweep. See "Idle reaping" below; the residency-refusal reap runs regardless of this key. |
 | `host` / `port` | no (default `127.0.0.1` / OS-assigned) | Bind address. |
 
 ## Re-extracting the template, and why it is committed
@@ -128,23 +132,46 @@ same canned first prompt, etc.) **must** send their own `X-Session-Id`
 header. There is no cryptographic or client-identity component to the
 fallback; it is purely a convenience default for casual single-client use.
 
-**Agents accumulate; there is no cleanup, only reclaim-on-reset.** Every new
-session key creates one bloomery agent via `create_agent`, held in
-`server.sessions` for the adapter process's lifetime. Since the final fix
-wave, a session that diverges (rewritten history, a changed tool set, or
-`keep_reasoning_in_history=false` declining reuse) suspends its OLD agent
-(`BloomeryClient.suspend`) before starting a fresh one, so a divergent
-session's superseded agents ARE reclaimed. What is still missing:
-bloomery's native API has `POST /agents/{id}/suspend` but **no `DELETE
-/agents/{id}`**, and a session that never diverges keeps its one agent
-resident for the adapter process's lifetime with no idle-timeout or
-explicit-close path. Long-running deployments with many distinct,
-never-diverging sessions will still accumulate agents (and their resident
-KV/window budget) on the daemon side until the daemon itself is restarted.
-This is a known gap, not an oversight to be silently worked around; closing
-it fully needs either a bloomery-side delete/reap endpoint or an
-adapter-side idle-session suspend policy, and that is future work, not
-something this task's scope covers.
+**Agents used to accumulate; since 2026-09-07 the adapter reaps them.**
+Every new session key creates one bloomery agent via `create_agent`, and the
+adapter has no session-end signal (a one-shot client simply exits), so before
+the idle reap every conversation left its agent resident for the adapter
+process's lifetime. The 25-tool hermes dogfood
+([evidence](../../docs/superpowers/evidence/2026-09-07-hermes-dogfood-25-tools.md))
+turned that into a user-facing failure: this tier holds two 30k-token
+windows, so the third conversation was refused with 409 — bloomery's
+`plan_residency` evicts only agents of strictly lower priority (every adapter
+agent shares `default_priority`), and its equal-priority time-share admits a
+requester only after *it* has waited a full quantum, which a one-shot client
+never does. What remains true: a session that is mid-request is never
+reaped, so a client that holds many conversations open *simultaneously* can
+still fill the tier, and the daemon's 409 then reaches it unchanged.
+
+## Idle reaping
+
+Two paths, both `openai_tools/reap.py`, both `DELETE /agents/{id}` (which
+frees the agent's window — `suspend` only parks an agent and keeps its
+budget, which is why suspend never fixed the leak):
+
+- **Idle TTL.** A daemon thread started by `main()` sweeps every
+  `min(idle_ttl_secs / 2, 30)` seconds and deletes every session idle
+  *strictly* longer than `idle_ttl_secs` (default 900; `null` disables the
+  sweep). Idle is measured from the start of the session's last request (a request in flight holds its lock and is never a candidate, so the difference from "end" is at most one inference).
+- **Residency refusal.** When bloomery refuses an inference with 409, the
+  adapter deletes the *least-recently-used* idle session and retries that
+  inference exactly once. If nothing is idle, or the retry is refused too,
+  the 409 reaches the client unchanged. A pure TTL cannot cover
+  back-to-back conversations: any TTL long enough not to reap
+  mid-conversation is too long to free a window for the next one.
+
+A session is idle only if its request lock can be taken without blocking;
+a request in flight is never reaped, whatever the clock says. A reaped
+session that comes back simply gets a fresh agent and a full re-render of
+its history (the ordinary first-turn path), at the cost of one preamble
+prefill. A failed `DELETE` is logged (`delete_failed`) and the session kept
+for the next sweep; a 404 means the agent is already gone and the session
+is dropped. `build_server` never starts the sweeper — only `main()` does —
+so tests drive `reap.reap_idle` with an injected clock and no thread.
 
 ## Diagnostics
 
@@ -152,8 +179,12 @@ Every request writes one structured JSON line to stderr via the stdlib
 `logging` module (`openai_tools.server` logger): the session key, the
 bloomery agent id used, whether this turn was a reset, the delta size in
 bytes, `prompt_tokens`/`completion_tokens` from the daemon (when the turn
-reached the daemon), and the outcome (`"ok"`, `"invalid_tool_arguments"`, or
-`"bloomery_error_<status>"`). An unexpected (non-`BloomeryError`) exception
+reached the daemon), and the outcome (`"ok"`, `"retry_replayed"`, `"invalid_tool_arguments"`, or
+`"bloomery_error_<status>"`). A reap writes `{"event": "session_reaped",
+"session", "agent", "reason": "idle_ttl" | "residency", "idle_secs"}`, and a
+delete that failed writes `{"event": "delete_failed", ...}`; a residency
+reap is therefore visible as a `bloomery_error_409` line, a `session_reaped`
+line, then the retried turn's `ok`. An unexpected (non-`BloomeryError`) exception
 also logs its full traceback to stderr before the client gets the generic
 500 — the response body never carries internal detail, but the process's
 own stderr always does. `log_message` (raw per-connection HTTP access
