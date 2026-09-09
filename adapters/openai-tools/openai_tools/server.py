@@ -76,6 +76,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .bloomery import BloomeryClient
 from .errors import BloomeryError, to_openai_error
+from . import reap
 from .session import Session, UnrenderableMessage
 from .template import ChatTemplate
 from .toolcall import parse_tool_calls, split_reasoning
@@ -86,7 +87,13 @@ from .toolcall import parse_tool_calls, split_reasoning
 # server-side trace of what happened. One handler, attached once, dependency
 # -free (stdlib `logging`); `log_message` below stays quiet -- this is a
 # purpose-built request log, not the raw HTTP access log.
-logger = logging.getLogger(__name__)
+# The diagnostics stream's name is FIXED, not derived from `__name__`: under
+# `python -m openai_tools.server` `__name__` is `__main__`, and a module-
+# derived name would leave `reap.py`'s events (logged to this name, as the
+# README promises) with no handler -- which is exactly how the 2026-09-07
+# follow-up run measured zero `session_reaped` events while the daemon's
+# journal showed the DELETE. Pinned by `test_reap.EntrypointTest`.
+logger = logging.getLogger("openai_tools.server")
 if not logger.handlers:
     _handler = logging.StreamHandler(sys.stderr)
     _handler.setFormatter(logging.Formatter("%(message)s"))
@@ -155,10 +162,18 @@ class _SessionEntry:
     turns sent against it -- KV-append correctness requires requests for
     the same session never interleave."""
 
-    def __init__(self, session: Session, agent_id: str):
+    def __init__(self, session: Session, agent_id: str, now: float):
         self.session = session
         self.agent_id = agent_id
         self.lock = threading.Lock()
+        # 2026-09-07 idle reap: `server.clock()` at creation and at the
+        # start of every request (stamped under `lock`, so a reaper -- which
+        # must take the lock non-blocking first -- never reads a mid-request
+        # value). `reaped` is set by `reap._reap_locked` under the same
+        # lock; a request that fetched this entry before the reap and only
+        # got the lock afterwards sees the flag and re-fetches.
+        self.last_used = now
+        self.reaped = False
         # Critical 1: whether ANY turn has ever been successfully committed
         # to this entry's (current or a prior) agent. Only used to tell "the
         # first turn of a session" (agent is already fresh, just created)
@@ -336,7 +351,7 @@ class _Handler(BaseHTTPRequestHandler):
         session = Session(
             agent_id, self.server.template,
             keep_reasoning=self.server.config.get("keep_reasoning_in_history", True))
-        candidate = _SessionEntry(session, agent_id)
+        candidate = _SessionEntry(session, agent_id, self.server.clock())
 
         with self.server.sessions_lock:
             entry = self.server.sessions.get(session_key)
@@ -398,11 +413,30 @@ class _Handler(BaseHTTPRequestHandler):
             isinstance(stream_options, dict) and stream_options.get("include_usage"))
 
         session_key = self.headers.get("X-Session-Id") or _first_user_message_key(messages)
-        entry = self._get_session(session_key, model)
-
-        with entry.lock:
-            self._infer_and_respond(entry, session_key, messages, tools, model, max_tokens,
-                                    stream, include_usage)
+        while True:
+            entry = self._get_session(session_key, model)
+            with entry.lock:
+                if entry.reaped:
+                    # Reaped between our lookup and our lock: its agent is
+                    # gone. Make sure it is out of the table (the reaper
+                    # already did this; repeating it makes progress certain
+                    # rather than assumed) and fetch again, which creates a
+                    # fresh entry on a fresh agent.
+                    with self.server.sessions_lock:
+                        if self.server.sessions.get(session_key) is entry:
+                            del self.server.sessions[session_key]
+                    continue
+                # Stamped at request START, under the lock, before any byte
+                # of the response can reach the client. Stamping at the end
+                # raced the client: a reaper (or a test) acting the instant
+                # the response landed could still see the previous stamp,
+                # or a stamp taken from a clock that had already moved on.
+                # Idle is therefore "since the session's last request began";
+                # while that request runs the lock makes it un-reapable anyway.
+                entry.last_used = self.server.clock()
+                self._infer_and_respond(entry, session_key, messages, tools, model,
+                                        max_tokens, stream, include_usage)
+            return
 
     def _resolve_max_tokens(self, payload: dict) -> int:
         """Minor fix: `max_completion_tokens` is honoured as an alias for
@@ -438,7 +472,7 @@ class _Handler(BaseHTTPRequestHandler):
             "invalid_request_error", "invalid_tool_arguments", str(exc)))
 
     def _infer_and_respond(self, entry, session_key, messages, tools, model, max_tokens,
-                           stream, include_usage):
+                           stream, include_usage, residency_retry=False):
         session = entry.session
 
         # Amendment 2026-08-31 "the retry state", checked BEFORE
@@ -545,6 +579,19 @@ class _Handler(BaseHTTPRequestHandler):
                 self._suspend_best_effort(created_agent_id)
             self._log_event(session_key, send_agent_id, was_reset, len(delta),
                             f"bloomery_error_{exc.status}")
+            if exc.status == 409 and not residency_retry:
+                # 2026-09-07 idle reap, residency path: the tier is full of
+                # OUR OWN idle agents (the dogfood's run 3). Delete the
+                # least-recently-used idle session and retry this inference
+                # exactly once; if nothing is idle, or the retry is refused
+                # too, the daemon's 409 reaches the client unchanged. The
+                # session was restored above, so the retry re-derives the
+                # identical delta.
+                if reap.reap_one_idle(self.server) is not None:
+                    self._infer_and_respond(entry, session_key, messages, tools, model,
+                                            max_tokens, stream, include_usage,
+                                            residency_retry=True)
+                    return
             status, body = to_openai_error(exc)
             self._send_json(status, body)
             return
@@ -639,7 +686,7 @@ class _Handler(BaseHTTPRequestHandler):
         }
 
 
-def build_server(config: dict, client) -> ThreadingHTTPServer:
+def build_server(config: dict, client, clock=time.monotonic) -> ThreadingHTTPServer:
     """Wire the four modules into a `ThreadingHTTPServer`.
 
     `client` is injected rather than constructed here -- a
@@ -655,6 +702,12 @@ def build_server(config: dict, client) -> ThreadingHTTPServer:
     server.template = template
     server.sessions: dict[str, _SessionEntry] = {}
     server.sessions_lock = threading.Lock()
+    # 2026-09-07 idle reap: the clock every idle decision reads (injected
+    # in tests), and the stop flag for `reap.start_sweeper` -- which
+    # `main()` starts and `build_server` deliberately does not, so a test
+    # server never has a thread sweeping under it.
+    server.clock = clock
+    server.reap_stop = threading.Event()
     return server
 
 
@@ -665,8 +718,11 @@ def main(argv=None) -> int:
         config = json.load(handle)
     client = BloomeryClient(config["base_url"])
     server = build_server(config, client)
+    sweeper = reap.start_sweeper(server)
+    ttl = reap.idle_ttl(config)
     print(f"openai-tools adapter listening on http://{server.server_address[0]}:"
-          f"{server.server_port}")
+          f"{server.server_port} (idle reap: "
+          f"{'off' if sweeper is None else f'{ttl}s ttl, sweep every {reap.sweep_interval(ttl)}s'})")
     server.serve_forever()
     return 0
 

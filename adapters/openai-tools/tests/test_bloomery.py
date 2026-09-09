@@ -28,11 +28,27 @@ from openai_tools.errors import BloomeryError
 
 class _Stub(BaseHTTPRequestHandler):
     routes = {}
+    deleted = []
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
         self.rfile.read(length)
         status, payload = self.routes.get(self.path, (404, {"error": "no route"}))
+        raw = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def do_DELETE(self):
+        _Stub.deleted.append(self.path)
+        status, payload = self.routes.get(self.path, (404, {"error": "no route"}))
+        if payload is None:
+            self.send_response(status)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         raw = json.dumps(payload).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -94,6 +110,32 @@ class BloomeryClientTest(unittest.TestCase):
             with self.assertRaises(BloomeryError) as caught:
                 client.infer("test", "p", 100)
             self.assertEqual(caught.exception.status, 413)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_delete_agent_sends_DELETE_and_is_satisfied_by_an_empty_204(self):
+        # 2026-09-07 idle reap: the daemon answers `DELETE /agents/{id}` with
+        # 204 and NO body (`agent-delete-endpoint`); `_post`'s JSON parse
+        # of an empty body must not be what a delete relies on.
+        _Stub.deleted = []
+        srv = _serve({"/agents/a7": (204, None)})
+        try:
+            client = BloomeryClient(f"http://127.0.0.1:{srv.server_port}")
+            self.assertIsNone(client.delete_agent("a7"))
+            self.assertEqual(_Stub.deleted, ["/agents/a7"])
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_delete_agent_404_is_raised_as_BloomeryError_carrying_the_body(self):
+        srv = _serve({"/agents/a7": (404, {"error": "unknown_agent", "agent": "a7"})})
+        try:
+            client = BloomeryClient(f"http://127.0.0.1:{srv.server_port}")
+            with self.assertRaises(BloomeryError) as caught:
+                client.delete_agent("a7")
+            self.assertEqual(caught.exception.status, 404)
+            self.assertEqual(caught.exception.body["error"], "unknown_agent")
         finally:
             srv.shutdown()
             srv.server_close()

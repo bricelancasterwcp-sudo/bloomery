@@ -2423,6 +2423,37 @@ to the real client, which displayed bloomery's byte arithmetic unaltered.
    and a reworded journal reason. The pager-layer semantics were already
    pinned by `pager_remove_agent_test.rs` and are deliberately not re-pinned.
 
+   **Amended 2026-09-07 (`adapter-idle-reap`): the endpoint had a consumer
+   for the first time, and the leak it was built for became a user-facing
+   failure the same day.** The 25-tool hermes dogfood
+   (`docs/superpowers/evidence/2026-09-07-hermes-dogfood-25-tools.md`) ran
+   three back-to-back conversations: two passed every endpoint, the third
+   was refused 409 with `reclaimable 0 B`. Mechanism, read from the code:
+   this tier holds TWO 30k-token windows (not one — free VRAM read 14.72 GiB
+   at boot vs 13.10 on 08-31), the adapter never released an idle agent
+   (no session-end signal; it only ever suspended on a rewrite),
+   `plan_residency` evicts only strictly-lower priority (every adapter agent
+   shares `default_priority`), and `try_time_share` admits an equal-priority
+   requester only after *it* has waited the 30 s quantum keyed by its own
+   agent id — a `-q` client never does, and hermes does not retry a 409.
+   Brice ruled (a) of three options: the ADAPTER owns turnover. Delivered in
+   `adapters/openai-tools/openai_tools/reap.py`: an idle-TTL sweep
+   (`idle_ttl_secs`, default 900, `null` off; strict boundary; a session
+   mid-request is never a candidate, decided by a non-blocking lock acquire)
+   plus a residency reap — a 409 on infer deletes the least-recently-used
+   idle session and retries once — because a pure TTL cannot cover
+   back-to-back conversations. `BloomeryClient.delete_agent` is the new
+   consumer of `DELETE /agents/{id}`. 18 tests in `tests/test_reap.py` +
+   2 client tests, injected clock, no sleeps; 13 mutants killed including
+   `suspend`-for-`delete` (again), the reaped-flag race, MRU-for-LRU, an
+   unbounded retry, and a "disabled" TTL substituted by a huge one — that
+   last mutant SURVIVED first and exposed a weak test (clock advanced by
+   10⁶ s; now `inf`), not dead code. Still open, recorded in the README:
+   a client holding many conversations open *simultaneously* can still fill
+   the tier and then sees the daemon's 409 unchanged — by design, since a
+   session mid-request must never be reaped. Options (b) lower-priority
+   adapter agents and (c) pager idle-eviction remain unbuilt alternatives.
+
 4. ~~**No parse-rate statistic is claimed.** The pre-registered question ("a
    poor parse rate is a finding, not a failure") is **unanswered**, not
    answered favourably: finding 1 ended the session before a multi-turn
