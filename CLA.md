@@ -1,12 +1,12 @@
 # bloomery Contributor License Agreement
 
-**Version 1.0 (2026-08-30)**
+**Version 1.0 — 2026-08-30**
 
 Thank you for contributing. This agreement exists for one reason: bloomery is
 dual-licensed (see [`LICENSING.md`](LICENSING.md)), and a project can only be
 dual-licensed while one party holds the right to license all of it. Without
 this grant, a merged contribution would make it impossible to offer the
-commercial license, permanently, for that code.
+commercial license — permanently, for that code.
 
 **You keep your copyright.** This is a license grant, not an assignment. You
 may continue to use, sell, license and relicense your own contribution however
@@ -26,8 +26,8 @@ it.
 **"Owner"** means Brice Lancaster, the copyright holder of the Project, and any
 successor to whom the Project's rights are transferred.
 
-**"Contribution"** means any work of authorship (source code, documentation,
-tests, evidence documents, configuration, or any other material) that You
+**"Contribution"** means any work of authorship — source code, documentation,
+tests, evidence documents, configuration, or any other material — that You
 intentionally submit to the Project for inclusion, in any form and by any means,
 including but not limited to pull requests, patches, issues containing code, and
 electronic messages. It excludes anything You conspicuously mark, in writing at
@@ -71,8 +71,8 @@ You represent that:
    original creation, or You have the necessary rights to submit it under the
    terms above.
 2. **Your employer has no conflicting claim.** If Your employer has rights to
-   intellectual property You create (including anything created on their
-   equipment, time, or within the scope of your employment), You have either
+   intellectual property You create — including anything created on their
+   equipment, time, or within the scope of your employment — You have either
    received permission to make the Contribution on their behalf, or your
    employer has waived those rights, or your employer has executed this
    agreement.
@@ -83,8 +83,8 @@ You represent that:
    redistribution.
 4. **AI-assisted work is disclosed as required.** If a Contribution was produced
    with substantial assistance from an automated code-generation tool, say so in
-   the pull request. It will not be rejected for that reason (much of this
-   project was produced that way), but the record needs to be accurate, because
+   the pull request. It will not be rejected for that reason — much of this
+   project was produced that way — but the record needs to be accurate, because
    the copyright status of machine-generated material is unsettled and the
    Owner's licensing position depends on knowing what is in the tree.
 
@@ -106,8 +106,8 @@ non-infringement, merchantability, or fitness for a particular purpose.
 
 ## 7. Notice of inaccuracy
 
-If any representation in section 4 becomes inaccurate (for example, You later
-learn a Contribution included third-party material You had not identified),
+If any representation in section 4 becomes inaccurate — for example, You later
+learn a Contribution included third-party material You had not identified —
 notify the Owner promptly at `bricelancaster.wcp@gmail.com` so the record can
 be corrected.
 
@@ -115,7 +115,7 @@ be corrected.
 
 One time per contributor, not per pull request.
 
-**Individuals**: add a comment to your first pull request containing exactly:
+**Individuals** — add a comment to your first pull request containing exactly:
 
 ```
 I have read the bloomery CLA v1.0 and I accept it.
@@ -126,7 +126,7 @@ GitHub:  <your github username>
 Date:    <YYYY-MM-DD>
 ```
 
-**On behalf of an organisation**: the same text, submitted by someone
+**On behalf of an organisation** — the same text, submitted by someone
 authorised to bind the entity, naming the entity and the signer's title, sent
 to `bricelancaster.wcp@gmail.com` rather than posted publicly.
 
@@ -143,5 +143,5 @@ engineer, not a lawyer, and it has not been reviewed by counsel.
 
 If You are signing on behalf of an organisation, or if a real commercial
 transaction is going to rest on this document, have your own counsel read it
-first, and the Owner should have counsel review it before relying on it in a
+first — and the Owner should have counsel review it before relying on it in a
 commercial negotiation.
