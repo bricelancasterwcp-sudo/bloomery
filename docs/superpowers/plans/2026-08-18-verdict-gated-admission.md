@@ -680,7 +680,7 @@ In `crates/bloomery-daemon/src/api_native.rs`, dispatch entry beside bless (:61)
 And the handler, in the file's established doc-comment-table style:
 
 ```rust
-/// `POST /models/{name}/unblock`, clear this boot's admission block
+/// `POST /models/{name}/unblock` — clear this boot's admission block
 /// (verdict-gated-admission design §4).
 ///
 /// | outcome | status | body |

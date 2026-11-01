@@ -206,7 +206,7 @@ Ran 2026-08-23T05:21:47Z → 05:25:35Z (≈3m48s wall; includes weight load + 1
 full eval pass over 221 val rows + 5 train micro-steps).
 
 - `model class Qwen3_5MoeForCausalLM; num_experts=133; layers=40`, matches.
-- `trainable 21166080 / total 19194718848 (0.1103%), experts+router
+- `trainable 21166080 / total 19194718848 (0.1103%) — experts+router
   frozen: asserted`. Trainable count (21,166,080 ≈ 21.17M) matches the
   spike's quoted figure almost exactly. The **percentage** (0.1103%) differs
   from the brief's quoted spike figure (0.0611%) because the total parameter

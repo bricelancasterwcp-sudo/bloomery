@@ -103,7 +103,7 @@ fn probe_version_is_mandatory_not_optional() {
   ```rust
   pub struct ProfileStore { root: PathBuf } // root = profiles dir
   impl ProfileStore {
-      pub fn paths(&self, model: &str) -> ModelPaths;      // current/previous/baseline paths, slug = model with [:/]→'-' (POST's existing slug rule, read post.rs/main.rs for the exact helper and REUSE it, never a second slug)
+      pub fn paths(&self, model: &str) -> ModelPaths;      // current/previous/baseline paths, slug = model with [:/]→'-' (POST's existing slug rule — read post.rs/main.rs for the exact helper and REUSE it, never a second slug)
       pub fn rotate(&self, model: &str) -> io::Result<Rotation>; // current→previous BEFORE the probe deletes/rewrites current; Rotation names what moved
       pub fn bless(&self, model: &str) -> Result<Blessing, DriftError>; // copy current→baseline; returns the blessed file's sha256 prefix + path
       pub fn retain_transient(&self, model: &str, path: &Path) -> io::Result<PathBuf>; // content-addressed name (sha256 prefix), keep newest 4, dropped ones returned for journaling
@@ -131,14 +131,14 @@ fn probe_version_is_mandatory_not_optional() {
   pub enum Comparison { Step, Cumulative }
   pub enum GateOutcome {
       WithinNoise,                 // exit 0
-      Drift,                       // exit 1: the caller decides confirm (Task 4)
+      Drift,                       // exit 1 — the caller decides confirm (Task 4)
       NotComparable { exit: i32 }, // exit 2
       InstrumentChanged { reference: String, current: String }, // precheck fired; diff never ran
-      Unmeasured { reason: String }, // reference file absent/unreadable, named, never a pass
+      Unmeasured { reason: String }, // reference file absent/unreadable — named, never a pass
       Infra { detail: String },    // spawn failure / timeout / signal-kill
   }
   pub fn compare(&self, reference: &Path, current: &Path) -> GateOutcome;
-  fn diff_argv(reference: &Path, current: &Path) -> Vec<String>; // ["-m","assay","diff",ref,cur,"--gate"], a value tests inspect, like post::argv
+  fn diff_argv(reference: &Path, current: &Path) -> Vec<String>; // ["-m","assay","diff",ref,cur,"--gate"] — a value tests inspect, like post::argv
   ```
   - `compare` reads BOTH files through `Profile::from_json` first (this is also the identity check, a file that doesn't parse is `Unmeasured` with the parse error named), runs `instrument_precheck`, and only on `Comparable` spawns the diff.
   - Journal `Event::Drift { model: String, comparison: String, outcome: String, reference_path: String, current_path: String, exit_code: Option<i32> }`: `exit_code` None when diff never ran (precheck/unmeasured/infra), per None-vs-zero.
@@ -162,13 +162,13 @@ fn probe_version_is_mandatory_not_optional() {
       WithinNoise,
       Confirmed { reference: String },   // sha-prefix identity of the reference
       Transient,
-      Unconfirmed { reason: String },    // confirm probe itself failed, first reading stands, NAMED
+      Unconfirmed { reason: String },    // confirm probe itself failed — first reading stands, NAMED
       InstrumentChanged { reference: String, current: String },
       Unmeasured { reason: String },
       NotComparable,
   }
   pub struct ModelDrift { pub step: DriftStatus, pub cumulative: DriftStatus }
-  // ModelStatus gains: pub drift: Option<ModelDrift>  // None = drift never ran this boot (posting failed earlier), absent ≠ clean
+  // ModelStatus gains: pub drift: Option<ModelDrift>  // None = drift never ran this boot (posting failed earlier) — absent ≠ clean
   ```
   - Orchestration per model per boot (in `run_post`'s per-model loop, AFTER the existing journal/admit bookkeeping): rotate → probe (existing) → on success: step-compare vs previous, cumulative-compare vs baseline; each `Drift` outcome triggers ONE confirm (fresh probe to a transient path, re-diff same reference); auto-bless when no baseline exists (journaled `auto-first-profile`). Every outcome journals; the pair lands in the pager via the new setter.
   - Confirm probe failure (PostError) → `Unconfirmed` with the PostError string. The first reading is never upgraded to `Confirmed` (spec §4).

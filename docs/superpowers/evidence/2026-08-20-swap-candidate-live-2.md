@@ -395,7 +395,7 @@ rows under it, where run 1 had zero of each). The window opened, was scoped to
 the scratch identity, and closed.
 
 **A residency refusal took its place (and the spec had already ruled its
-shape.** The seam design's §4 step-1 amendment (`ruling bT3/R1) the 409
+shape.** The seam design's §4 step-1 amendment (`ruling bT3/R1 — the 409
 disposition`, 2026-08-19,
 `docs/superpowers/specs/2026-08-19-swap-candidate-seam-design.md:139-171`)
 routes an unplaceable candidate to *precisely* this outcome, and run 2a

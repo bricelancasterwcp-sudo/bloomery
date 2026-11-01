@@ -41,7 +41,7 @@ grounded) beside three false claims.
 Two further facts found while grounding this design, both recorded because
 they shape it:
 
-- **The v1–v4 `done` verb card's own worked example is a repair claim**, `crates/bloomery-core/src/action/card.rs:51-54`: `## done, end the task
+- **The v1–v4 `done` verb card's own worked example is a repair claim**, `crates/bloomery-core/src/action/card.rs:51-54`: `## done — end the task
   with a summary` / `<action verb="done">` / `fixed the failing test`.
   Every probed and trained model reads that as the archetype of `done`. It
   is named here as a **confound** in every v1–v4 number, not a cause: the

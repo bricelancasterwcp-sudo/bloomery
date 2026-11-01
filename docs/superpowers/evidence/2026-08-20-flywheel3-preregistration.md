@@ -288,7 +288,7 @@ and no code path was changed.**
   this and must be read with it.
 - **The em dash rides in the symptom-mismatch refusal reasons and that
   was ruled deliberate:** it appears in exactly the **150**
-  symptom-mismatch `done` completions (the `Checked: …, … Found
+  symptom-mismatch `done` completions (the `Checked: … — … Found
   instead: …` assembler) and in **zero** other completions in the corpus,
   patch or refuse.
 

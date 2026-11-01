@@ -39,7 +39,7 @@ battery:
    file and writes a goal claiming a different, absent defect X. X must
    name real identifiers from the file (turn 2's plausibility rule: the
    model must learn *check first*, not *weird goal → refuse*). Ideal:
-   `read` → `done("Checked: no X in <file>, <factual reason from the
+   `read` → `done("Checked: no X in <file> — <factual reason from the
    file's actual content>. Found instead: Y at <site>; no change made
    without a goal that matches.")`. Both halves of the done come from
    factory ground truth (it authored X and planted Y), which is what

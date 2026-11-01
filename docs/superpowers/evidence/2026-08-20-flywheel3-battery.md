@@ -471,7 +471,7 @@ forward unchanged:**
    The two-classes-moving-together reading says the refusals cannot be pure
    surface-form production, because surface-form production would leak into the
    patch class. `py-03` shows the leak is not the only tell: **the model
-   produced the trained answer's exact shape, `Checked: …, … Found instead:
+   produced the trained answer's exact shape, `Checked: … — … Found instead:
    …`, and filled its second slot with a function that does not exist.** That
    is surface-form production, caught inside a refusal the patch class could
    never have flagged, because the refusal itself was correct. So the honest
