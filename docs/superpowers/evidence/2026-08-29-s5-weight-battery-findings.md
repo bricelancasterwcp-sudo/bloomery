@@ -1,7 +1,7 @@
-# s5-weight-battery-v1 — findings: validity **PASS**; the weights are read
+# s5-weight-battery-v1: findings: validity **PASS**; the weights are read
 
 **Date:** 2026-08-29 (machinery + dry shakedown the prior evening, same
-session; run under Brice's recorded delegation — prereg header).
+session; run under Brice's recorded delegation, prereg header).
 **Lock:**
 `docs/superpowers/evidence/2026-08-29-s5-weight-battery-preregistration.md`
 at branch commit `ab7627b`, committed BEFORE the real boot. Endpoints
@@ -13,26 +13,26 @@ output committed verbatim at
 
 ## 1. The licensed sentence, numbers filled
 
-All validity gates held (V1, V2, V3, H3, completeness, identity — §§3–4
+All validity gates held (V1, V2, V3, H3, completeness, identity: §§3–4
 below), so spec §1's sentence is licensed with its registered numbers:
 
 > **On exact repeats under refalsify-off, design-§5's measured weight on
 > this corpus and model is: it contradicted 16/16 matched true-but-moot
 > lessons (W_A = 1.0, Wilson 95% [0.8064, 1.0000]) and 0/16 matched
-> right lessons (W_C = 0.0, [0.0000, 0.1936] — zero collateral; every
+> right lessons (W_C = 0.0, [0.0000, 0.1936], zero collateral; every
 > control lesson re-verified and refreshed), while on stale lessons it
 > corrected 1/16 (W_B_mint = 0.0625, [0.0111, 0.2833]) and removed
 > 15/16 (W_B_contra = 0.9375, [0.7167, 0.9889]) of matched retrievals
 > (lens: this battery).**
 
 Read together, per the lanes' construction-certified ground truth: §5's
-true-positive lane works — no stale lesson survived stale (15 removed,
-1 corrected) — and its false-positive weight on goal-satisfied repeats
+true-positive lane works, no stale lesson survived stale (15 removed,
+1 corrected), and its false-positive weight on goal-satisfied repeats
 is **total**: every true-but-moot lesson was destroyed. The rule cannot
 distinguish moot-true from stale-wrong; both present identically to it
 (injected, scored, no verifying run). Zero collateral on right lessons
 means the weight is concentrated exactly where the premise-gone lane's
-shield operates. No aggregate "precision" number is quoted — any such
+shield operates. No aggregate "precision" number is quoted. Any such
 number is a function of the constructed lane mix, not of the rule.
 
 Per spec §1 this licenses NO §5 design change (that is Brice's ruling,
@@ -51,7 +51,7 @@ and pre-flight), the main checkout's featured vulkan build;
 `readlink /proc/<pid>/exe` confirmed at boot; pid via `ps`. Pre-flight
 re-ran `corpus_check_s5` (OVERALL: PASS) and GPU hygiene; `git status`
 showed ZERO tracked-file modifications after the run; the scratch-copy
-manifest carried no `witness/` directories (verified — witnesses never
+manifest carried no `witness/` directories (verified, witnesses never
 reached the run tree).
 
 **Recompute invocation (prereg §6 step 6, unmodified):**
@@ -84,13 +84,13 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m tools.memory_battery.recompute_s5 \
 
 V1's live conformance check of the code-entailed mint-xor-contradict
 totality held on all 48 matched tasks (spec §0's discipline: checked,
-never quoted as a result). Retrieval matched 16/16 in every lane — the
+never quoted as a result). Retrieval matched 16/16 in every lane: the
 cited-set construction premise held at 100% for the third battery
 running. Completeness 96/96; identity matched both phases; `dropped`
 empty. Corpus provenance: the recompute's manifest-derived `corpus_sha`
 is `f7c75e1c6c66b433ee13d6ff9a64a3107f5be0c0f608b2c641b2e96872cb2d30`;
 the manifest FILE's sha256 at freeze, `f5d415ff…`, is the prereg §2
-pin — two formulas over the same frozen bytes, both recorded (the pg
+pin, two formulas over the same frozen bytes, both recorded (the pg
 findings' §7 convention).
 
 ## 4. The weights, verbatim from recompute
@@ -111,11 +111,11 @@ findings' §7 convention).
 ## 5. Advisory observations (no sentence licensed)
 
 - Every phase-2 task in every lane attempted at least one patch
-  (`p2_patch_attempt_tasks: 16/16/16` — attempts, not successes). In
+  (`p2_patch_attempt_tasks: 16/16/16`, attempts, not successes). In
   the moot lane that is the sharpest reading of the poisoning
   mechanism: the goal drives a patch, the moved-on contract makes the
   stored fix FAIL its own verification, so even a model that patches
-  cannot produce a verifying run — §5's conjuncts close on every path
+  cannot produce a verifying run: §5's conjuncts close on every path
   a goal-satisfied repeat can take short of independently discovering
   the new contract.
 - The one stale-lane correction (`minted: 1`) is the only phase-2 task
@@ -140,5 +140,5 @@ the fired question only, never as a comparand).
 
 No number here originates from the shakedown (label `S5_OFF_DRY`, 3
 tasks). Every value above was read from the single `recompute_s5`
-invocation over the real run's journal, ledger, and store — the first
+invocation over the real run's journal, ledger, and store: the first
 and only time any of these numbers was computed.

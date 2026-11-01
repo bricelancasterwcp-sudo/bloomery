@@ -3,10 +3,10 @@
 bloomery is **dual-licensed**. The same code is available two ways, and you
 choose which one you are using:
 
-1. **GNU Affero General Public License v3.0 (AGPL-3.0-only)** — free of
+1. **GNU Affero General Public License v3.0 (AGPL-3.0-only)**: free of
    charge, for everyone, including commercial use, on the condition that you
    honour the AGPL's terms. Full text: [`LICENSE`](LICENSE).
-2. **A commercial license** — a separate, negotiated grant that removes the
+2. **A commercial license**: a separate, negotiated grant that removes the
    AGPL's source-disclosure obligations. See [Commercial licensing](#commercial-licensing).
 
 There is no feature difference between the two. The code is identical. What
@@ -21,14 +21,13 @@ differs is what you owe in return.
 | `docs/` | CC BY 4.0 ([`docs/LICENSE`](docs/LICENSE)) | specs, plans, evidence, findings |
 | `Cargo.lock`, config samples | AGPL-3.0-only | part of the build |
 
-The `docs/` tree is deliberately **not** copyleft. The measurement record —
-pre-registrations, batteries, evidence documents, the carried-debt ledger — is
+The `docs/` tree is deliberately **not** copyleft. The measurement record (pre-registrations, batteries, evidence documents, the carried-debt ledger) is
 meant to be quoted, cited, reproduced and argued with, including by people who
 will never touch the code. Attribution is the only condition.
 
 Third-party dependencies keep their own licenses. Every current dependency is
 permissive (MIT / Apache-2.0; `self_cell` is used under its Apache-2.0 arm),
-and llama.cpp — reached through `llama-cpp-2` — is MIT. Nothing in the
+and llama.cpp, reached through `llama-cpp-2`, is MIT. Nothing in the
 dependency graph imposes copyleft on you; the AGPL here is a deliberate choice
 by the copyright holder, not an inherited obligation.
 
@@ -44,7 +43,7 @@ purposes, study it, modify it, and distribute it or your modifications.
 license notices, and make the corresponding source available to the people you
 give it to.
 
-**The clause that matters for a daemon.** bloomery is a network service — it
+**The clause that matters for a daemon.** bloomery is a network service. It
 exposes an HTTP API and an OpenAI-compatible shim. AGPL section 13 says that if
 you modify bloomery and let users interact with it **over a network**, those
 users must be offered the source of your modified version, even though you never
@@ -70,7 +69,7 @@ A commercial license is the right choice if any of these are true:
 - Your organisation's policy prohibits AGPL-licensed software regardless of
   how it is used.
 - You want warranty, indemnity, support, or a defined security-response
-  commitment. The AGPL grant carries none of these — it is offered **as is**,
+  commitment. The AGPL grant carries none of these. It is offered **as is**,
   with no warranty (see LICENSE sections 15–16).
 
 **To enquire:** open an issue titled `commercial licensing` on
@@ -87,7 +86,7 @@ alternative terms for *your* use.
 
 bloomery can only be dual-licensed while a single party holds the right to
 license all of it. That means contributions need an explicit grant before they
-can be merged — see [`CLA.md`](CLA.md). It is short, you keep your copyright,
+can be merged. See [`CLA.md`](CLA.md). It is short, you keep your copyright,
 and it is a one-time thing per contributor.
 
 If you would rather not sign it, that is a legitimate choice: open an issue
@@ -96,7 +95,7 @@ independently.
 
 ## Sibling repositories
 
-bloomery's measurements depend on sibling projects — notably
+bloomery's measurements depend on sibling projects, notably
 [assay](https://github.com/bricelancasterwcp-sudo/assay), which bloomery
 invokes as a subprocess for boot-time capability profiling, and
 [gguf-geometry](https://github.com/bricelancasterwcp-sudo/gguf-geometry),
@@ -115,7 +114,7 @@ Stated plainly, because the alternative is guessing:
 - **AGPL rather than a non-commercial license**, because bloomery needs users
   more than it needs a moat. A "free for individuals, paid for companies"
   licence would be source-available, not open source, and would suppress
-  exactly the adoption that produces field evidence — which is what this
+  exactly the adoption that produces field evidence, which is what this
   project runs on.
 - **AGPL rather than MIT**, because the copyleft is the only thing that makes
   a commercial license worth buying, and because a permissive grant is

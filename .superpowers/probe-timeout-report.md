@@ -33,7 +33,7 @@ Made the boot-POST assay probe's wall-clock cap operator-configurable via
      and the two remaining doc references in `run_bounded` and
      `run_bounded_for_test` that used to point at `[`PROBE_TIMEOUT`]`, so
      none of them dangle after the const's removal.
-   - `with_runner` (test constructor) is unchanged — it still injects a
+   - `with_runner` (test constructor) is unchanged. It still injects a
      `CommandRunner` directly and never touches the timeout.
 
 3. **`crates/bloomery-daemon/src/main.rs`**
@@ -44,7 +44,7 @@ Made the boot-POST assay probe's wall-clock cap operator-configurable via
 
 ## TDD evidence
 
-Tests were written first and confirmed to fail (compile errors — the field
+Tests were written first and confirmed to fail (compile errors: the field
 and the second constructor argument did not exist yet) before any source
 change:
 
@@ -127,4 +127,4 @@ One conventional commit on `feat/probe-timeout-config`:
 
 `feat: operator-configurable assay probe timeout (assay.probe_timeout_secs, default 600)`
 
-(hash recorded after commit — see final status message)
+(hash recorded after commit. See final status message)

@@ -1,4 +1,4 @@
-# G2 — agent switch latency, measured
+# G2: agent switch latency, measured
 
 **Date:** 2026-08-14
 **Gate:** `docs/gates.md` G2, pre-registered 2026-08-14 before this instrument existed.
@@ -29,8 +29,8 @@
 
 The cold class measures a switch whose weights *and* KV image are out of VRAM
 but still in the OS page cache. An auxiliary probe with the page cache dropped
-(n=5, **not** a gate reading) measures **p95 5588 ms, p50 5435 ms** — *above*
-the 5000 ms ceiling — but it moved the weights side only; the cost of reading a
+(n=5, **not** a gate reading) measures **p95 5588 ms, p50 5435 ms**, *above*
+the 5000 ms ceiling, but it moved the weights side only; the cost of reading a
 KV image off NVMe media remains **unmeasured**. See
 [Page-cache caveat](#page-cache-caveat).
 
@@ -42,7 +42,7 @@ KV image off NVMe media remains **unmeasured**. See
 |---|---|
 | GPU | NVIDIA GeForce RTX 5080, 16303 MiB total, 14689 MiB free at run start |
 | Driver | 595.84 (CUDA 13.2 runtime present; the substrate used the **Vulkan** backend) |
-| Tier declared | `enthusiast-16gb`, `emulated = false` — **real hardware**, not an emulated tier |
+| Tier declared | `enthusiast-16gb`, `emulated = false`: **real hardware**, not an emulated tier |
 | Host RAM | 30649 MiB total; 19482 MiB used, 14931 MiB buff/cache at run start |
 | Filesystems | daemon `data_dir` (journal + NVMe image tier) on `/dev/nvme0n1p2`; GGUF blob on `/dev/nvme1n1p1` |
 | CPU | 16 cores |
@@ -69,7 +69,7 @@ identity is checkable without trusting this document.
 
 | | |
 |---|---|
-| Daemon sources | `34a5469` (`fix: post — subprocess timeout, stale profile guard, honest window docs`) — unchanged by the bench commit |
+| Daemon sources | `34a5469` (`fix: post — subprocess timeout, stale profile guard, honest window docs`): unchanged by the bench commit |
 | Instrument | `3479ec2` (`feat: G2 bench instrument`), committed **before** the run |
 | Build | `cargo build --release --features llama,vulkan -p bloomery-daemon`; `cargo build --release -p bloomery-bench` |
 
@@ -85,7 +85,7 @@ in this section changes what the numbers mean.
 A **switch sample** is the sum of `duration_ms` over the *contiguous* pager-op
 sequence serving one resume: `EvictSave` of the victim + `ResumeLoad` of the
 target, plus `ModelLoaded` when the weights had to come back. Contiguity is
-enforced — any non-paging journal event ends the sequence — so an orphan
+enforced, any non-paging journal event ends the sequence, so an orphan
 `ModelLoaded` (a cold start with no image to restore after it) can never be
 carried across an intervening request and charged to the next switch.
 
@@ -101,18 +101,18 @@ Every duration was recorded by the pager itself, inside the daemon, around the
 operation it names. The bench takes no timings at all and cannot flatter a
 number it never measures.
 
-### 2. The pressure configuration — and why it had to be this
+### 2. The pressure configuration: and why it had to be this
 
 Four 2048-token contexts are 112 MiB each; a 16 GB card with a measured budget
 holds all of them trivially, so **no eviction would occur naturally** and the
 warm class would have zero samples.
 
-The obvious lever — raise `overhead_mib` until the pool is tight — **does not
+The obvious lever (raise `overhead_mib` until the pool is tight), **does not
 work, and the arithmetic says why.** Two different subtractions are at play:
 
 * the *window law* (`usable_window`) computes `free_vram − weights − overhead`;
 * the *residency planner* (`Pager::place`) computes `free_vram − Σ resident
-  kv_bytes` — it subtracts neither the weights nor the overhead.
+  kv_bytes`. It subtracts neither the weights nor the overhead.
 
 So forcing an eviction with `w` = 7723 MiB of weights needs
 `2·kv > free_vram`, while getting a non-zero window at all needs
@@ -132,7 +132,7 @@ resident agent. So both gate daemons were started with a `PATH` containing no
 env PATH=<empty dir> target/release/bloomery-daemon --config bench-warm.toml
 ```
 
-Nothing is faked — the probe simply cannot find its tool and reports `None`
+Nothing is faked: the probe simply cannot find its tool and reports `None`
 (unmeasured, never zero), exactly as on a machine without it. The
 configuration is self-documenting *inside the artifact*: both journals open
 with
@@ -147,13 +147,13 @@ measured budget, because such a run would finish clean and report `n: 0`.
 
 This changes the *decision*, not the *mechanics*: every switch below saved and
 restored a real 2048-token-window KV image on the real GPU with the real
-weights loaded. `overhead_mib` was set to `0` and had no effect either way —
+weights loaded. `overhead_mib` was set to `0` and had no effect either way,
 with an unmeasured probe the window law skips its VRAM term entirely.
 
 ### 3. The switch protocol
 
 The residency planner evicts only **strictly lower-priority** idle residents,
-so a round-robin over same-priority agents does not switch — it is refused
+so a round-robin over same-priority agents does not switch. It is refused
 with `409 {"error":"refused","free":0,"needed":117440512,"reclaimable":0}`
 (observed during pilot). Workers therefore carry ascending priorities
 (10, 20, … 80) and are always visited in that order.
@@ -161,7 +161,7 @@ with `409 {"error":"refused","free":0,"needed":117440512,"reclaimable":0}`
 A RAM-tier image can only be produced by an *eviction*: `Pager::suspend`
 always spills to NVMe. So a lap cannot wrap around, and each warm lap opens
 with a single-use **reset agent** (priority 250, freshly created) that evicts
-the incumbent worker — parking that worker's image in RAM — and then suspends
+the incumbent worker, parking that worker's image in RAM, and then suspends
 itself to hand the VRAM back. Being fresh, it has no image to restore and
 contributes no sample.
 
@@ -172,20 +172,20 @@ cells. Priming can only make the numbers worse, never better.
 
 ### 4. What each class does and does not include
 
-* **warm** — the sequence is `EvictSave(victim, ram) + ResumeLoad(target,
+* **warm**: the sequence is `EvictSave(victim, ram) + ResumeLoad(target,
   ram)`. 49 of the 56 samples are exactly that (29–33 ms). The remaining 7 are
   the first switch of each lap, where the reset agent has already vacated VRAM,
   so the sequence is `ResumeLoad` alone (5 ms). Those 7 deflate p50; p95 is
   read off the tail, which is entirely the full evict+restore population.
-* **cold** — the sequence is `ModelLoaded + ResumeLoad(target, nvme)`. The
+* **cold**: the sequence is `ModelLoaded + ResumeLoad(target, nvme)`. The
   outgoing agent's page-out happened inside the operator's `unload` request, a
   separate operation, so it is **not** in the sample. Measured separately in
   the same journal: `SuspendSave` (nvme, ~65 MiB) ran 32–86 ms, median 50 ms.
-  Adding it back would put cold p95 near 950 ms — still 5× inside the gate.
+  Adding it back would put cold p95 near 950 ms, still 5× inside the gate.
 
 **Scope, twice over.** (a) Residency was capped at one resident agent, so every
-switch here evicted exactly one victim. **Multi-victim eviction sequences — a
-placement whose `SchedulerDecision` names several agents at once — are
+switch here evicted exactly one victim. **Multi-victim eviction sequences, a
+placement whose `SchedulerDecision` names several agents at once, are
 unexercised by this run**, and nothing here says what one costs. (b) Both
 classes are *repeated measures*, not a survey: 56 = 8 agents × 7 laps, one
 model, one 2048-token window, one ~64.8 MiB image size, one box. It is 56
@@ -207,7 +207,7 @@ individual `EvictSave` ops 23–28 ms, so warm numbers are quantised at roughly
 
 Pre-registered before execution, executed once, no protocol change afterwards.
 Full driver: `.superpowers/sdd/2026-08-14-phase1-pager-daemon/g2run/run-gate.sh`
-(scratch, not committed — it names machine-local paths). The two invocations
+(scratch, not committed. It names machine-local paths). The two invocations
 verbatim:
 
 ```bash
@@ -230,7 +230,7 @@ Config common to both (`tier = enthusiast-16gb`, `emulated = false`,
 `assay.enabled = false`, `allow_unprofiled = true`, `overhead_mib = 0`). POST
 was off: it costs ~110 s per model per boot and measures the capability
 ceiling, which G2 does not read; its absence is journaled as a degraded boot,
-and `allow_unprofiled` is what admits an unprofiled model in its place — both
+and `allow_unprofiled` is what admits an unprofiled model in its place, both
 `Degraded` lines are in the journals.
 
 One daemon boot per class, so neither journal can contaminate the other. The
@@ -277,7 +277,7 @@ not move.
 Both journals are committed next to this document. `bloomery-bench report
 --journal <file>` reproduces both blocks exactly; that is the intended way to
 check this page. `n: 0` on the class a run did not exercise carries `null`
-percentiles, never `0` — an unmeasured class must not read as an instantaneous
+percentiles, never `0`, an unmeasured class must not read as an instantaneous
 switch.
 
 ### Sample distributions
@@ -294,13 +294,13 @@ Component ops, from the same journals:
 | `EvictSave` (ram) | warm | 63 | 23 / 25 / 28 | 67 967 556 |
 | `ResumeLoad` (ram) | warm | 56 | 5 / 5 / 5 | 67 967 556 |
 | `SuspendSave` (nvme) | warm | 7 | 12 / 13 / 15 | 287 476 (reset agents) |
-| `ModelLoaded` | cold | 57 | 811 / 830 / 884 | — |
+| `ModelLoaded` | cold | 57 | 811 / 830 / 884 |: |
 | `ResumeLoad` (nvme) | cold | 56 | 5 / 5 / 6 | 67 967 556 |
 | `SuspendSave` (nvme) | cold | 63 | 32 / 50 / 86 | 67 967 556 |
 
 No `Refusal` and no `ContractViolation` appears in either journal. Everything
-the protocol asked for was served: **135 inferences** (71 in the warm journal —
-8 primes, 56 lap steps, 7 reset agents; 64 in the cold journal — 8 primes and
+the protocol asked for was served: **135 inferences** (71 in the warm journal:
+8 primes, 56 lap steps, 7 reset agents; 64 in the cold journal: 8 primes and
 56 lap steps), **63 `EvictSave`** (all of them in the warm journal) and **70
 `SuspendSave`** (7 warm reset-agent page-outs, 63 cold page-outs inside
 `unload`).
@@ -315,13 +315,13 @@ image were out of VRAM but still in the OS page cache.** Both halves show it:
 read a 64.8 MiB image off "NVMe" in 5 ms (~13 GB/s). Those are host memory
 bandwidth, not NVMe media. Nothing in the pinned protocol controls the page
 cache; the gate anticipated exactly this and required the caveat be stated. It
-is stated here with numbers rather than a shrug — and, below, with an explicit
+is stated here with numbers rather than a shrug, and, below, with an explicit
 note of which half is still unmeasured.
 
 **Auxiliary probe (n=5, not a gate reading).** Same daemon, same agent, same
 65 MiB image; before each switch the model was unloaded and
 `POSIX_FADV_DONTNEED` was applied to both the GGUF blob and the spilled KV
-image (`sync` first — a dirty page cannot be dropped). Journal committed as
+image (`sync` first, a dirty page cannot be dropped). Journal committed as
 `2026-08-14-g2-coldcache-probe-journal.jsonl`; driver
 `g2run/probe_coldcache.py`.
 
@@ -340,19 +340,19 @@ image (`sync` first — a dirty page cannot be dropped). Journal committed as
 }
 ```
 
-`ModelLoaded` in that regime: 5416, 5426, 5430, 5431, 5583 ms — a 6.5×
+`ModelLoaded` in that regime: 5416, 5426, 5430, 5431, 5583 ms, a 6.5×
 increase, and **above the gate's 5000 ms cold ceiling.** A third datapoint from
 the pilot run, the first load of the session on a genuinely cold cache
 (including first-touch Vulkan warm-up), measured **11 317 ms**.
 
 **The probe moved the weights side only.** `ResumeLoad` in all five iterations
-measured **5 ms** — identical to the page-cache-warm cold run — so the
+measured **5 ms**, identical to the page-cache-warm cold run, so the
 `POSIX_FADV_DONTNEED` applied to the spilled `.kvimg` produced no measurable
 change and the image was still being served from memory. Whatever the cause
 (the pages were re-faulted before the read, or the advice was declined), the
 consequence is what matters: **the cost of reading a KV image off NVMe media
 is UNMEASURED by this run.** It is not "5 ms" and it is not "the same as
-warm" — it is a number nobody here has taken. This probe quantifies the
+warm". It is a number nobody here has taken. This probe quantifies the
 weights-side page-cache penalty and nothing else, and any later claim about
 NVMe-tier restore cost needs its own instrument.
 
@@ -371,7 +371,7 @@ Recorded because they bound what the numbers mean, not as future work:
 
 1. **Model weights are not charged against the reservation budget.** The
    planner tracks KV bytes only. It will therefore plan residency for agents
-   whose contexts cannot physically fit alongside the weights — on this box, at
+   whose contexts cannot physically fit alongside the weights, on this box, at
    full 32 768-token windows, it would happily admit seven residents needing
    ~13 GB of KV on top of 7.7 GB of weights on a 16 GB card. G2 never reached
    that state (residency was capped at one), so this run neither confirms nor
@@ -383,7 +383,7 @@ Recorded because they bound what the numbers mean, not as future work:
    time-shared. Bloomery as built cannot round-robin peers of equal priority
    under pressure. Found by building this bench; recorded, not fixed here.
 3. **The VRAM probe is nvidia-smi-only**, so any non-NVIDIA box lands in the
-   unmeasured/cap-at-one mode by default — which is what this run deliberately
+   unmeasured/cap-at-one mode by default, which is what this run deliberately
    used.
 
 ## Corrections
@@ -391,8 +391,8 @@ Recorded because they bound what the numbers mean, not as future work:
 **Shape of the run.** The task brief's example invocation was `--agents 4
 --rounds 30`; this run used `--agents 8 --rounds 7`. Same total (56 ≥ 50
 samples per class), different split, and the reason is a property of the
-protocol rather than of the numbers: one sample per lap — the lap-opening
-resume, which finds VRAM already vacated by the reset agent — contains no
+protocol rather than of the numbers: one sample per lap (the lap-opening
+resume, which finds VRAM already vacated by the reset agent), contains no
 `EvictSave` and measures the restore half only. That fraction is exactly
 `1/agents`: 12.5% here (7 of 56), against 25% at `--agents 4` whatever the lap
 count. The change was made while designing the protocol, before the gate run,
@@ -407,8 +407,8 @@ recorded here rather than made silently.
 
 ## Consequence
 
-G2's kill criterion — "the process model is redesigned before anything is built
-on it" — is **not** triggered. Warm switches at 32 ms p95 and page-cache-warm
+G2's kill criterion ("the process model is redesigned before anything is built
+on it") is **not** triggered. Warm switches at 32 ms p95 and page-cache-warm
 cold switches at 862 ms p95 leave the process model standing. The cold-cache
 result is not a gate failure under the pinned protocol, but it is the honest
 answer to "what does a cold switch cost on a machine that has not touched this

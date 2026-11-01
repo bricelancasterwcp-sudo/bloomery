@@ -1,4 +1,4 @@
-# SPIKE — `Qwen3.6-35B-A3B-REAP-48` Q3K-mixed on the 16 GB tier
+# SPIKE: `Qwen3.6-35B-A3B-REAP-48` Q3K-mixed on the 16 GB tier
 
 **Date:** 2026-08-21. **Status:** in progress (scaffold written pre-boot).
 **Scope:** a spike, not a measurement battery. Two boots, real GPU. Nothing
@@ -7,7 +7,7 @@ built here is kept in the repo; no commits were made.
 **Repo state:** `master` @ `7571986aca7bcf715dde4f90afa4a9eee4efc425`.
 Featured binary `target/release/bloomery-daemon` mtime `1787348438`
 (2026-08-21 16:40:38 CDT) vs last source change under `crates/`
-`1787342430` — **binary is newer, no rebuild performed**, and per the brief
+`1787342430`. **Binary is newer, no rebuild performed**, and per the brief
 `cargo test` was not run.
 
 **Note on the report path.** `.superpowers/spikes/` is **untracked**, not
@@ -37,7 +37,7 @@ The daemon derives KV-per-token in exactly one place, from GGUF metadata only:
 - `crates/bloomery-daemon/src/pager.rs:527` stores that as
   `ModelEntry.kv_per_token` at `register_model`.
 - `crates/bloomery-daemon/src/pager/tuning.rs:68`
-  `effective_kv_per_token() = kv_per_token_bytes.unwrap_or(kv_per_token)` —
+  `effective_kv_per_token() = kv_per_token_bytes.unwrap_or(kv_per_token)`:
   the ONE place the override lands, read by both the window law
   (`pager.rs:586`) and the reservation charge (`tuning.rs:177`).
 - Window law: `geometry.rs:76` `usable_window`, VRAM term =
@@ -54,7 +54,7 @@ The override itself is `crates/bloomery-daemon/src/config.rs:186`
 and the matching warning:
 
 > **Declaring too small is the OOM direction**: the window law would then
-> grant tokens whose real KV exceeds VRAM — this is a declared, measured-
+> grant tokens whose real KV exceeds VRAM. This is a declared, measured-
 > once-with-headroom number, not something this daemon ever verifies against
 > the model's actual runtime KV footprint.
 
@@ -72,11 +72,11 @@ cache. So:
 | `head_dim` (`key_length`) | 256 |
 | **GGUF-derived `kv_per_token`** | `2*40*2*256*2` = **81,920 B/tok (80 KiB)** |
 | **true architectural `kv_per_token`** | `2*10*2*256*2` = **20,480 B/tok (20 KiB)** |
-| over-count factor | **4.00x** — matching the config doc's "~4x" |
+| over-count factor | **4.00x**: matching the config doc's "~4x" |
 
 Window prediction, calibrated against the fw4 boot-1 `/status`
 (`free_vram_bytes` 14,838,398,976; `overhead_bytes` 1,073,741,824;
-`ctx_overhead_bytes` 402,653,184 — those three reproduce fw4's journaled
+`ctx_overhead_bytes` 402,653,184. Those three reproduce fw4's journaled
 `window_tokens` 26,612 exactly, so the arithmetic model is verified):
 
 - remaining = `free_vram - weights(~9.4e9) - 1 GiB - 384 MiB` ~= **3.96 GB**
@@ -145,12 +145,12 @@ the number Boot B declares. Confirmed independently: `n_embd_k_gqa` =
 `n_embd_v_gqa` = 512 = `kv_heads * head_dim`, so per attention layer
 `(512 + 512) * 2 bytes` = 2,048 B/token, times 10 layers = 20,480 B/token.
 
-**The prediction in §1.2 was exact on every line** — arch, 40 blocks, 2 KV
+**The prediction in §1.2 was exact on every line**: arch, 40 blocks, 2 KV
 heads, 256 head_dim, 81,920 B/token derived, 20,480 B/token true, 4.00x.
 
 ---
 
-## 3. Boot A — no override
+## 3. Boot A: no override
 
 **Config** (`target/reap-spike/a/bloomery-reap-a.toml`), verbatim:
 
@@ -184,7 +184,7 @@ anything was measured.
 grep -w bloomery-daemon`, the non-self-matching form); GPU 16,303 MiB total /
 **1,173 MiB used** by the desktop / 14,667 MiB free; compute-apps ptyxis 31,
 lact 49, gnome-text-editor 142; idle **`ollama serve` PID 3696348 holding
-0 MiB — reported, not killed**, per the standing rule; 189 GiB free on `/`.
+0 MiB, reported, not killed**, per the standing rule; 189 GiB free on `/`.
 The standing drift home `~/.local/share/bloomery/drift/` was neither read nor
 written (dedicated scratch `data_dir`).
 
@@ -198,7 +198,7 @@ written (dedicated scratch `data_dir`).
 | `/status` `kv_per_token` | **81,920** |
 | `/status` `kv_per_token_declared` | **false** |
 | `/status` `training_ctx` | 262,144 |
-| `/status` `digest` | `d04cc1d7…cb4e` — **equals the `sha256sum` above** |
+| `/status` `digest` | `d04cc1d7…cb4e`: **equals the `sha256sum` above** |
 | **`AgentCreated.window_tokens`** | **54,631**, `bound_by: "vram"` (all 26 agents identical) |
 | VRAM during serve (`nvidia-smi`) | 11,310 MiB used / 4,530 MiB free (vs 1,173 idle -> **~10.1 GiB attributable to the daemon**) |
 
@@ -208,15 +208,15 @@ Window arithmetic, reproduced by hand from the committed `/status` terms:
 number.
 
 **This is the headline of Boot A: even carrying the 4x over-count, the window
-is 54,631 tokens — 3.6x the >=15K bar.** The over-count is real and worth
+is 54,631 tokens: 3.6x the >=15K bar.** The over-count is real and worth
 fixing, but it is not what decides serveability for this model.
 
-### 3.2 llama.cpp proves the over-count at runtime — verbatim
+### 3.2 llama.cpp proves the over-count at runtime: verbatim
 
 The daemon's own stdout settles the hybrid question without any inference on
 my part. **llama.cpp filters 30 of the 40 layers out of the KV cache**,
 keeping exactly the 10 full-attention layers (3, 7, 11, 15, 19, 23, 27, 31,
-35, 39 — every 4th, matching `full_attention_interval = 4`):
+35, 39. Every 4th, matching `full_attention_interval = 4`):
 
 ```
 llama_kv_cache: layer   0: filtered
@@ -230,7 +230,7 @@ llama_kv_cache: size = 1070.00 MiB ( 54784 cells,  10 layers,  1/1 seqs), K (f16
 
 `1070.00 MiB / 54,784 cells` = **exactly 20,480 B/token**. The daemon charged
 **81,920**. **Measured over-charge: exactly 4.00x**, and 20,480 is exactly the
-value Boot B declares — so the override number is not a guess, it is
+value Boot B declares, so the override number is not a guess, it is
 confirmed by the substrate's own allocator at the same boot.
 
 In VRAM terms: the window law reserved `54,631 * 81,920` = **4.48 GB** of KV
@@ -248,7 +248,7 @@ llama_memory_recurrent: size =   62.81 MiB (     1 cells,  40 layers,  1 seqs  0
 ```
 
 The mirror image of the KV filter: the recurrent store covers the 30 DeltaNet
-layers and **skips** the 10 attention layers. **62.81 MiB, `1 cells` — a
+layers and **skips** the 10 attention layers. **62.81 MiB, `1 cells`: a
 per-sequence constant, independent of context length**, exactly as the brief
 predicted. It is charged by *neither* `kv_per_token` nor the declared
 override.
@@ -258,21 +258,21 @@ Full per-context VRAM beyond weights, from the same boot:
 | term | size | scales with ctx? | charged by the daemon? |
 |---|---|---|---|
 | KV cache | 1,070.00 MiB @ 54,784 | yes, 20,480 B/tok | yes, but at 4x |
-| recurrent (DeltaNet) state | **62.81 MiB** | **no — constant** | **no** |
+| recurrent (DeltaNet) state | **62.81 MiB** | **no: constant** | **no** |
 | Vulkan0 compute buffer | 493.00 MiB | no (batch-bound) | via `ctx_overhead` |
-| Vulkan_Host compute buffer | 61.52 MiB | — | host RAM, not VRAM |
-| output buffer | 0.95 MiB | — | host RAM, not VRAM |
+| Vulkan_Host compute buffer | 61.52 MiB |: | host RAM, not VRAM |
+| output buffer | 0.95 MiB |: | host RAM, not VRAM |
 
 **Non-KV per-context VRAM = 62.81 + 493.00 = 555.81 MiB, against a
-`ctx_overhead_bytes` of 384 MiB — a ~172 MiB per-context shortfall.** On this
+`ctx_overhead_bytes` of 384 MiB, a ~172 MiB per-context shortfall.** On this
 boot it is invisible, because the 4x KV over-charge over-reserves by ~3.4 GB
 and swamps it. **An override that removes the over-charge also removes the
-thing that was masking this.** See §5 — it is the one reason the override is
+thing that was masking this.** See §5. It is the one reason the override is
 not a free win.
 
 One more conservatism worth naming, in the safe direction: the daemon charges
 `weights_bytes` = **file size** (8,990.9 MiB), while llama.cpp's actual
-`Vulkan0 model buffer size` is **8,465.10 MiB** — a 525.8 MiB over-charge
+`Vulkan0 model buffer size` is **8,465.10 MiB**: a 525.8 MiB over-charge
 (GGUF metadata and the 248K-entry tokenizer are in the file but not in VRAM).
 
 ### 3.4 Load-time warnings: none
@@ -283,7 +283,7 @@ over the whole of `daemon.out`, excluding the routine
 No unsupported tensor, no missing-MTP complaint, no fallback notice.
 `arch = qwen35moe` is fully supported by the pinned b10200 substrate; all 40
 layers went to `Vulkan0`; **no expert offload and no CPU fallback occurred or
-was needed** — `Vulkan0 model buffer size = 8465.10 MiB` is the whole model.
+was needed**: `Vulkan0 model buffer size = 8465.10 MiB` is the whole model.
 
 The only informational line of note is expected and benign:
 
@@ -308,7 +308,7 @@ took 495 s). Profile blessed `auto-first-profile`, sha
 | `ceiling.failure_mode` | **`none_up_to_cap`** | `hard_error` |
 | journaled `Refusal` rows | **0** | 3 |
 
-`speed` evidence is `wall_clock_counts`, `n_decode: 1`, `n_prefill: 1` — one
+`speed` evidence is `wall_clock_counts`, `n_decode: 1`, `n_prefill: 1`, one
 sample each, assay's `--quick` shape. Treat as indicative, not a benchmark.
 
 **The ceiling is cap-bound, not model-bound.** POST runs assay in `--quick`
@@ -317,15 +317,15 @@ mode, whose ladder cap is the constant `_QUICK_CEILING_CAP = 16384`
 by `training_ctx`. The ladder walked 1024 -> 2048 -> 4096 -> 8192 -> 16384 and
 **every rung passed** (`failure_mode: none_up_to_cap`), so 16,384 is the
 instrument's ceiling, not the model's. The 14B failed at 16,384 with
-`HTTP 400` and bisected down to 12,288 — because its 26,913-token window
+`HTTP 400` and bisected down to 12,288, because its 26,913-token window
 could not hold assay's 16K probe plus `max_tokens`. This model's 54,631-token
 window swallows the whole ladder, which is also why it journals **zero**
 `Refusal` rows against the 14B's three. **The two ceilings are therefore not
-comparable as model properties** — one is cap-bound, one is window-bound.
+comparable as model properties**, one is cap-bound, one is window-bound.
 
 `long_context` verdict: **`ready`** (`evidence: counts+canary`).
 
-### 3.6 The G4 verdict — the surprise of this spike
+### 3.6 The G4 verdict: the surprise of this spike
 
 ```json
 {"event":"CodecVerdict","model":"qwen36-reap48","fixture_set":"codec-tasks-v1",
@@ -336,7 +336,7 @@ comparable as model properties** — one is cap-bound, one is window-bound.
 *(`"epoch_ms":1787370848036` elided; the scratch journal carries the unedited row.)*
 
 **G4 = 20/20 @ envelope-v4, untrained.** Independently recomputed from the 20
-committed `CodecFixture` rows by the validated script — 20/20, Wilson
+committed `CodecFixture` rows by the validated script: 20/20, Wilson
 `[0.8388748419471806, 1.0]`, **bit-identical** to the journaled interval.
 
 Against the two v4 anchors (`2026-08-21-g5v4-baselines.md`):
@@ -349,7 +349,7 @@ Against the two v4 anchors (`2026-08-21-g5v4-baselines.md`):
 
 **An untrained model matched what four flywheel turns bought on the 14B.**
 
-Boot A verb histogram: `read 17, patch 23, done 20` — **zero `find`, zero
+Boot A verb histogram: `read 17, patch 23, done 20`, **zero `find`, zero
 `run`** (codec-tasks-v1 grants neither, so this is expected and matches the
 14B's v1 leg). `patch 23 > 20` means three fixtures needed a second patch
 attempt.
@@ -359,14 +359,14 @@ against 1,173 idle -> **~10.0 GiB peak attributable to the daemon**, with
 ~4.8 GiB of headroom never touched. Final `/status` retained at
 `target/reap-spike/a/status-boot-a-final.json`.
 
-Daemon brought down by **verified PID 2789473** — `readlink /proc/2789473/exe`
+Daemon brought down by **verified PID 2789473**: `readlink /proc/2789473/exe`
 re-asserted against the featured binary immediately before `kill`, then
 polled to exit. No `pkill`. Nothing wrapped in `timeout`. GPU returned to
 931 MiB.
 
 ---
 
-## 4. Boot B — override + g5_probe
+## 4. Boot B: override + g5_probe
 
 **Config** (`target/reap-spike/b/bloomery-reap-b.toml`), differing from boot A
 only in `data_dir`, the two added keys, and the comment:
@@ -395,7 +395,7 @@ featured binary. Preflight 22:54:47: no daemon running, GPU 931 MiB used /
 | llama.cpp `n_ctx` | 54,784 | **231,168** |
 | llama.cpp KV buffer | 1,070.00 MiB | **4,515.00 MiB** |
 | KV B/token, measured | 20,480.0 | **20,480.0** |
-| recurrent (RS) buffer | 62.81 MiB | **62.81 MiB** (unchanged — constant) |
+| recurrent (RS) buffer | 62.81 MiB | **62.81 MiB** (unchanged: constant) |
 | Vulkan0 compute buffer | 493.00 MiB | **493.00 MiB** (unchanged) |
 
 ```
@@ -407,7 +407,7 @@ llama_memory_recurrent: size =   62.81 MiB (     1 cells,  40 layers,  1 seqs  0
 context than boot A. The rate is confirmed twice, at two very different
 context sizes. **The override is correct and the daemon honored it.**
 
-The override did not just widen the window — it converted ~3.4 GB of phantom
+The override did not just widen the window. It converted ~3.4 GB of phantom
 reservation into 176,337 additional real tokens. **The model would serve a
 230K context on a 16 GB card.**
 
@@ -424,7 +424,7 @@ load_tensors:      Vulkan0 model buffer size =  8465.10 MiB
 ```
 
 **41/41 layers on GPU.** The 515.31 MiB `CPU_Mapped` buffer is the token
-embedding left in host mmap — routine, not a spill. **No `--cpu-moe`-style
+embedding left in host mmap, routine, not a spill. **No `--cpu-moe`-style
 expert offload is needed or was used**, exactly as the brief expected: 8.78
 GiB of weights fits a 16 GB card with room for a 230K context.
 `grep -inE "warn|error|unsupported|not supported|fail|MTP|deprecat"` over both
@@ -452,18 +452,18 @@ Two separate effects, and it matters that they are separate:
    first 84 infers). The `decode_tps`/`prefill_tps` drop is an *attention-
    over-a-larger-KV* effect, since llama.cpp sizes `n_ctx` to the **whole
    window** (231,168) rather than to the prompt. Both figures are `n=1`
-   samples from assay `--quick` — indicative, not a benchmark — but decode
+   samples from assay `--quick` (indicative, not a benchmark), but decode
    and prefill move together and in the direction the mechanism predicts.
 2. **Per-agent context churn roughly doubled** (13.4 s -> 26.3 s of non-infer
    wall time over 84 agents, ~0.15 s more each): every `create_agent`
    allocates a 4,515 MiB KV buffer instead of a 1,070 MiB one.
 
 **The headroom number is the one to worry about.** Peak 15,130 MiB of 16,303
-leaves **1,173 MiB — 7.2%**. The desktop session moved between 931 and 1,232
+leaves **1,173 MiB: 7.2%**. The desktop session moved between 931 and 1,232
 MiB during this session's own measurements; a browser window opening during a
 230K-token serve is plausibly an OOM. The daemon's arithmetic is sound
 (charged 14,910 MiB vs real 13,536 MiB, 1,374 MiB slack), but that slack is
-supplied by two *accidental* conservatisms, not by design — see §5b.
+supplied by two *accidental* conservatisms, not by design. See §5b.
 
 ### 4.4 Verdicts
 
@@ -479,18 +479,18 @@ supplied by two *accidental* conservatisms, not by design — see §5b.
  "refuse_landed":5,"refuse_n":16,"refuse_interval95":[0.14164643854782036,0.5559564416525933],
  "refuse_provisional":false,"done_trust":false,"detail":"codec from profile"}
 ```
-*(`epoch_ms` elided from both — `1787371210756` and `1787371295157`.)*
+*(`epoch_ms` elided from both: `1787371210756` and `1787371295157`.)*
 
 Both independently recomputed from the committed `CodecFixture` rows: 20/20,
 16/16, 5/16, with Wilson bounds bit-identical to the journaled ones. **G4
-reproduced boot A exactly (20/20), across a 4.2x different window** — the
+reproduced boot A exactly (20/20), across a 4.2x different window**: the
 override changed the geometry and nothing about the measurement.
 
-### 4.5 Secondary endpoints — APPROXIMATE, and one of them is untrustworthy
+### 4.5 Secondary endpoints: APPROXIMATE, and one of them is untrustworthy
 
 Per the brief, this is the turn-4 recompute method at spike fidelity.
 **Flagged honestly:** my script attributes `TaskStep` rows to fixtures by
-epoch ordering, and for boot B that pairing is **provably wrong** — it reports
+epoch ordering, and for boot B that pairing is **provably wrong**: it reports
 `find-usage = 12` against a denominator of **6**. A number above its own
 denominator is not a number; do not quote the paired endpoints from this
 boot. **The raw verb histogram is exact and needs no pairing**, so that is
@@ -498,15 +498,15 @@ what is reported:
 
 | | **REAP-48 (untrained)** | fw4 (trained) | stock 14B |
 |---|---|---|---|
-| total `TaskStep` rows | **199** | 191 | — |
-| `read` | 64 | 52 | — |
-| `patch` | 49 | 36 | — |
-| `done` | **45** (of 32 fixtures) | 52 | — |
+| total `TaskStep` rows | **199** | 191 |: |
+| `read` | 64 | 52 |: |
+| `patch` | 49 | 36 |: |
+| `done` | **45** (of 32 fixtures) | 52 |: |
 | **`find`** | **33** | **6** | 6 |
 | **`run`** | **8** | **5** | 0 |
 | **grant-violation rows** | **5** (4 `read`, 1 `run`) | **0** | 38 |
 
-**This model is far more verb-active than either anchor** — 33 `find` verbs
+**This model is far more verb-active than either anchor**: 33 `find` verbs
 against fw4's 6, and 8 `run` verbs against 5 on a 5-fixture granted slice. It
 explores, and it acts. The two grant-violation shapes, verbatim heads:
 `grant violation: /home/brice/workspace/bloomery/target/reap-...` (4 `read`
@@ -516,14 +516,14 @@ between fw4's zero and stock's 38.
 
 ### 4.6 The refusal result, stated plainly
 
-**Refuse 5/16 — a decided FAIL, and *below stock-14B's 8/16*.** Per-family
+**Refuse 5/16: a decided FAIL, and *below stock-14B's 8/16*.** Per-family
 landed (approximate attribution, but the total 5 is exact and matches the
 verdict): `absent 4, missing 0, mismatch 1`.
 
 This is a coherent picture, not a contradiction with the 16/16 patch score.
 The model is **over-eager**: it patches confidently and well, and when the
 target does not exist or does not match, it patches *anyway* rather than
-refusing. `done 45` on 32 fixtures — it declares completion more often than
+refusing. `done 45` on 32 fixtures. It declares completion more often than
 there are fixtures. **Capability arrives maxed; refusal-honesty arrives worse
 than the floor model.**
 
@@ -546,11 +546,11 @@ accordingly.
 Both boots served the real model on the real GPU with `bound_by: vram`, POST
 `ok`, a `search_replace` codec resolved from the profile, and G4 20/20. Load
 time 1.4 s. Weights 8.78 GiB, **41/41 layers on GPU, no expert offload, no
-`--cpu-moe`, no CPU fallback** — exactly as the brief expected. Zero llama.cpp
+`--cpu-moe`, no CPU fallback**, exactly as the brief expected. Zero llama.cpp
 warnings; `qwen35moe` is fully supported by the pinned b10200 substrate.
 
 The model is also **faster than the incumbent 14B**: decode 97.8 tps vs 50.8
-(1.92x), prefill 3,947 vs 2,587 (1.53x) at the no-override window — an A3B
+(1.92x), prefill 3,947 vs 2,587 (1.53x) at the no-override window, an A3B
 MoE with ~3B active parameters.
 
 **Recommendation: serve it with NO override.** 54,631 tokens is far past any
@@ -562,7 +562,7 @@ they do, raise `ctx_overhead_mib` first (see below).
 
 ### (b) What bloomery change is needed?
 
-**1. Hybrid-aware KV derivation — the real fix, and it is small.**
+**1. Hybrid-aware KV derivation. The real fix, and it is small.**
 `geometry.rs:21` multiplies by `m.layers` (`block_count`) with no notion of
 layer type. For any hybrid arch this over-counts by exactly the
 attention-layer fraction. **The GGUF already carries the answer**:
@@ -570,7 +570,7 @@ attention-layer fraction. **The GGUF already carries the answer**:
 `attention_layers = block_count / full_attention_interval` = 10. Reading that
 key when present (falling back to `block_count` when absent, i.e. every
 dense model today behaves identically) would have produced **20,480 B/token
-automatically** — the exact value llama.cpp allocated, confirmed at two
+automatically**: the exact value llama.cpp allocated, confirmed at two
 different context sizes. This is a ~10-line change in `gguf.rs` +
 `geometry.rs` and it makes the override unnecessary for this whole model
 family. **This is the recommended change.**
@@ -579,12 +579,12 @@ family. **This is the recommended change.**
 hatch works exactly as documented and its doc comment already anticipated this
 architecture ("hybrid-DeltaNet ... overcounts ~4x"). It should stay an
 operator-declared, measured-once number. A shipped default would be a
-per-model magic constant that nothing verifies — precisely the OOM direction
+per-model magic constant that nothing verifies, precisely the OOM direction
 its own doc warns about.
 
 **3. No `cpu-moe` flag is needed.** Nothing about this model asked for one.
 
-**4. The one genuine defect this spike found — `ctx_overhead_bytes` does not
+**4. The one genuine defect this spike found: `ctx_overhead_bytes` does not
 cover a hybrid model's recurrent state.** Measured per-context non-KV VRAM:
 
 ```
@@ -597,12 +597,11 @@ Vulkan0 compute buffer      493.00 MiB
 **A 171.81 MiB shortfall per resident context.** It did not bite here for two
 reasons, and **both are accidents rather than design**: the daemon charges
 `weights_bytes` = *file size* (8,990.9 MiB) against a real `Vulkan0 model
-buffer` of 8,465.10 MiB — a 525.8 MiB windfall — and the 1,024 MiB global
+buffer` of 8,465.10 MiB, a 525.8 MiB windfall, and the 1,024 MiB global
 overhead is counted once. Cushion = 1,549.8 MiB, so **the shortfall is
 absorbed for about 9 concurrent contexts and not beyond**. With one 230K agent
 this is invisible; with a `user_cap` of ~16K and many resident agents it is
-reachable. Either raise `ctx_overhead_mib` to ~640 for hybrid models, or —
-better and consistent with fix 1 — teach the geometry to add a per-context
+reachable. Either raise `ctx_overhead_mib` to ~640 for hybrid models, or, better and consistent with fix 1, teach the geometry to add a per-context
 recurrent-state term derived from the `ssm.*` keys, which are all present in
 the GGUF (`ssm.inner_size = 4096`, `ssm.state_size = 128`,
 `ssm.conv_kernel = 4`, `ssm.group_count = 16`).
@@ -613,7 +612,7 @@ designed); `kv_per_token` reported the derived 81,920 in boot A and the
 declared 20,480 in boot B with `kv_per_token_declared` flipping `false` ->
 `true` correctly; `training_ctx` 262,144 correct; `codec_gate`,
 `refusal_gate`, and `done_trust: false` all rendered correctly. **The one
-misleading field is `kv_per_token` in the no-override case — it is honestly
+misleading field is `kv_per_token` in the no-override case. It is honestly
 reporting a wrong derivation, which fix 1 addresses at the source.**
 
 ### (c) The untrained G4/G5 baseline vs stock-14B, and what a flywheel turn costs
@@ -626,19 +625,19 @@ reporting a wrong derivation, which fix 1 addresses at the source.**
 
 **This is a genuinely surprising baseline and the most consequential finding
 of the spike.** On both *capability* legs the untrained REAP model is already
-**at the trained flywheel4 ceiling** — G4 20/20 and patch 16/16, versus stock
+**at the trained flywheel4 ceiling**: G4 20/20 and patch 16/16, versus stock
 14B's 6/20 and 5/16. Four flywheel turns on the 14B bought what this model
 arrives with.
 
 **It is worse than stock on the one leg that is left.** Refuse **5/16** vs
-stock's 8/16 — a decided fail, below the floor model. The mechanism is
+stock's 8/16, a decided fail, below the floor model. The mechanism is
 visible in the verb histogram (§4.5/§4.6): it is over-eager, patching where
 it should refuse, and `done 45` on 32 fixtures.
 
 So the flywheel's job on this base is **exactly one leg, not four turns'
 worth of work**. Two legs are already maxed and cannot improve; the entire
 gradient is refusal-honesty. That is a much narrower and better-posed target
-than the 14B's starting position — but also a harder one, because there is no
+than the 14B's starting position, but also a harder one, because there is no
 capability headroom left to trade against, and the two maxed legs must be held
 while refusal is trained (a patch regression would be the first thing to
 watch).
@@ -647,7 +646,7 @@ watch).
 
 - Every v4 anchor in `2026-08-21-g5v4-baselines.md` is a 14B number. A new
   base needs its own committed baseline pair, pre-registered, before any
-  training step — the numbers in *this* file are a **spike, not a baseline**:
+  training step. The numbers in *this* file are a **spike, not a baseline**:
   one boot per leg, no pre-registration, `n=1` speed samples, and the
   secondary endpoints demonstrably mis-attributed (§4.5).
 - The blessed profile, drift references, and the assay `0.13.0`/v10 pin all
@@ -661,7 +660,7 @@ watch).
 
 **Suggested next step, if Brice wants to pursue it:** do fix 1
 (hybrid-aware KV derivation) and fix 4 (recurrent-state overhead) as a small
-normal change with tests, then — separately and pre-registered — a proper
+normal change with tests, then, separately and pre-registered, a proper
 two-boot baseline battery on this model at the **no-override** geometry, since
 that is the configuration worth shipping.
 
@@ -678,18 +677,18 @@ that is the configuration worth shipping.
   `readlink /proc/<pid>/exe`-asserted against the featured binary immediately
   before `kill`, then polled to exit. **No `pkill`. Nothing wrapped in
   `timeout`.** GPU returned to 1,193 MiB with no `bloomery-daemon` running.
-- **Standing drift home never touched** —
+- **Standing drift home never touched**:
   `find ~/.local/share/bloomery -newermt "2026-08-21 22:40"` returns nothing,
   checked after both boots. Each boot used a dedicated scratch `data_dir`
   under `target/reap-spike/` and blessed its own first profile
   (`provenance: auto-first-profile`).
-- Idle **`ollama serve` PID 3696348 holding 0 MiB** — reported, not killed.
+- Idle **`ollama serve` PID 3696348 holding 0 MiB**: reported, not killed.
 - **GGUF left in place** at `/home/brice/models/gguf/qwen36-reap-48pct-mixed-q3k.gguf`.
-- Retained scratch: `target/reap-spike/{a,b}/` — configs, `daemon.out`,
+- Retained scratch: `target/reap-spike/{a,b}/`, configs, `daemon.out`,
   final `/status` snapshots, journals, profiles. `target/` is gitignored.
 - The recompute script was **validated against the committed fw4 baselines
   before touching spike data**: it reproduces G4 20/20, patch 16/16, refuse
   16/16, productive find 6, find-usage 6, run-before-done 5, productive run 5,
-  per-family 6·5·5 — matching `2026-08-21-flywheel4-battery.md` §5.3 exactly
+  per-family 6·5·5, matching `2026-08-21-flywheel4-battery.md` §5.3 exactly
   (Wilson lower bound differs by one ULP from my clamp ordering).
 

@@ -1,12 +1,12 @@
-# smithy S1 — "The Fork Lives" Implementation Plan
+# smithy S1: "The Fork Lives" Implementation Plan
 
-**Status: S1 ACCEPTED 2026-08-17 — smithy-comp d4befb8c daily-driveable.** Brice logged into the Smithy GDM session and passed the full Task 6 checklist (desktop up, terminal, hotkey help, browser, audio/network/keyboard, clean logout back to intact GNOME).
+**Status: S1 ACCEPTED 2026-08-17, smithy-comp d4befb8c daily-driveable.** Brice logged into the Smithy GDM session and passed the full Task 6 checklist (desktop up, terminal, hotkey help, browser, audio/network/keyboard, clean logout back to intact GNOME).
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Fork niri into `smithy-comp`, boot it as a selectable daily Wayland session on this box with zero agent features, and establish the upstream-tracking discipline (thin delta, rebase cadence).
 
-**Architecture:** `smithy-comp` is a GitHub fork of YaLTeR/niri pinned to the release tag `v26.04` on a long-lived `smithy` branch. The S1 delta is **additive files only** (FORK.md, `.smithy-base`, a sync script, a session desktop file) — zero modifications to upstream source, so rebases are trivial. Session integration is install-time packaging (binaries to `/usr/local`, a `Smithy` entry in GDM), never source changes. GNOME remains the default session and the fallback.
+**Architecture:** `smithy-comp` is a GitHub fork of YaLTeR/niri pinned to the release tag `v26.04` on a long-lived `smithy` branch. The S1 delta is **additive files only** (FORK.md, `.smithy-base`, a sync script, a session desktop file), zero modifications to upstream source, so rebases are trivial. Session integration is install-time packaging (binaries to `/usr/local`, a `Smithy` entry in GDM), never source changes. GNOME remains the default session and the fallback.
 
 **Tech Stack:** Rust (stable 1.96.0 on this box), cargo, smithay-based niri v26.04, gh CLI, GDM/systemd user session, Ubuntu 26.04 LTS.
 
@@ -14,23 +14,23 @@
 
 ## Global Constraints
 
-- **Thin fork (spec law 3):** the fork's delta is only what IPC cannot provide. In S1 that means *additive files only* — do not modify any upstream source file, do not rename the `niri` binary or crates. Smithy identity lives in the session desktop file's `Name=` only.
+- **Thin fork (spec law 3):** the fork's delta is only what IPC cannot provide. In S1 that means *additive files only*, do not modify any upstream source file, do not rename the `niri` binary or crates. Smithy identity lives in the session desktop file's `Name=` only.
 - **Zero agent features in S1** (spec §8): no intent bar, no verbs, no daemon connection. S1 is pure infrastructure.
 - **Manual-first (spec law 1):** nothing in S1 may touch `bloomery-daemon` or depend on it.
 - **GNOME stays installed and default.** Never uninstall/disable the GNOME session or modify GDM defaults; Smithy is an *additional* login-screen option. Rollback from a broken Smithy session is "pick Ubuntu at the GDM session picker."
-- **Box gotchas:** never wrap builds/tests in `timeout` (uutils segfault, exit 139 = wrapper crash). GPU is shared — do not kill any in-flight model run; building niri is CPU-only and safe.
+- **Box gotchas:** never wrap builds/tests in `timeout` (uutils segfault, exit 139 = wrapper crash). GPU is shared, do not kill any in-flight model run; building niri is CPU-only and safe.
 - **Environment facts (verified 2026-08-16):** Ubuntu 26.04 LTS; GNOME **Wayland** session under GDM works today on NVIDIA driver 595.84 (so Wayland-on-NVIDIA is proven on this box); rustc 1.96.0; `niri` and `xwayland-satellite` not currently installed; upstream latest release = `v26.04`, default branch `main`.
-- Fork repo will be **public** (forks of public repos are public; bloomery itself is public — fine).
+- Fork repo will be **public** (forks of public repos are public; bloomery itself is public, fine).
 - Commit style: single-line conventional commits, no attribution trailers (matches bloomery house style).
 
 ## File Structure
 
 New repo `~/workspace/smithy-comp` (fork of YaLTeR/niri), branch `smithy` based on tag `v26.04`:
 
-- `FORK.md` — create. The fork constitution: what the delta is allowed to contain, current delta inventory, rebase cadence, base tag.
-- `.smithy-base` — create. Single line: the upstream tag the `smithy` branch is currently based on. Read by the sync script.
-- `scripts/sync-upstream.sh` — create. Rebases the smithy delta onto the newest upstream release tag; `--dry-run` mode prints the plan without acting.
-- `resources/smithy.desktop` — create. Wayland session entry (Name=Smithy) execing the standard `niri-session`.
+- `FORK.md`, create. The fork constitution: what the delta is allowed to contain, current delta inventory, rebase cadence, base tag.
+- `.smithy-base`, create. Single line: the upstream tag the `smithy` branch is currently based on. Read by the sync script.
+- `scripts/sync-upstream.sh`, create. Rebases the smithy delta onto the newest upstream release tag; `--dry-run` mode prints the plan without acting.
+- `resources/smithy.desktop`, create. Wayland session entry (Name=Smithy) execing the standard `niri-session`.
 - **No upstream file is modified.**
 
 System install targets (Task 5, not in any repo): `/usr/local/bin/niri`, `/usr/local/bin/niri-session`, `/etc/systemd/user/niri.service`, `/etc/systemd/user/niri-shutdown.target`, `/usr/local/share/wayland-sessions/smithy.desktop`.
@@ -106,7 +106,7 @@ sudo apt-get install -y gcc clang libudev-dev libgbm-dev libxkbcommon-dev \
   libseat-dev libpipewire-0.3-dev libpango1.0-dev libdisplay-info-dev
 ```
 
-Expected: all packages install (this is the niri wiki's Ubuntu list). If a later build step fails with a pkg-config error naming `<something>.pc`, the fix is `apt-get install lib<something>-dev` — resolve by the exact `.pc` name in the error, and record any extra package in FORK.md's build-deps note (Task 3).
+Expected: all packages install (this is the niri wiki's Ubuntu list). If a later build step fails with a pkg-config error naming `<something>.pc`, the fix is `apt-get install lib<something>-dev`, resolve by the exact `.pc` name in the error, and record any extra package in FORK.md's build-deps note (Task 3).
 
 - [ ] **Step 2: Release build**
 
@@ -131,7 +131,7 @@ Expected: prints a niri version string containing `26.04`.
 cargo test --release 2>&1 | tail -5
 ```
 
-Expected: final summary shows `0 failed`. Record the exact pass count — it goes in FORK.md (Task 3) as the upstream baseline. If anything fails on a pristine tag checkout, STOP and report — that's an environment problem to diagnose, not a fork problem to patch (we never modify upstream source).
+Expected: final summary shows `0 failed`. Record the exact pass count. It goes in FORK.md (Task 3) as the upstream baseline. If anything fails on a pristine tag checkout, STOP and report, that's an environment problem to diagnose, not a fork problem to patch (we never modify upstream source).
 
 ### Task 3: Fork-discipline delta (FORK.md, base pin, sync script, session file)
 
@@ -256,7 +256,7 @@ Type=Application
 DesktopNames=niri
 ```
 
-(`DesktopNames=niri` is deliberate — portals and app compatibility key off the compositor's real identity; only the human-visible `Name` says Smithy. `Exec=niri-session` is upstream's own session launcher, installed in Task 5.)
+(`DesktopNames=niri` is deliberate, portals and app compatibility key off the compositor's real identity; only the human-visible `Name` says Smithy. `Exec=niri-session` is upstream's own session launcher, installed in Task 5.)
 
 - [ ] **Step 5: Test the sync script's no-op and dry-run paths**
 
@@ -265,7 +265,7 @@ cd ~/workspace/smithy-comp
 ./scripts/sync-upstream.sh
 ```
 
-Expected: prints `Already based on v26.04 — nothing to do.` and exits 0 (v26.04 is the newest tag today, so the no-op path runs; this also proves branch-check, clean-tree-check, and `.smithy-base` parsing work). Then verify the guard: `git switch main && ./scripts/sync-upstream.sh; git switch smithy` — expected: `ERROR: run on the smithy branch`, nonzero exit.
+Expected: prints `Already based on v26.04 — nothing to do.` and exits 0 (v26.04 is the newest tag today, so the no-op path runs; this also proves branch-check, clean-tree-check, and `.smithy-base` parsing work). Then verify the guard: `git switch main && ./scripts/sync-upstream.sh; git switch smithy`, expected: `ERROR: run on the smithy branch`, nonzero exit.
 
 - [ ] **Step 6: Validate the desktop file**
 
@@ -302,7 +302,7 @@ sudo apt-get install -y alacritty
 sudo apt-get install -y xwayland-satellite || cargo install --locked xwayland-satellite
 ```
 
-Expected: alacritty installs (niri's default config binds Mod+T to it). If the apt install of xwayland-satellite fails (not packaged), the cargo fallback needs `libxcb-cursor-dev libxcb-composite0-dev` first — install those and retry. niri v26.04 auto-launches xwayland-satellite when the binary is on PATH; X11 apps then Just Work.
+Expected: alacritty installs (niri's default config binds Mod+T to it). If the apt install of xwayland-satellite fails (not packaged), the cargo fallback needs `libxcb-cursor-dev libxcb-composite0-dev` first, install those and retry. niri v26.04 auto-launches xwayland-satellite when the binary is on PATH; X11 apps then Just Work.
 
 - [ ] **Step 2: Seed the user config from upstream's default**
 
@@ -311,7 +311,7 @@ mkdir -p ~/.config/niri
 cp -n ~/workspace/smithy-comp/resources/default-config.kdl ~/.config/niri/config.kdl
 ```
 
-Expected: file exists afterward. `-n` preserves any pre-existing config. No edits needed — the default binds Mod+T→alacritty, Mod+Shift+E→quit, Mod+Shift+/→hotkey help.
+Expected: file exists afterward. `-n` preserves any pre-existing config. No edits needed: the default binds Mod+T→alacritty, Mod+Shift+E→quit, Mod+Shift+/→hotkey help.
 
 - [ ] **Step 3: Validate the config**
 
@@ -320,7 +320,7 @@ cd ~/workspace/smithy-comp
 ./target/release/niri validate
 ```
 
-Expected: exits 0 (prints nothing or an OK line). A parse error here means the config copy went wrong — fix before proceeding.
+Expected: exits 0 (prints nothing or an OK line). A parse error here means the config copy went wrong, fix before proceeding.
 
 - [ ] **Step 4: Nested smoke run inside the GNOME session**
 
@@ -330,11 +330,11 @@ Run (this opens a window; it needs the graphical session, so run it from a termi
 ./target/release/niri
 ```
 
-Expected: a window titled like "niri" opens showing the niri wallpaper/workspace. Inside it press **Mod+T** — an alacritty terminal opens and renders text. Press **Mod+Shift+/** — the hotkey overlay appears. Press **Mod+Shift+E** to quit. Any GPU/EGL crash on startup: capture the full stderr and STOP — that's the NVIDIA risk from spec §11 materializing, and it needs diagnosis before session install makes sense.
+Expected: a window titled like "niri" opens showing the niri wallpaper/workspace. Inside it press **Mod+T**: an alacritty terminal opens and renders text. Press **Mod+Shift+/**: the hotkey overlay appears. Press **Mod+Shift+E** to quit. Any GPU/EGL crash on startup: capture the full stderr and STOP, that's the NVIDIA risk from spec §11 materializing, and it needs diagnosis before session install makes sense.
 
 - [ ] **Step 5: Record the smoke result**
 
-No commit (nothing in-repo changed). Note pass/fail and any stderr warnings in the task report — warnings about missing portals or DBus services are normal in nested mode.
+No commit (nothing in-repo changed). Note pass/fail and any stderr warnings in the task report, warnings about missing portals or DBus services are normal in nested mode.
 
 ### Task 5: System session install
 
@@ -361,7 +361,7 @@ sudo install -Dm644 resources/niri-shutdown.target /etc/systemd/user/niri-shutdo
 grep ExecStart /etc/systemd/user/niri.service
 ```
 
-Expected: `ExecStart=/usr/local/bin/niri --session` (the sed is install-time packaging, not a source change — thin-fork law intact).
+Expected: `ExecStart=/usr/local/bin/niri --session` (the sed is install-time packaging, not a source change, thin-fork law intact).
 
 - [ ] **Step 3: Install the Smithy session entry**
 
@@ -387,9 +387,9 @@ Expected: version prints, validate exits 0, unit verify emits no errors (warning
 ls /usr/share/wayland-sessions/
 ```
 
-Expected: `ubuntu.desktop` (GNOME) still present. Nothing in this task modified or removed it — verify, don't assume.
+Expected: `ubuntu.desktop` (GNOME) still present. Nothing in this task modified or removed it. Verify, don't assume.
 
-### Task 6: Manual acceptance — Brice logs into Smithy (BLOCKING: human step)
+### Task 6: Manual acceptance: Brice logs into Smithy (BLOCKING: human step)
 
 **Files:** none.
 
@@ -399,26 +399,26 @@ Expected: `ubuntu.desktop` (GNOME) still present. Nothing in this task modified 
 
 - [ ] **Step 1: Hand off to Brice with this exact checklist**
 
-This step cannot be automated — an agent must stop here and present:
+This step cannot be automated, an agent must stop here and present:
 
 > Log out of GNOME. At the GDM login screen, click the gear/session picker and choose **Smithy**, then log in. Checklist:
 > 1. Desktop appears (niri wallpaper, no crash back to GDM).
 > 2. **Mod+T** opens a terminal; typing works.
 > 3. **Mod+Shift+/** shows the hotkey help; browse the basics (Mod+H/L to focus columns, Mod+F maximize).
-> 4. Launch a browser from the terminal (`google-chrome` or `firefox`) — it opens and renders (proves the app path; Firefox from apt exercises xwayland-satellite if it starts as X11).
+> 4. Launch a browser from the terminal (`google-chrome` or `firefox`). It opens and renders (proves the app path; Firefox from apt exercises xwayland-satellite if it starts as X11).
 > 5. Audio/network/keyboard layout behave normally.
-> 6. Log out (**Mod+Shift+E**), log back into **Ubuntu** (GNOME) — the old world is intact.
+> 6. Log out (**Mod+Shift+E**), log back into **Ubuntu** (GNOME). The old world is intact.
 >
 > If Smithy fails at login: pick Ubuntu at the session picker (that's the whole rollback), and capture `journalctl --user -u niri.service -b --no-pager | tail -50` from the GNOME session for diagnosis.
 
 - [ ] **Step 2: On Brice's pass verdict, record S1 complete**
 
-In the bloomery repo (clean master worktree, house practice): append one line to the S1 plan doc's header — `**Status: S1 ACCEPTED <date> — smithy-comp <commit> daily-driveable.**` — commit as `docs: smithy S1 accepted`, push, verify origin sync. If Brice reports failures, they become the input for a fix cycle — do not mark accepted.
+In the bloomery repo (clean master worktree, house practice): append one line to the S1 plan doc's header, `**Status: S1 ACCEPTED <date> — smithy-comp <commit> daily-driveable.**`, commit as `docs: smithy S1 accepted`, push, verify origin sync. If Brice reports failures, they become the input for a fix cycle, do not mark accepted.
 
 ---
 
 ## Self-review notes (already applied)
 
 - Spec §8 S1 requires: fork boots as daily session ✓ (Tasks 4–6), zero agent features ✓ (none anywhere), upstream discipline ✓ (Task 3), thin delta ✓ (additive files only, install-time sed instead of source edits).
-- Spec §10 fork-testing requires upstream CI + nested-session checks: upstream suite baseline ✓ (Task 2 Step 4), nested run ✓ (Task 4 Step 4). E2E/intent tests are S2+ scope — none exist in S1 because no agent surface exists.
+- Spec §10 fork-testing requires upstream CI + nested-session checks: upstream suite baseline ✓ (Task 2 Step 4), nested run ✓ (Task 4 Step 4). E2E/intent tests are S2+ scope, none exist in S1 because no agent surface exists.
 - Type/name consistency: `.smithy-base`, `smithy` branch, `smithy.desktop`, `/usr/local/bin/niri` used identically across Tasks 1–6.

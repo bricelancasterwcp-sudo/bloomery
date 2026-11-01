@@ -1,11 +1,11 @@
-# G4 live codec-landing measurement — qwen2.5-coder 7B Q8
+# G4 live codec-landing measurement: qwen2.5-coder 7B Q8
 
-**Date:** 2026-08-15 (boot 04:40:45 local, verdict ~05:45 local — ~65 min wall
+**Date:** 2026-08-15 (boot 04:40:45 local, verdict ~05:45 local, ~65 min wall
 including the assay POST and 20 fixtures through the real task loop)
 **Status:** measured; the pre-registered decision applied
 **Protocol:** `2026-08-15-g4-protocol.md` (pre-registered 2026-08-15, before the
 instrument existed). No amendment was made before, during, or after this run.
-**Gate:** `docs/gates.md` G4 — landing ≥80% keeps mutating verbs, else demotion.
+**Gate:** `docs/gates.md` G4, landing ≥80% keeps mutating verbs, else demotion.
 
 ## Verdict
 
@@ -13,10 +13,10 @@ instrument existed). No amendment was made before, during, or after this run.
 (the interval sits entirely below the 0.80 floor). The model is demoted to
 read-only verbs (`read`/`find`/`done`).**
 
-This is the umbrella spec §8's pre-registered honest outcome — "every local 7B
-demoted" — materialized in full, and it is a valid measurement, not a failure
+This is the umbrella spec §8's pre-registered honest outcome, "every local 7B
+demoted", materialized in full, and it is a valid measurement, not a failure
 of the run. Read-only agents with honest refusal remain useful; the recorded
-escalations are (a) a bigger model (qwen3.8:27b is the standing candidate —
+escalations are (a) a bigger model (qwen3.8:27b is the standing candidate,
 exactly G4's capability-window question) and (b) the black-oxide fine-tune
 flywheel.
 
@@ -35,17 +35,17 @@ flywheel.
 
 - **Model:** `qwen2.5-coder:7b-instruct-q8_0`, weights = the ollama blob
   `sha256-24b532e527…ca54a1` (verified against `ollama show … --modelfile`
-  before the run — served identity, not liveness).
-- **Box/tier:** `enthusiast-16gb`, `emulated = false` — RTX 5080 16 GB,
+  before the run, served identity, not liveness).
+- **Box/tier:** `enthusiast-16gb`, `emulated = false`: RTX 5080 16 GB,
   Vulkan (llama.cpp), the same box and tier as G2 and the assay profiles.
 - **bloomery:** branch `feat/phase2bc-p4-codec-gate` @ `c40198c` (the final
   reviewed instrument; the whole-branch review completed BEFORE this run).
 - **assay (boot POST prober):** pinned at `74c5b71` (last v1.4-behavior
-  commit), extracted via `git archive` and supplied via `PYTHONPATH` — pinned
+  commit), extracted via `git archive` and supplied via `PYTHONPATH`, pinned
   deliberately because the assay working tree is mid-v1.5 development; the
   instrument version is part of the lens.
 - **Sampler:** the substrate's pinned decoder is **greedy**
-  (`LlamaSampler::greedy()`, `bloomery-substrate/src/llama.rs`) —
+  (`LlamaSampler::greedy()`, `bloomery-substrate/src/llama.rs`),
   deterministic, no temperature dimension.
 - **Config:** `tasks_enabled = true`, `assay.enabled = true`,
   `overhead_mib = 1024`, `ctx_overhead_mib = 384`, fresh
@@ -57,10 +57,10 @@ flywheel.
 - Fixture set **`codec-tasks-v1`** (N=20: 10 `python` + 10 `plaintext`
   lenses), embedded in the daemon, structurally validated GPU-free (every
   reference landing applies-and-parses through the real `land()`).
-- Envelope: **`bloomery-task-envelope-v1`** — the real P3 task loop (verb
+- Envelope: **`bloomery-task-envelope-v1`**: the real P3 task loop (verb
   card + exactly-one-action rule + max 2 re-asks per step), real executors,
   real grants (read+write on the fixture dir only, no commands).
-- Patch codec: **`search_replace`, "codec from profile"** — selected per
+- Patch codec: **`search_replace`, "codec from profile"**: selected per
   protocol §4 from the boot POST's assay profile (`codecs` grid, grade
   `small`, `lands_applies` comparison).
 - Parameters (protocol §2): `max_steps = 6`, per-fixture agent budget
@@ -74,7 +74,7 @@ flywheel.
 
 Recomputed from the committed journal's `CodecFixture` events
 (`grep '"event":"CodecFixture"' 2026-08-15-g4-codec-landing-journal.jsonl`):
-**20 rows, 0 landed — equal to the verdict's `landed/n`, the recomputability
+**20 rows, 0 landed, equal to the verdict's `landed/n`, the recomputability
 obligation holds.**
 
 | fixture | result | step records | terminal |
@@ -100,7 +100,7 @@ obligation holds.**
 | `txt-env-wrong-timeout` | not landed | 18 | StepsExhausted |
 | `txt-release-notes-wrong-date` | not landed | 18 | StepsExhausted |
 
-("step records" counts journaled `TaskStep` rows — up to 6 loop steps × 3
+("step records" counts journaled `TaskStep` rows, up to 6 loop steps × 3
 parse attempts each = 18; a 16 means one step needed fewer attempts.)
 
 ## What actually happened (from the committed `tasks.jsonl`, 339 steps)
@@ -110,19 +110,19 @@ The failure is the model's envelope behavior, not the fixture content:
 | outcome class | count |
 |---|---|
 | `NoAction` (turn contained no `<action>` block) | 142 |
-| `MultipleActions` (turn contained several blocks — exactly-one violated) | 82 |
+| `MultipleActions` (turn contained several blocks: exactly-one violated) | 82 |
 | terminal `unparseable after 2 re-asks` | 112 |
 | clean `read` (envelope parsed, executor ran, 181 bytes) | 1 |
-| `done` ("no changes needed" — `txt-readme-wrong-command`, no patch attempted) | 1 |
-| `grant violation` — the model emitted `run ["cargo","test",…]`; **no commands were granted and the applier refused it structurally** | 1 |
+| `done` ("no changes needed": `txt-readme-wrong-command`, no patch attempted) | 1 |
+| `grant violation`: the model emitted `run ["cargo","test",…]`; **no commands were granted and the applier refused it structurally** | 1 |
 
 Instrument-honesty reading: the one clean `read` and one clean `done` prove
-the envelope path accepts well-formed actions end-to-end on this exact run —
+the envelope path accepts well-formed actions end-to-end on this exact run,
 so 0/20 measures the model's inability to reliably emit exactly one valid
 action under this envelope (greedy decoding, unfamiliar grammar), not a
 broken parser. This echoes robigo's measured 7B reality and assay's
 2026-08-12 lesson that landing is a property of model × codec × directive ×
-sampler — under assay's own `--quick` presentation this same model measured
+sampler, under assay's own `--quick` presentation this same model measured
 well enough to select `search_replace`; under the task envelope it landed
 nothing. The lens is named in every record for exactly this reason.
 
@@ -144,7 +144,7 @@ mutating command was refused by the capability boundary during a real run.
   boots (same honest limit as the assay POST, CARRIED-DEBT item 6).
 - **Greedy decoding** is the pinned sampler; a different sampler is a
   different lens and would need its own record.
-- **N=20 granularity** (5 pp); moot here — the interval is decided, not
+- **N=20 granularity** (5 pp); moot here. The interval is decided, not
   provisional.
 - **GPU co-tenancy**: the box is shared, but preflight verified no competing
   compute process; the run was not contended.
@@ -153,8 +153,8 @@ mutating command was refused by the capability boundary during a real run.
 
 ## Committed artifacts
 
-- `2026-08-15-g4-codec-landing-journal.jsonl` — the boot journal (1,139
+- `2026-08-15-g4-codec-landing-journal.jsonl`: the boot journal (1,139
   events: POST, provisional-admission bracket, 20 `CodecFixture`, 1
   `CodecVerdict`, agent lifecycle).
-- `2026-08-15-g4-codec-landing-tasks.jsonl` — every `TaskStep` of all 20
+- `2026-08-15-g4-codec-landing-tasks.jsonl`. Every `TaskStep` of all 20
   fixture runs (339 rows).

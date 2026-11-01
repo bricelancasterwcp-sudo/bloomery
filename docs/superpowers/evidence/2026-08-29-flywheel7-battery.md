@@ -1,4 +1,4 @@
-# Flywheel turn 7 — battery: **PASS** (all seven floors on the pre-declared anchor, by the mechanical verdict)
+# Flywheel turn 7: battery: **PASS** (all seven floors on the pre-declared anchor, by the mechanical verdict)
 
 **Date:** 2026-08-29. Governs:
 `2026-08-29-flywheel7-preregistration.md` (floors locked at `62dc546`
@@ -12,13 +12,13 @@ trained per `2026-08-29-flywheel7-training.md`. Instrument:
 scratch `data_dir` per boot), serial, served digest asserted equal to the
 artifact sha before any task ran, `readlink /proc/<pid>/exe` = the
 featured binary, GPU hygiene checked first (desktop-only VRAM; the idle
-`ollama` process held no VRAM — reported, not killed). **Boot 1 is the
+`ollama` process held no VRAM, reported, not killed). **Boot 1 is the
 anchor** (declared in the pre-registration before the adapter existed);
 boot 2 is corroboration. Artifacts committed beside this doc: per boot,
 journal + tasks + recompute JSON + evaluation JSON. Every number below is
 from those JSONs; the verdict is the tool's, not prose arithmetic.
 
-## 1. The verdict (boot 1, `derive_turn7_floors --evaluate` — exit 0)
+## 1. The verdict (boot 1, `derive_turn7_floors --evaluate`: exit 0)
 
 Subject accepted by the evaluator's own bindings first: `instrument_rows`
 clean (32 seen / 0 duplicates / 0 unknown / 0 missing), join violations
@@ -42,9 +42,9 @@ decides). The Wilson decided/provisional flag is stated apart from the
 floors, as always: refuse 16/16 is decided; patch 14/16 is provisional
 (its band straddles 0.80).
 
-## 2. Declaration endpoints in full (both boots — identical counts)
+## 2. Declaration endpoints in full (both boots: identical counts)
 
-- **outcome_consistent: 32/32**, undeclared 0, invalid 0 — ceiling, on a
+- **outcome_consistent: 32/32**, undeclared 0, invalid 0, ceiling, on a
   corpus that trained the declaration for the first time (the untrained
   base: 27 consistent + 4 inconsistent).
 - **evidence_grounded rows: 28 grounded / 2 misaligned / 2 ungrounded /
@@ -55,7 +55,7 @@ floors, as always: refuse 16/16 is decided; patch 14/16 is provisional
 - **reason_matches_family**: defect-absent **5/6** match (1 mismatch),
   missing-target **5/5**, symptom-mismatch **3/5** (2 mismatch);
   patch-class reasons 14 `fixed` / 2 other / 0 undeclared.
-- **Grant-violation rows: 0** in both boots — the untrained base carried
+- **Grant-violation rows: 0** in both boots: the untrained base carried
   9–13; the line's out-of-slice-read habit did not survive this corpus.
 
 ## 3. Cross-boot byte-identity (computed, not asserted)
@@ -64,7 +64,7 @@ Per-fixture verdicts: **identical, zero flips** (contrast the untrained
 base's one landed flip in the turn-6 baselines). Declared
 outcome/reason attributes: **pair-identical on every fixture**. `done`
 prose: 2 of the 32 v5-mixed done texts diverge (`v5-patch-find-py-02`,
-`v5-patch-find-txt-03`) — the recorded Vulkan-greedy box fact — and both
+`v5-patch-find-txt-03`), the recorded Vulkan-greedy box fact, and both
 rows' declarations and verdicts are still identical. Every derived
 endpoint count is pair-identical. (G4 texts were not compared; the G4
 legs are 20/20 in both boots.)
@@ -76,9 +76,9 @@ legs are 20/20 in both boots.)
   (`…-txt-01`, `…-txt-02`) still declare `no-defect` (landed refusals,
   truthful at the bytes, wrong family declared). The corpus trains both
   lenses (150 symptom-mismatch tasks, both lenses cycled); the
-  declaration transferred in one lens and not yet the other — the
+  declaration transferred in one lens and not yet the other: the
   sharpest remaining target, now half its former size.
-- The evidence residuals: 2 ungrounded + 2 misaligned rows of 32 —
+- The evidence residuals: 2 ungrounded + 2 misaligned rows of 32,
   down from 23-of-32 non-grounded untrained. Named, not diluted.
 - F6's single defect-absent mismatch is the one row keeping that family
   off ceiling; the constant-`different-defect` policy the floor guards
@@ -91,7 +91,7 @@ beside refuse 16/16). Grammar-without-truth did NOT occur (28/32
 grounded). The constant policy did NOT occur (F6 5/6). Systematic
 misalignment did NOT occur (2 rows). Landing did not degrade under
 declaration load (G4 20/20; both classes above floor; zero
-StepsExhausted rows — the two patch misses, `v5-patch-find-py-01`
+StepsExhausted rows: the two patch misses, `v5-patch-find-py-01`
 (`find → done`) and `-py-03` (`read → done`), failed to locate their
 find-shaped targets and declared `outcome=refused reason=no-such-file`:
 an honest miss, truthfully declared, which is exactly what keeps F3 at

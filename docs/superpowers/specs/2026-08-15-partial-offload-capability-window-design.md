@@ -12,16 +12,16 @@ G4's first live verdict demoted qwen2.5-coder-7B (0/20, non-provisional).
 The recorded escalation is the **capability window**: does a bigger model
 clear the ≥80% landing floor under the same envelope? Two rungs:
 
-- **qwen3:14b** (9.3 GB GGUF) — fits the card fully. Zero code changes;
+- **qwen3:14b** (9.3 GB GGUF), fits the card fully. Zero code changes;
   run the existing instrument as-is. This rung goes first.
-- **qwen3.8:27b** (15.65 GiB main GGUF) — does not fit alongside overhead
+- **qwen3.8:27b** (15.65 GiB main GGUF), does not fit alongside overhead
   on the 16 GB card. Today it cannot even boot: `DEFAULT_N_GPU_LAYERS =
   u32::MAX` (full offload, not config-wired) and admission charges **full**
   `weights_bytes` against the static VRAM budget, so the pager refuses it
   outright. This rung needs the small enablement below.
 
 **The G4 protocol needs NO amendment for either run.** It is per-model and
-pins the instrument (fixture set, scoring, decision rule) — not the
+pins the instrument (fixture set, scoring, decision rule), not the
 subject. The pinned parameters are untouched.
 
 ## 2. Config: per-model tuning
@@ -50,26 +50,26 @@ Every existing config keeps parsing.
   `effective_weights = min(declared, weights_bytes)` (declared absent →
   `weights_bytes`) is used by BOTH the placement budget
   (`avail = budget − overhead − Σ effective_weights − Σ reservations`)
-  AND the window law's VRAM term. One number in two formulas — this must
+  AND the window law's VRAM term. One number in two formulas. This must
   not add a new asymmetry on top of carried-debt item 7.
 - Refusal arithmetic prints the effective value and **names it declared**
-  (e.g. `weights 11264 MiB (declared weights_vram_mib; file 16031 MiB)`) —
+  (e.g. `weights 11264 MiB (declared weights_vram_mib; file 16031 MiB)`):
   a declared number must never read as a measured one.
 - No override = full charge = today's fail-closed behavior.
 - **KV stays fully charged to VRAM under partial offload.** llama.cpp
   places KV for CPU-resident layers in host RAM, so full-charge overcounts
-  VRAM need — conservative (smaller windows, earlier refusals), never an
+  VRAM need, conservative (smaller windows, earlier refusals), never an
   OOM direction. Recorded as an honest limit (README + carried debt), not
   changed in this slice.
 
 ## 3b. Carried-debt item 7 closes here (amendment 2026-08-15, Brice-approved)
 
 *Added after the first 14B attempt, before any code: the run refused at
-placement with the exact asymmetry item 7 recorded — window VRAM-bound at
+placement with the exact asymmetry item 7 recorded, window VRAM-bound at
 27,913 tokens, placement needing precisely `ctx_overhead` (384 MiB) more
 than the budget the window was sized against (journal
 `~/.cache/bloomery-g4-14b/journal/`, the `Refusal` event; assay saw 503s,
-POST failed, the probe aborted fail-closed — every guard held, no number
+POST failed, the probe aborted fail-closed. Every guard held, no number
 was read, cleanly rerunnable). The 7B never tripped this because its
 window was ceiling-bound, not VRAM-bound; any model whose window comes out
 VRAM-bound is structurally unplaceable until this closes.*
@@ -95,7 +95,7 @@ API change.
 
 ## 5. Deriving the declared numbers (the ctx_overhead_mib precedent)
 
-Configured, not measured per-run — measured **once**, declared with
+Configured, not measured per-run, measured **once**, declared with
 headroom, derivation committed:
 
 1. Load the 27B once at the chosen `n_gpu_layers` (a boot with
@@ -106,20 +106,20 @@ headroom, derivation committed:
    384 MiB ctx_overhead derivation,
    `2026-08-14-2a-daemon-log-excerpt.txt`).
 
-Setting it too low is an OOM, not a refusal — the doc comment says so, the
+Setting it too low is an OOM, not a refusal: the doc comment says so, the
 README honest-limits section says so.
 
 ## 6. The two live runs (lens notes)
 
 - Same instrument, same protocol, same greedy sampler, same
-  raw-completion prompt path (no chat template) — the lens every model
+  raw-completion prompt path (no chat template): the lens every model
   gets. qwen3-family thinking behavior under this envelope is measured
   **as-is** and stated in each evidence doc; a chat-template or
   thinking-toggle serving change would be a different lens and is out of
   scope.
 - Each run: GPU preflight (free VRAM floor, no in-flight runs), fresh
   data_dir, assay pinned by commit for the boot POST (the assay working
-  tree is mid-v1.5 development — pin and record, as the first G4 run did).
+  tree is mid-v1.5 development, pin and record, as the first G4 run did).
 - The 27B probe at partial offload will be slow (CPU-bound layers). If the
   small-N extrapolation projects >2 h, OS-detach the daemon
   (`setsid nohup`) with a pid file and completion marker per the long-run
@@ -144,42 +144,42 @@ GPU-free (`cargo test --workspace`), the P4 habits:
 ## 8. Non-goals
 
 - No auto-tuning of `n_gpu_layers` or the declared MiB.
-- No live VRAM reads (standing ruling — static boot budget).
+- No live VRAM reads (standing ruling, static boot budget).
 - No vision/mmproj loading (the 27B's 931 MB projector blob is ignored).
 - No chat templates / thinking toggles (a different lens, a later
   decision).
 - No per-layer weight computation (layers aren't uniform; an undercount
-  is an OOM — the 2a lesson).
+  is an OOM: the 2a lesson).
 
 ## 9. Deliverable order (amended 2026-08-15: the item-7 fix now gates rung 1)
 
 1. Plan + execute the code slice: item-7 geometry fix (§3b) + config
    (§2) + accounting (§3) + plumbing (§4) + tests (§7).
-2. Run **qwen3:14b** through the gate — first capability-window data
+2. Run **qwen3:14b** through the gate, first capability-window data
    point, its own evidence doc (attempt 1's item-7 refusal recorded
    there as the motivating finding).
 3. Derive the 27B's declared numbers (one measured load, committed).
-4. Run **qwen3.8:27b** through the gate — second data point, its own
+4. Run **qwen3.8:27b** through the gate, second data point, its own
    evidence doc.
 
 ## 10. Addendum (2026-08-16, Brice-approved in conversation): declared KV-per-token override
 
 The pager's GGUF-derived `kv_per_token` overcounts hybrid-DeltaNet
 architectures ~4× (measured: qwen3.8-27b real KV 576 MiB at a
-9,034-token window ≈ 0.064 MiB/token vs the charged 0.254 — recorded in
+9,034-token window ≈ 0.064 MiB/token vs the charged 0.254, recorded in
 the Q3 derivation and both Q3 evidence docs). The same declared-value
 pattern as §3 closes it:
 
 - Per-model config `kv_per_token_bytes = N` (bytes). Present → it IS the
   KV charge everywhere `kv_per_token` is read for this model (window
-  law and reservation — one source, both places, the §3 discipline).
+  law and reservation, one source, both places, the §3 discipline).
   Absent → the GGUF-derived value, unchanged.
 - **Declared too small is the OOM direction** (window law grants tokens
   whose real KV exceeds VRAM). The value is measured once from
   llama.cpp's own `KV buffer size` log lines at a known window
   (§5-style derivation, committed), declared WITH HEADROOM ABOVE the
   measured per-token figure, and the docs say so. No clamp against the
-  GGUF value — a declared value larger than GGUF is allowed (extra
+  GGUF value, a declared value larger than GGUF is allowed (extra
   conservative), smaller is the point.
 - Refusal arithmetic and `/status` must not present the declared number
   as measured (the §3 naming rule applies).

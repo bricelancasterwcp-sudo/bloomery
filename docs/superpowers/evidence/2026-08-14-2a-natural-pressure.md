@@ -1,7 +1,7 @@
-# Phase 2a — eviction under a natural measured budget
+# Phase 2a: eviction under a natural measured budget
 
 **Date:** 2026-08-14
-**What this is:** the acceptance run for Phase 2a's pager work — weights charged
+**What this is:** the acceptance run for Phase 2a's pager work, weights charged
 to the reservation budget, and therefore residency pressure that arises from the
 hardware instead of from a disabled probe.
 
@@ -10,7 +10,7 @@ hardware instead of from a disabled probe.
 > 862 ms, n=56 per class. Nothing here re-reads it, amends it, or is computed
 > against its ceilings. This page runs the *warm class only*, at a window 8×
 > larger, under a different pressure mechanism, for a different question:
-> **does the pager evict when the arithmetic — not a missing tool — says it
+> **does the pager evict when the arithmetic, not a missing tool, says it
 > must?** Latencies are reported because they were recorded, not because they
 > are being judged. No number below may be substituted for a G2 number.
 
@@ -22,11 +22,11 @@ Phase 1's residency planner charged KV bytes only. On this box, with this
 model, that made natural eviction impossible: forcing one needed
 `2·kv > free_vram` while getting a non-zero window needed `kv ≤ free_vram −
 weights`, and together those wanted more VRAM than the card has (G2 evidence,
-§2). So G2 arranged pressure the other way — a `PATH` with no `nvidia-smi`, an
+§2). So G2 arranged pressure the other way, a `PATH` with no `nvidia-smi`, an
 unmeasured probe, residency capped at one resident agent. Real switches, real
 images, real GPU; an artificial reason for them to happen.
 
-Phase 2a charges the weights to the same pool — *as this run began*, and
+Phase 2a charges the weights to the same pool, *as this run began*, and
 superseded by the end of it; the formula the daemon ships is two terms wider
 and appears under [the fix](#the-fix):
 
@@ -38,7 +38,7 @@ That closes the gap on paper. This run is the check that it closes it on the
 box: a measured `nvidia-smi` budget, no `PATH` games, no `overhead_mib`
 trickery, and a workload sized so the arithmetic predicts evictions.
 
-## Pressure arithmetic — pre-registered for attempt 1
+## Pressure arithmetic: pre-registered for attempt 1
 
 Computed before the run from the card and the model, and computed again by the
 driver at run time from the daemon's own `/status`. Both appear below; the
@@ -58,7 +58,7 @@ instrument, not typed by hand.
 The lap-opening reset agent is why the formula carries the `+ 1`: it evicts the
 lowest-priority resident and then suspends, so a lap starts with the
 `capacity − 1` highest-priority workers resident and every worker below them
-must be restored as its turn comes. At `capacity = 1` — G2's regime — the same
+must be restored as its turn comes. At `capacity = 1`, G2's regime, the same
 formula gives `agents` restores per lap, which is exactly the 56 samples G2
 expected from 8 agents × 7 laps. The rule generalises the old expectation
 rather than replacing it.
@@ -80,10 +80,10 @@ and what replaced it, is [Attempt 1](#attempt-1--aborted-oom-and-the-accounting-
 |---|---|
 | GPU | NVIDIA GeForce RTX 5080, 16303 MiB total |
 | Driver | 595.84; substrate on the **Vulkan** backend (`--features llama,vulkan`) |
-| Tier declared | `enthusiast-16gb`, `emulated = false` — **real hardware** |
+| Tier declared | `enthusiast-16gb`, `emulated = false`: **real hardware** |
 | CPU | 16 cores |
 | Host RAM | 30 649 MiB total |
-| `data_dir` | `/home/brice/.cache/bloomery-2a` on `/dev/nvme0n1p2` (ext4) — **not** `/tmp`, which is tmpfs on this box and would have made the image store's NVMe tier RAM-backed |
+| `data_dir` | `/home/brice/.cache/bloomery-2a` on `/dev/nvme0n1p2` (ext4): **not** `/tmp`, which is tmpfs on this box and would have made the image store's NVMe tier RAM-backed |
 | GGUF blob | `/mnt/extra/ollama-models/blobs/…` on `/dev/nvme1n1p1` (ext4) |
 
 ## Model
@@ -101,10 +101,10 @@ The blob path is the `FROM` line of `ollama show qwen2.5-coder:7b-instruct-q8_0
 run are the window, the pressure mechanism, and the code.
 
 **The digest is a check on Phase 2a's second work item, and it passes in the
-open.** G2's daemon reported `a6c11e79e7d4…` — `sha256(first 1 MiB ‖ file_len)`,
+open.** G2's daemon reported `a6c11e79e7d4…`: `sha256(first 1 MiB ‖ file_len)`,
 bloomery's own prefix construction, a number nothing else in the world could
 confirm. This daemon reports `24b532e527…`, which is *character for character*
-the blob's file name — ollama's content address, i.e. the file's real SHA-256,
+the blob's file name, ollama's content address, i.e. the file's real SHA-256,
 computed by an unrelated program on a different day. Full-file digest,
 independently corroborated, without anyone having to trust this document.
 
@@ -114,7 +114,7 @@ independently corroborated, without anyone having to trust this document.
 |---|---|
 | Branch | `feat/phase2a-hardening` |
 | Daemon sources, attempt 1 | `d2e33e8` (`fix: pager — timeshare sufficiency check, last-use-at-placement ruling, determinism pins`) |
-| Daemon sources, attempt 2 | `a79a804` (`fix: pager — per-context runtime reservation + overhead in placement`) — the exact tree both release binaries were built from, 15 minutes before the run |
+| Daemon sources, attempt 2 | `a79a804` (`fix: pager — per-context runtime reservation + overhead in placement`): the exact tree both release binaries were built from, 15 minutes before the run |
 | Instrument | `f227e9d` (`feat: bench — pressure arithmetic replaces the measured-budget refusal`), committed **before** attempt 1, as G2's was; `a79a804` extends its capacity formula with the two terms attempt 1 found |
 | After the run | `284c6bb` moves the `/status` builder between files to stay under the 800-line ceiling. Pure code motion, committed separately so the tree named above stays the one that was measured. |
 | Build | `cargo build --release --features llama,vulkan -p bloomery-daemon -p bloomery-bench` |
@@ -127,11 +127,11 @@ independently corroborated, without anyone having to trust this document.
 
 Unchanged from G2, and computed by the same pure code
 (`crates/bloomery-bench/src/report.rs`): the sum of `duration_ms` over the
-contiguous pager-op sequence serving one resume — `EvictSave` of the victim,
+contiguous pager-op sequence serving one resume: `EvictSave` of the victim,
 `ResumeLoad` of the target, plus `ModelLoaded` if the weights had to come back.
 **warm** = RAM-tier image, no `ModelLoaded` in the sequence.
 
-### The pressure mechanism — the whole point of this run
+### The pressure mechanism: the whole point of this run
 
 `nvidia-smi` is on `PATH`. The probe measures. `/status` reports a number, not
 `null`, and the journal contains **no** `Degraded {"reason":"vram unmeasured…"}`
@@ -163,7 +163,7 @@ so it is recorded rather than ambient, and it never elapses: no
 The KV *image* that moves is not 8× bigger: an image holds the tokens actually
 used, not the window. Both runs prime with 6000 characters, so both move an
 image of roughly the same size. What did change is the cost of *allocating* a
-context — 896 MiB of VRAM per placement instead of 112 MiB — which sits inside
+context, 896 MiB of VRAM per placement instead of 112 MiB, which sits inside
 the substrate's context create/destroy on either side of a switch. Expect that
 to show up; it is described below, not judged.
 
@@ -173,7 +173,7 @@ to show up; it is described below, not judged.
 cache, and the GGUF blob had been read by other processes on this box before it
 started. Warm-class samples never touch the disk on the measured path (the
 image is in the RAM tier), so the page cache is not on the critical path of the
-numbers below — but the `SuspendSave` writes that spill reset-agent images to
+numbers below, but the `SuspendSave` writes that spill reset-agent images to
 the NVMe tier land in the page cache like any other write, and any restore that
 came off the NVMe tier would have been served from it. G2's page-cache caveat
 therefore still applies to anything cold, and the NVMe-media read cost remains
@@ -183,7 +183,7 @@ therefore still applies to anything cold, and the NVMe-media read cost remains
 
 ## The run
 
-### Attempt 1 — aborted (OOM), and the accounting gap it found
+### Attempt 1: aborted (OOM), and the accounting gap it found
 
 Fired automatically at **16:45:02** when the GPU cleared. It ran the
 pre-registered invocation and **failed after 16 seconds**, on the sixth
@@ -202,7 +202,7 @@ bench exit 1
 
 `bloomery-bench report` on that journal: **`warm n: 0`, `cold n: 0`, both
 percentiles `null`.** The instrument did not report a fast daemon; it reported
-nothing, loudly, with exit code 1 — which is the behaviour Task 5 built and the
+nothing, loudly, with exit code 1, which is the behaviour Task 5 built and the
 one thing about attempt 1 that went right.
 
 **Why it died.** `daemon.log`, verbatim, once per context:
@@ -228,8 +228,7 @@ compute buffer + 30 MiB of host buffer**. The device arithmetic:
 `13602 − 7165 = 6437 MiB` of headroom at `896 + 304 = 1200 MiB` of device
 memory per context = **5 contexts**. Five allocated; the sixth did not.
 
-The pager, meanwhile, charged the KV cache alone —
-`(13603 − 7723) / 896 = 6` — and the last line of the aborted journal is that
+The pager, meanwhile, charged the KV cache alone, `(13603 − 7723) / 896 = 6`, and the last line of the aborted journal is that
 belief, one instant before the device disagreed:
 
 ```json
@@ -239,7 +238,7 @@ belief, one instant before the device disagreed:
 **This is the most valuable thing the run produced.** Phase 2a's headline was
 that weights now enter the reservation budget; what this shows is that a
 *second* term was missing from the same sum, and that no amount of test-suite
-green could have found it — the gap only exists where bloomery's model of a
+green could have found it: the gap only exists where bloomery's model of a
 context meets llama.cpp's. Two lines below the OOM the daemon also proves the
 instrument's other half was working: `SchedulerDecision "fits"` is a decision
 the journal recorded, so the mistake is legible after the fact rather than
@@ -256,12 +255,12 @@ Three changes, each pinned by tests before the rerun
 
 1. **Per-context reservation.** Every agent carries `reserved_bytes =
    kv_bytes + ctx_overhead_bytes`, and *that* is what residency plans
-   against — placement demand, eviction sufficiency, the LRU tiebreak and
+   against, placement demand, eviction sufficiency, the LRU tiebreak and
    `/status` all read it. The planner itself is untouched: its `kv_bytes`
    field means "bytes this residency holds, and bytes freed by evicting it",
    and the compute buffer satisfies both halves because llama.cpp frees it
    with the context.
-2. **`ctx_overhead_mib`**, new config key, default **384** — above the 334
+2. **`ctx_overhead_mib`**, new config key, default **384**: above the 334
    MiB measured above, with the `daemon.log` lines quoted at the default's
    definition so the number's provenance travels with it.
 3. **The daemon-level `overhead_mib` margin now enters placement too.** It
@@ -271,13 +270,13 @@ Three changes, each pinned by tests before the rerun
 **One asymmetry is left open, deliberately.** `usable_window`'s VRAM term
 subtracts `weights` and `overhead_mib` but not `ctx_overhead_mib`, so an agent
 whose window comes out `BoundBy::Vram` is sized to fill the remaining budget
-and then reserves `ctx_overhead_bytes` beyond it — permanently un-placeable,
+and then reserves `ctx_overhead_bytes` beyond it, permanently un-placeable,
 refused safely but with no smaller window to fall back to. Every agent in this
 run was `user_cap`-bound (all 16 `AgentCreated` events in the committed
 journal say `"bound_by":"user_cap"`), so the run never met it. Closing it means
 changing the core window law, which is deferred as carried-debt item 7.
 
-### Attempt 2 — the run
+### Attempt 2: the run
 
 Same protocol, same flags, same box, 12 minutes later. The driver's own
 pressure block, printed from `/status` before the laps:
@@ -338,7 +337,7 @@ that switched by accident or not at all.
 | nothing was refused or violated | zero `Refusal`, zero `ContractViolation` |
 | weights were charged throughout | `/status` sampled every 10 s mid-run: `loaded_weights_bytes 8098525696`, `overhead_bytes 1073741824`, `ctx_overhead_bytes 402653184` |
 | the capacity was real, not notional | the same samples show `resident_kv_bytes 4026531840` = exactly **3 × 1 342 177 280**, i.e. the predicted 3 residents, holding their whole reservation |
-| time-sharing never fired | no `evict_timeshare` decision — workers carry ascending priorities, as designed |
+| time-sharing never fired | no `evict_timeshare` decision: workers carry ascending priorities, as designed |
 
 ### Component operations
 
@@ -347,7 +346,7 @@ that switched by accident or not at all.
 | `EvictSave` | ram | 53 | 24 / 27 / 29 | 68 827 896 |
 | `ResumeLoad` | ram | 48 | 5 / 5 / 6 | 68 397 726 |
 | `SuspendSave` | nvme | 8 | 11 / 13 / 14 | 287 476 (reset agents) |
-| `ModelLoaded` | — | 1 | 1047 | — |
+| `ModelLoaded` |: | 1 | 1047 |: |
 
 Warm sample distribution (n=48):
 
@@ -356,10 +355,10 @@ Warm sample distribution (n=48):
 ```
 
 The eight 5 ms samples are the lap-opening restores, where the reset agent has
-already vacated VRAM so the sequence is `ResumeLoad` alone — the same structural
+already vacated VRAM so the sequence is `ResumeLoad` alone: the same structural
 artefact G2 saw (7 of its 56), and for the same reason.
 
-## Qualitative comparison to G2 warm — description, not adjudication
+## Qualitative comparison to G2 warm: description, not adjudication
 
 **G2 is not re-read here and no verdict is being issued.** These two runs
 differ in window, pressure mechanism, code and sample count; the table exists
@@ -380,14 +379,14 @@ measured.
 Two things stand out, and both are consistent with the mechanism rather than
 surprising:
 
-* **The image barely grew** — 64.8 MiB → 65.2 MiB — even though the window is
+* **The image barely grew**, 64.8 MiB → 65.2 MiB, even though the window is
   8× larger. A KV image holds the tokens actually used, not the window, and
   both runs prime with the same 6000 characters (1132 prompt tokens, identical
   in both). The window is a *reservation* size; the image is a *content* size.
 * **The switch got ~2 ms slower at the median**, all of it on the save side
   (`EvictSave` 25 → 27 ms; `ResumeLoad` unchanged at 5 ms). An eviction now
   destroys a 1280 MiB reservation instead of a 112 MiB one, and a restore
-  creates one — but the bytes copied are the same, so only the allocator work
+  creates one, but the bytes copied are the same, so only the allocator work
   moved. Two milliseconds on an 8× larger context is a description of this
   box's allocator, measured once, not a law.
 
@@ -401,7 +400,7 @@ is `EvictSave(ram) + ResumeLoad(ram)` or `ResumeLoad(ram)` alone: the image
 never left host memory, so no disk read is inside any published number. The
 eight `SuspendSave` writes (reset agents, 287 KB each) went to the ext4 NVMe
 image tier and landed in the page cache like any other write; none is a sample.
-The GGUF blob had been read by other processes before the run — the single
+The GGUF blob had been read by other processes before the run: the single
 `ModelLoaded` of 1047 ms for a 7723 MiB file is page-cache speed, and it is not
 in any warm sample either. G2's page-cache caveat stands untouched, and the cost
 of reading a KV image off NVMe **media** remains unmeasured (carried debt 5).
@@ -413,7 +412,7 @@ of reading a KV image off NVMe **media** remains unmeasured (carried debt 5).
 `budget − overhead − Σ weights − Σ reserved`, evicts when that arithmetic says
 it must, and does so 53 times in 20 seconds without a refusal, a contract
 violation or an allocation failure. The Phase 1 configuration that made
-switches possible — a disabled VRAM probe — is no longer needed.
+switches possible, a disabled VRAM probe, is no longer needed.
 
 **Does not establish.** That 384 MiB is the right per-context reservation
 anywhere but here: it is a measured floor for *this* model at *this* window on

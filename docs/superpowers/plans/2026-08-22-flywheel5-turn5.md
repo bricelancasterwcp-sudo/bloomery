@@ -1,4 +1,4 @@
-# Flywheel Turn 5 — Implementation Plan
+# Flywheel Turn 5: Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (cargo workspace; `FakeSubstrate` tests; featured build `--features vulkan`), Python 3.12+ stdlib for `tools/evidence`, `~/flywheel-venv` (torch 2.11 / transformers 5.5.0 / peft 0.20.0) for trainer tests, RunPod REST (`https://rest.runpod.io/v1`) + GraphQL (`https://api.runpod.io/graphql`), llama.cpp `8672290` for convert/quantize.
 
-**Spec:** `docs/superpowers/specs/2026-08-22-flywheel5-turn5-design.md` — read it first; every task below argues from it.
+**Spec:** `docs/superpowers/specs/2026-08-22-flywheel5-turn5-design.md`, read it first; every task below argues from it.
 
 ## Global Constraints
 
@@ -17,18 +17,18 @@
 - **Corpus:** `~/flywheel4/corpus.jsonl`, sha256 `9c51a8668b4ce861dbe3c8528f59655a9a78eee12523f397b33e28d5d7928a7d`, reused byte-identical; fingerprint `docs/superpowers/evidence/2026-08-21-flywheel4-fingerprint.json`.
 - **Base:** `~/models/hf/Qwen3.6-35B-A3B-REAP48-ours/` (`model.safetensors` sha256 `8027ca0a8277b540cd4c62eb7a5bdf6028875e84b33ddcf4f9cd4b0e9d63423b`); served GGUF `~/models/gguf/qwen36-reap48-ours-Q4_K_M.gguf` (sha256 `90e2181e8c3175c7f59f911ee70dfcc58cd068977fc657be3a4101d041f591a5`, 11,755,624,288 B).
 - **Recipe (spec §4.2):** bf16 LoRA via peft, r=16 α=32 dropout 0 bias none, targets `q_proj k_proj v_proj o_proj in_proj_qkv in_proj_z in_proj_b in_proj_a out_proj gate_proj up_proj down_proj`; experts + router frozen (asserted); unpacked bs 1, accum 8, 2 epochs, lr 2e-4 cosine warmup 20, eval every 100, seed 20260816 (`torch.manual_seed` before `get_peft_model`, `TrainingArguments(seed=)`); MAX_SEQ 4096; raw text, completion-only loss, no EOS, tail `</action>`.
-- **Rental:** RunPod, A100-SXM4-80GB ($1.39/h), **150 GB** container disk, network volume mounted at `/workspace`, image `runpod/pytorch:1.1.0-cu1290-torch291-ubuntu2404`; pins transformers 5.5.0 / peft 0.20.0 / accelerate 1.14.0 / safetensors 0.8.0 / flash-linear-attention 0.5.2; **all installs before the job; nothing pip-installed beside a running job**; `setsid nohup`; poll log files, never `pgrep -f`; **turn cap $10**; stop-and-ask on any failure. API key `~/.config/runpod/api_key` (0600) — **never echoed, logged, or committed**; SSH key `~/.ssh/runpod_spike`.
+- **Rental:** RunPod, A100-SXM4-80GB ($1.39/h), **150 GB** container disk, network volume mounted at `/workspace`, image `runpod/pytorch:1.1.0-cu1290-torch291-ubuntu2404`; pins transformers 5.5.0 / peft 0.20.0 / accelerate 1.14.0 / safetensors 0.8.0 / flash-linear-attention 0.5.2; **all installs before the job; nothing pip-installed beside a running job**; `setsid nohup`; poll log files, never `pgrep -f`; **turn cap $10**; stop-and-ask on any failure. API key `~/.config/runpod/api_key` (0600), **never echoed, logged, or committed**; SSH key `~/.ssh/runpod_spike`.
 - **Boot configs (Tasks 6, 11):** `envelope = "v4"`, `g5_probe = true`, no `kv_per_token_bytes`, `ctx_overhead_mib = 512`, dedicated scratch `data_dir` under `target/` (never `~/.local/share/bloomery/drift/`), `PYTHONPATH=/home/brice/workspace/assay/src` (assay 0.13.0), daemon `/status` `digest` must equal the configured GGUF's sha256 or the boot is BLOCKED.
 - **House rules:** branch work in worktrees (`.worktrees/<name>`), never switch the shared checkout; `cargo test --workspace` FIRST, then `cargo build --release -p bloomery-daemon --features vulkan` LAST, never `cargo test` after it; daemons down by verified PID (`readlink /proc/<pid>/exe`), never `pkill`; never the `timeout` wrapper; idle `ollama serve` reported, not killed; Rust source ≤800 lines, Python modules ≤400 lines; commits conventional (`feat:`/`fix:`/`docs:`/`test:`), no attribution trailers.
 - **Money/GPU steps are HUMAN-GATED:** Tasks 6, 8, 10, 11 stop for Brice's explicit go before any boot or pod cut.
 
 ---
 
-## Branch 1 — `turn5-ride-alongs`
+## Branch 1: `turn5-ride-alongs`
 
 Worktree: `git worktree add .worktrees/ride-alongs -b turn5-ride-alongs master` (run from `~/workspace/bloomery`). All Task 1–5 commands run inside `.worktrees/ride-alongs`.
 
-### Task 1: Docs first — `gates.md` dated amendment
+### Task 1: Docs first: `gates.md` dated amendment
 
 **Files:**
 - Modify: `docs/gates.md` (append after the 2026-08-21 amendment under `## G5`)
@@ -36,7 +36,7 @@ Worktree: `git worktree add .worktrees/ride-alongs -b turn5-ride-alongs master` 
 **Interfaces:**
 - Produces: the dated amendment text Tasks 6, 9, 11 cite.
 
-- [ ] **Step 1: Append the amendment** — insert this block immediately after the paragraph that begins `**Amendment (2026-08-21, recorded before the v4 instrument exists):**` and before the `---` that closes the G5 section:
+- [ ] **Step 1: Append the amendment**: insert this block immediately after the paragraph that begins `**Amendment (2026-08-21, recorded before the v4 instrument exists):**` and before the `---` that closes the G5 section:
 
 ```markdown
 **Amendment (2026-08-22, recorded before any measurement of the new line):**
@@ -69,7 +69,7 @@ git commit -m "docs: gates.md — turn-5 amendment: v4-mixed@v4 is the decided-G
 
 ---
 
-### Task 2: Hybrid-aware geometry — `attention_layers` and `recurrent_state_bytes`
+### Task 2: Hybrid-aware geometry: `attention_layers` and `recurrent_state_bytes`
 
 **Files:**
 - Modify: `crates/bloomery-core/src/gguf.rs` (struct at lines 15–23; `parse_gguf_meta` at ~277–300)
@@ -78,13 +78,13 @@ git commit -m "docs: gates.md — turn-5 amendment: v4-mixed@v4 is the decided-G
 - Modify: `crates/bloomery-daemon/src/pager/tuning.rs` (~55–70 doc comment; add accessor)
 - Modify: `crates/bloomery-daemon/src/pager/status.rs` (`ModelStatus` ~95–125; build site ~233–240)
 - Modify: `crates/bloomery-daemon/src/config.rs:175-186` (doc comment only)
-- Modify: every `GgufMeta { ... }` literal (48 sites, `grep -rn "GgufMeta {" crates/ --include=*.rs`) — add the two new fields
+- Modify: every `GgufMeta { ... }` literal (48 sites, `grep -rn "GgufMeta {" crates/ --include=*.rs`), add the two new fields
 - Test: `crates/bloomery-core/tests/gguf_test.rs`, `crates/bloomery-core/tests/geometry_test.rs`, `crates/bloomery-daemon/tests/pager_reservation_test.rs`, new `crates/bloomery-core/tests/gguf_real_hybrid_test.rs`
 
 **Interfaces:**
 - Produces: `GgufMeta { …, attention_layers: u32, recurrent_state_bytes: u64 }`; `kv_bytes_per_token(&GgufMeta)` counts `attention_layers`; `ModelEntry::recurrent_state_bytes(&self) -> u64`; `ModelStatus.recurrent_state_bytes: u64` (JSON field `"recurrent_state_bytes"`); `Agent.reserved_bytes = kv + ctx_overhead + recurrent`.
 
-- [ ] **Step 1: Write the failing gguf tests** — append to `crates/bloomery-core/tests/gguf_test.rs` (it already has `kv_string`, `kv_u32`, `write_gguf`):
+- [ ] **Step 1: Write the failing gguf tests**: append to `crates/bloomery-core/tests/gguf_test.rs` (it already has `kv_string`, `kv_u32`, `write_gguf`):
 
 ```rust
 fn write_qwen35moe_like_gguf(path: &std::path::Path, full_attention_interval: Option<u32>, ssm: bool) {
@@ -176,7 +176,7 @@ fn kv_bytes_per_token_counts_attention_layers_only() {
 }
 ```
 
-- [ ] **Step 2: Run, expect compile failure** — `cargo test -p bloomery-core --test gguf_test --test geometry_test 2>&1 | tail -5` → `no field attention_layers`.
+- [ ] **Step 2: Run, expect compile failure**: `cargo test -p bloomery-core --test gguf_test --test geometry_test 2>&1 | tail -5` → `no field attention_layers`.
 
 - [ ] **Step 3: Implement in `gguf.rs`**. Struct:
 
@@ -256,11 +256,11 @@ pub fn kv_bytes_per_token(m: &GgufMeta) -> u64 {
 }
 ```
 
-- [ ] **Step 4: Fix every `GgufMeta { … }` literal** — run `cargo test --workspace --no-run 2>&1 | grep -E "missing fields|-->" | head -80`; in each listed literal add `attention_layers: <the literal's layers value>,` immediately after its `layers:` line and `recurrent_state_bytes: 0,` as the last field. Do not change any other value. Re-run until the workspace compiles.
+- [ ] **Step 4: Fix every `GgufMeta { … }` literal**: run `cargo test --workspace --no-run 2>&1 | grep -E "missing fields|-->" | head -80`; in each listed literal add `attention_layers: <the literal's layers value>,` immediately after its `layers:` line and `recurrent_state_bytes: 0,` as the last field. Do not change any other value. Re-run until the workspace compiles.
 
-- [ ] **Step 5: Run the core tests** — `cargo test -p bloomery-core` → all pass incl. the five new ones.
+- [ ] **Step 5: Run the core tests**: `cargo test -p bloomery-core` → all pass incl. the five new ones.
 
-- [ ] **Step 6: Write the failing pager test** — append to `crates/bloomery-daemon/tests/pager_reservation_test.rs` (uses its existing `pager_in`, `write_gguf`, `WINDOW_CAP`, `MIB`; mirror how its `status_reports_reserved_bytes_and_both_overhead_terms` test registers a model and reads `status()`):
+- [ ] **Step 6: Write the failing pager test**: append to `crates/bloomery-daemon/tests/pager_reservation_test.rs` (uses its existing `pager_in`, `write_gguf`, `WINDOW_CAP`, `MIB`; mirror how its `status_reports_reserved_bytes_and_both_overhead_terms` test registers a model and reads `status()`):
 
 ```rust
 fn hybrid_meta(weights_bytes: u64) -> bloomery_core::gguf::GgufMeta {
@@ -300,11 +300,11 @@ fn recurrent_state_is_charged_per_context_and_reported() {
 }
 ```
 
-(`register_like_the_other_tests` is a placeholder NAME only for the registration lines the file already uses — copy those lines verbatim; the file's `status_reports_reserved_bytes_and_both_overhead_terms` shows them.) Also add a window-law assertion in the same test if the file exposes the window: `agent`'s `window_tokens` must equal `WINDOW_CAP` (the cap binds; the recurrent charge must not starve it at this budget).
+(`register_like_the_other_tests` is a placeholder NAME only for the registration lines the file already uses, copy those lines verbatim; the file's `status_reports_reserved_bytes_and_both_overhead_terms` shows them.) Also add a window-law assertion in the same test if the file exposes the window: `agent`'s `window_tokens` must equal `WINDOW_CAP` (the cap binds; the recurrent charge must not starve it at this budget).
 
-- [ ] **Step 7: Run, expect failure** — `cargo test -p bloomery-daemon --test pager_reservation_test recurrent 2>&1 | tail -5` → `no field recurrent_state_bytes` on `ModelStatus`.
+- [ ] **Step 7: Run, expect failure**: `cargo test -p bloomery-daemon --test pager_reservation_test recurrent 2>&1 | tail -5` → `no field recurrent_state_bytes` on `ModelStatus`.
 
-- [ ] **Step 8: Implement the charge sites.** `pager/tuning.rs` — add to the `impl ModelEntry` block next to `effective_kv_per_token`:
+- [ ] **Step 8: Implement the charge sites.** `pager/tuning.rs`, add to the `impl ModelEntry` block next to `effective_kv_per_token`:
 
 ```rust
     /// Per-context recurrent-state charge (turn-5 spec §2) — a GGUF-derived
@@ -320,9 +320,9 @@ and rewrite the `effective_kv_per_token` doc paragraph that says the GGUF-derive
 
 `pager/status.rs`: add `pub recurrent_state_bytes: u64,` to `ModelStatus` (after `kv_per_token_declared`, with a doc comment citing spec §2) and `recurrent_state_bytes: m.recurrent_state_bytes(),` at the build site.
 
-- [ ] **Step 9: Run the daemon suite** — `cargo test -p bloomery-daemon 2>&1 | tail -3` → all pass.
+- [ ] **Step 9: Run the daemon suite**: `cargo test -p bloomery-daemon 2>&1 | tail -3` → all pass.
 
-- [ ] **Step 10: Real-GGUF skip-if-absent test** — create `crates/bloomery-core/tests/gguf_real_hybrid_test.rs`:
+- [ ] **Step 10: Real-GGUF skip-if-absent test**: create `crates/bloomery-core/tests/gguf_real_hybrid_test.rs`:
 
 ```rust
 //! Parses the real REAP-48-ours GGUF when it is on this box (turn-5 spec §2)
@@ -352,7 +352,7 @@ fn reap48_ours_gguf_derives_the_measured_hybrid_geometry() {
 
 Run `cargo test -p bloomery-core --test gguf_real_hybrid_test -- --nocapture` → passes (this box has the file).
 
-- [ ] **Step 11: Full workspace + clippy** — `cargo test --workspace 2>&1 | tail -3` and `cargo clippy --workspace --all-targets -- -D warnings`.
+- [ ] **Step 11: Full workspace + clippy**: `cargo test --workspace 2>&1 | tail -3` and `cargo clippy --workspace --all-targets -- -D warnings`.
 
 - [ ] **Step 12: Commit**
 
@@ -369,13 +369,13 @@ git commit -m "feat(pager): hybrid-aware geometry — KV counts attention layers
 - Modify: `crates/bloomery-core/src/journal.rs` (`TaskStep` at 84–90, `CodecFixture` at 95–112)
 - Modify: `crates/bloomery-daemon/src/task/task_loop.rs` (`TaskStepRecord` 114–120, `StepReport` 158–164, `record_step` 193–215, the four `StepReport {` sites at ~458/539/578/599, `execute_action` 480–505)
 - Modify: `crates/bloomery-daemon/src/pager/journal.rs:274-300` (`codec_fixture`), `crates/bloomery-daemon/src/pager/codec_gate.rs:203-225` (`journal_codec_fixture`), call sites `crates/bloomery-daemon/src/codec_probe/mod.rs:432` and `crates/bloomery-daemon/src/codec_probe/refuse.rs:296`
-- Modify: every other `TaskStepRecord { … }` literal (`grep -rn "TaskStepRecord {" crates/` — 4 sites incl. `codec_probe/scoring.rs:203` test helper) — add `args: Vec::new()`
+- Modify: every other `TaskStepRecord { … }` literal (`grep -rn "TaskStepRecord {" crates/`, 4 sites incl. `codec_probe/scoring.rs:203` test helper), add `args: Vec::new()`
 - Test: `crates/bloomery-core/tests/journal_test.rs`, `crates/bloomery-daemon/tests/task_loop_test.rs`, `crates/bloomery-daemon/tests/codec_probe_test.rs`
 
 **Interfaces:**
 - Produces: `Event::TaskStep { id, step, verb, outcome, duration_ms, args: Vec<String> }` (`#[serde(default)]`); `Event::CodecFixture { …, expect, agent: Option<AgentId> }` (`#[serde(default)]`); `TaskStepRecord.args: Vec<String>`; `Pager::journal_codec_fixture(…, expect: &str, agent: &str)`; `jrnl::codec_fixture(…, expect, agent: Option<&str>)`; `task_loop::action_args(&Action) -> Vec<String>` (private).
 
-- [ ] **Step 1: Failing journal tests** — append to `crates/bloomery-core/tests/journal_test.rs`:
+- [ ] **Step 1: Failing journal tests**: append to `crates/bloomery-core/tests/journal_test.rs`:
 
 ```rust
 #[test]
@@ -420,7 +420,7 @@ fn task_step_args_and_codec_fixture_agent_round_trip() {
 }
 ```
 
-- [ ] **Step 2: Run, expect compile failure** — `cargo test -p bloomery-core --test journal_test 2>&1 | tail -5`.
+- [ ] **Step 2: Run, expect compile failure**: `cargo test -p bloomery-core --test journal_test 2>&1 | tail -5`.
 
 - [ ] **Step 3: Implement the event fields** in `journal.rs`:
 
@@ -451,9 +451,9 @@ and on `CodecFixture`, after `expect`:
         agent: Option<AgentId>,
 ```
 
-Fix any compile errors across the **whole workspace** — every `Event::TaskStep { … }` / `Event::CodecFixture { … }` destructuring pattern that lists fields exhaustively must gain `..` (or the new field); every construction site must supply the field (`grep -rn "Event::TaskStep {\|Event::CodecFixture {" crates/`). Run `cargo test -p bloomery-core` → green (daemon sites are finished in Steps 6 and 9).
+Fix any compile errors across the **whole workspace**: every `Event::TaskStep { … }` / `Event::CodecFixture { … }` destructuring pattern that lists fields exhaustively must gain `..` (or the new field); every construction site must supply the field (`grep -rn "Event::TaskStep {\|Event::CodecFixture {" crates/`). Run `cargo test -p bloomery-core` → green (daemon sites are finished in Steps 6 and 9).
 
-- [ ] **Step 4: Failing task-loop test** — in `crates/bloomery-daemon/tests/task_loop_test.rs`, locate the existing test that scripts a `read` → `patch` → `done` (or any) trajectory and replays the journal (grep `Event::TaskStep`); add, using that test's own pager/agent/journal setup and a scripted trajectory of **read `<target>` → run `["python3","-c","print(1)"]` (grant the `python3` prefix the way `task_exec_run_test.rs` does) → done**, the assertions:
+- [ ] **Step 4: Failing task-loop test**: in `crates/bloomery-daemon/tests/task_loop_test.rs`, locate the existing test that scripts a `read` → `patch` → `done` (or any) trajectory and replays the journal (grep `Event::TaskStep`); add, using that test's own pager/agent/journal setup and a scripted trajectory of **read `<target>` → run `["python3","-c","print(1)"]` (grant the `python3` prefix the way `task_exec_run_test.rs` does) → done**, the assertions:
 
 ```rust
     let rows: Vec<(String, Vec<String>)> = replay(&journal_path).unwrap().into_iter()
@@ -471,7 +471,7 @@ Fix any compile errors across the **whole workspace** — every `Event::TaskStep
 
 Also add one assertion to the file's existing grant-violation test (the one whose `run` is refused): the refused row's `args` equals the refused argv.
 
-- [ ] **Step 5: Run, expect failure** — `cargo test -p bloomery-daemon --test task_loop_test 2>&1 | tail -5` → `no field args`.
+- [ ] **Step 5: Run, expect failure**: `cargo test -p bloomery-daemon --test task_loop_test 2>&1 | tail -5` → `no field args`.
 
 - [ ] **Step 6: Implement in `task_loop.rs`**:
 
@@ -512,9 +512,9 @@ fn action_args(action: &Action) -> Vec<String> {
 
 In `record_step`: `args: report.args.clone()` in the `Event::TaskStep { … }` and `args: report.args` in the `TaskStepRecord { … }` push (move last). At the four `StepReport {` sites: parse-failure → `args: Vec::new()`; `Done` → `args: Vec::new()`; demoted-verb refusal → `args: action_args(&action)`; executed → `args: action_args(&action)`. Fix the remaining `TaskStepRecord {` literals with `args: Vec::new()`.
 
-- [ ] **Step 7: Run** — `cargo test -p bloomery-daemon --test task_loop_test` → green.
+- [ ] **Step 7: Run**: `cargo test -p bloomery-daemon --test task_loop_test` → green.
 
-- [ ] **Step 8: Failing probe test** — append to `crates/bloomery-daemon/tests/codec_probe_test.rs`:
+- [ ] **Step 8: Failing probe test**: append to `crates/bloomery-daemon/tests/codec_probe_test.rs`:
 
 ```rust
 /// `(fixture, agent)` for every CodecFixture event, in journal order.
@@ -544,9 +544,9 @@ fn codec_fixture_rows_carry_the_agent_that_ran_them() {
 
 Add the same assertion block to an existing **refusal-probe** test in this file (one that runs a mixed set through `run_refusal_probe`), so both engines are pinned.
 
-- [ ] **Step 9: Implement the key** — `pager/journal.rs`: `codec_fixture(…, expect: &str, agent: Option<&str>)` → `agent: agent.map(str::to_string)`; `pager/codec_gate.rs::journal_codec_fixture(…, expect: &str, agent: &str)` → passes `Some(agent)` (it keeps `#[allow(clippy::too_many_arguments)]` or gains it); `codec_probe/mod.rs:432` and `refuse.rs:296` pass `&agent.id` (the `agent` returned by `create_agent` earlier in each function). Update any test that calls `journal_codec_fixture` directly.
+- [ ] **Step 9: Implement the key**: `pager/journal.rs`: `codec_fixture(…, expect: &str, agent: Option<&str>)` → `agent: agent.map(str::to_string)`; `pager/codec_gate.rs::journal_codec_fixture(…, expect: &str, agent: &str)` → passes `Some(agent)` (it keeps `#[allow(clippy::too_many_arguments)]` or gains it); `codec_probe/mod.rs:432` and `refuse.rs:296` pass `&agent.id` (the `agent` returned by `create_agent` earlier in each function). Update any test that calls `journal_codec_fixture` directly.
 
-- [ ] **Step 10: Run everything** — `cargo test --workspace 2>&1 | tail -3`; `cargo clippy --workspace --all-targets -- -D warnings`.
+- [ ] **Step 10: Run everything**: `cargo test --workspace 2>&1 | tail -3`; `cargo clippy --workspace --all-targets -- -D warnings`.
 
 - [ ] **Step 11: Commit**
 
@@ -557,7 +557,7 @@ git commit -m "feat(journal): TaskStep carries the action's args; CodecFixture n
 
 ---
 
-### Task 4: `tools/evidence/recompute.py` — the tested recompute
+### Task 4: `tools/evidence/recompute.py`: the tested recompute
 
 **Files:**
 - Create: `tools/evidence/__init__.py` (empty), `tools/evidence/journal.py`, `tools/evidence/endpoints.py`, `tools/evidence/recompute.py`, `tools/evidence/tests/__init__.py` (empty), `tools/evidence/tests/test_recompute_turn4.py`
@@ -582,7 +582,7 @@ Report schema (exact keys; Tasks 6 and 11 paste from it):
  "verb_histogram": {"done": 52, "find": 6, "patch": 36, "read": 52, "run": 5}}
 ```
 
-- [ ] **Step 1: Failing tests** — `tools/evidence/tests/test_recompute_turn4.py` (stdlib `unittest`; every number below was re-derived from the committed journals with `jq` on 2026-08-22 and matches the committed evidence):
+- [ ] **Step 1: Failing tests**: `tools/evidence/tests/test_recompute_turn4.py` (stdlib `unittest`; every number below was re-derived from the committed journals with `jq` on 2026-08-22 and matches the committed evidence):
 
 ```python
 """The recompute tool must reproduce the committed turn-4 evidence exactly."""
@@ -672,7 +672,7 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 2: Run, expect ImportError** — `python3 -m unittest tools.evidence.tests.test_recompute_turn4 -v 2>&1 | tail -3`.
+- [ ] **Step 2: Run, expect ImportError**: `python3 -m unittest tools.evidence.tests.test_recompute_turn4 -v 2>&1 | tail -3`.
 
 - [ ] **Step 3: `tools/evidence/journal.py`** (≤120 lines):
 
@@ -1003,9 +1003,9 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 6: Run the tests** — `python3 -m unittest tools.evidence.tests.test_recompute_turn4 -v` → all 4 pass. **If any number differs, do not tune the tool to pass: open the corresponding committed evidence section, find which definition the evidence used, and report the discrepancy in the task report** (the evidence is the record; the tool must implement its definitions). Also confirm the CLI: `python3 -m tools.evidence.recompute --journal docs/superpowers/evidence/2026-08-21-flywheel4-g5-journal.jsonl --tasks docs/superpowers/evidence/2026-08-21-flywheel4-g5-tasks.jsonl --g5-fixtures crates/bloomery-daemon/fixtures/codec-tasks-v4-mixed.toml | head -20`.
+- [ ] **Step 6: Run the tests**: `python3 -m unittest tools.evidence.tests.test_recompute_turn4 -v` → all 4 pass. **If any number differs, do not tune the tool to pass: open the corresponding committed evidence section, find which definition the evidence used, and report the discrepancy in the task report** (the evidence is the record; the tool must implement its definitions). Also confirm the CLI: `python3 -m tools.evidence.recompute --journal docs/superpowers/evidence/2026-08-21-flywheel4-g5-journal.jsonl --tasks docs/superpowers/evidence/2026-08-21-flywheel4-g5-tasks.jsonl --g5-fixtures crates/bloomery-daemon/fixtures/codec-tasks-v4-mixed.toml | head -20`.
 
-- [ ] **Step 7: Wire into the factory suite's discovery** — confirm `python3 -m unittest discover -s tools -t . 2>&1 | tail -3` finds both `tools/flywheel/tests` and `tools/evidence/tests` (add `tools/__init__.py` if discovery needs it; it exists already for `tools.flywheel`). Add a short `tools/evidence/README.md` (20 lines: purpose, CLI, the "reports, never decides" line, the turn-4 pins).
+- [ ] **Step 7: Wire into the factory suite's discovery**: confirm `python3 -m unittest discover -s tools -t . 2>&1 | tail -3` finds both `tools/flywheel/tests` and `tools/evidence/tests` (add `tools/__init__.py` if discovery needs it; it exists already for `tools.flywheel`). Add a short `tools/evidence/README.md` (20 lines: purpose, CLI, the "reports, never decides" line, the turn-4 pins).
 
 - [ ] **Step 8: Commit**
 
@@ -1018,15 +1018,15 @@ git commit -m "feat(evidence): tools/evidence/recompute — keyed+ordinal join, 
 
 ### Task 5: Final review, PR, merge, featured build
 
-- [ ] **Step 1: Whole-branch review** — `git diff master...HEAD --stat`; dispatch the code-reviewer on the diff (focus: the two charge sites are the only behavior change in the pager; no frozen file touched — `git diff master...HEAD --name-only | grep -E "fixtures/codec-tasks|evidence/2026-08-(1|20|21)" ` must print nothing; journal compat pins present; recompute tests green).
-- [ ] **Step 2: Suites** — `cargo test --workspace 2>&1 | tail -3`; `cargo clippy --workspace --all-targets -- -D warnings`; `python3 -m unittest discover -s tools -t . 2>&1 | tail -3`; `~/flywheel-venv/bin/python -m unittest discover -s tools/flywheel/tests -t . 2>&1 | tail -3`.
-- [ ] **Step 3: Push + PR** — `git push -u origin turn5-ride-alongs`; `gh pr create --title "turn-5 ride-alongs: hybrid-aware geometry, keyed task journal, recompute tool" --body "<summary of Tasks 1–4; spec link>"`; note the PR number.
-- [ ] **Step 4: Merge (Brice's go or delegated)** — from the MAIN checkout on `master`: `git checkout master && gh pr merge <N> --merge --delete-branch && git pull --ff-only && git rev-list --left-right --count origin/master...master` → `0 0`. Remove the worktree: `git worktree remove .worktrees/ride-alongs`.
-- [ ] **Step 5: Featured build LAST** — `cargo build --release -p bloomery-daemon --features vulkan` and `nm -C target/release/bloomery-daemon | grep -c ggml_vulkan` > 0. **No `cargo test` after this.**
+- [ ] **Step 1: Whole-branch review** (`git diff master...HEAD --stat`; dispatch the code-reviewer on the diff (focus: the two charge sites are the only behavior change in the pager; no frozen file touched), `git diff master...HEAD --name-only | grep -E "fixtures/codec-tasks|evidence/2026-08-(1|20|21)" ` must print nothing; journal compat pins present; recompute tests green).
+- [ ] **Step 2: Suites**: `cargo test --workspace 2>&1 | tail -3`; `cargo clippy --workspace --all-targets -- -D warnings`; `python3 -m unittest discover -s tools -t . 2>&1 | tail -3`; `~/flywheel-venv/bin/python -m unittest discover -s tools/flywheel/tests -t . 2>&1 | tail -3`.
+- [ ] **Step 3: Push + PR**: `git push -u origin turn5-ride-alongs`; `gh pr create --title "turn-5 ride-alongs: hybrid-aware geometry, keyed task journal, recompute tool" --body "<summary of Tasks 1–4; spec link>"`; note the PR number.
+- [ ] **Step 4: Merge (Brice's go or delegated)**: from the MAIN checkout on `master`: `git checkout master && gh pr merge <N> --merge --delete-branch && git pull --ff-only && git rev-list --left-right --count origin/master...master` → `0 0`. Remove the worktree: `git worktree remove .worktrees/ride-alongs`.
+- [ ] **Step 5: Featured build LAST**: `cargo build --release -p bloomery-daemon --features vulkan` and `nm -C target/release/bloomery-daemon | grep -c ggml_vulkan` > 0. **No `cargo test` after this.**
 
 ---
 
-## Baselines — on master, HUMAN-GATED
+## Baselines: on master, HUMAN-GATED
 
 ### Task 6: Two identical boots of the untrained base at the fixed geometry
 
@@ -1036,7 +1036,7 @@ git commit -m "feat(evidence): tools/evidence/recompute — keyed+ordinal join, 
 - Create: `docs/superpowers/evidence/<YYYY-MM-DD>-g5v4-reap48-baselines.md`, `<YYYY-MM-DD>-g5v4-reap48-boot{1,2}-journal.jsonl`, `…-boot{1,2}-tasks.jsonl`, `…-boot{1,2}-recompute.json`
 - Local, not committed: `target/reap48-base-live/boot{1,2}/bloomery.toml`, `status-boot{1,2}.json`
 
-- [ ] **Step 1: Pre-register in the doc BEFORE the first boot, then commit.** Sections: `## 1. Expectations (PRE-REGISTERED)` — the line's floor; spike numbers quoted (20/20 · 13/16 prov · 9/16; grant-violation rows 5; `done` 45 on 32 fixtures) as *expectations superseded on measurement*; **"boot 1 is the anchor; boot 2 is corroboration; a difference is a box finding, never a choice"**; the fixed-geometry consequences to be recorded (`kv_per_token` 20,480, `recurrent_state_bytes` 65,863,680, window ≈108.7k at no override, decode tps expected below the spike's 116.7 — reported, not gated); reporting discipline (floor and flag separate; `decided by construction` never used of a score; no cross-envelope sentence). `## 2. Preflight` (GPU free, no daemon — `ps -eo pid,comm | grep -w bloomery-daemon`, idle ollama reported, disk, master sha, featured-binary mtime + `nm -C … ggml_vulkan`). Commit `docs: pre-register the REAP-48-ours baselines (two boots, boot 1 anchor) before the first boot`.
+- [ ] **Step 1: Pre-register in the doc BEFORE the first boot, then commit.** Sections: `## 1. Expectations (PRE-REGISTERED)`: the line's floor; spike numbers quoted (20/20 · 13/16 prov · 9/16; grant-violation rows 5; `done` 45 on 32 fixtures) as *expectations superseded on measurement*; **"boot 1 is the anchor; boot 2 is corroboration; a difference is a box finding, never a choice"**; the fixed-geometry consequences to be recorded (`kv_per_token` 20,480, `recurrent_state_bytes` 65,863,680, window ≈108.7k at no override, decode tps expected below the spike's 116.7 (reported, not gated); reporting discipline (floor and flag separate; `decided by construction` never used of a score; no cross-envelope sentence). `## 2. Preflight` (GPU free, no daemon), `ps -eo pid,comm | grep -w bloomery-daemon`, idle ollama reported, disk, master sha, featured-binary mtime + `nm -C … ggml_vulkan`). Commit `docs: pre-register the REAP-48-ours baselines (two boots, boot 1 anchor) before the first boot`.
 
 - [ ] **Step 2: Boot config** (`target/reap48-base-live/boot1/bloomery.toml`; boot 2 identical except `data_dir` and `port` 8398):
 
@@ -1063,15 +1063,15 @@ python = "python3"
 probe_timeout_secs = 1800
 ```
 
-- [ ] **Step 3: Boot 1** — `cd ~/workspace/bloomery && PYTHONPATH=/home/brice/workspace/assay/src setsid nohup target/release/bloomery-daemon --config target/reap48-base-live/boot1/bloomery.toml > target/reap48-base-live/boot1/daemon.log 2>&1 &` then `echo $! > target/reap48-base-live/boot1/pid`; `readlink /proc/$(cat …/pid)/exe` must be the featured binary; wait for `Post` then the two verdict rows (the boot journal is `target/reap48-base-live/boot1/data/journal/boot-<epoch>.jsonl`, the task journal `…/data/journal/tasks.jsonl`; `grep -c '"event":"CodecVerdictMixed"' target/reap48-base-live/boot1/data/journal/boot-*.jsonl` → 1; allow ~20–30 min); `curl -s localhost:8399/status > target/reap48-base-live/boot1/status-boot1.json`; assert `jq -r '.models[0].digest' status-boot1.json` == `90e2181e8c3175c7f59f911ee70dfcc58cd068977fc657be3a4101d041f591a5` (else BLOCKED — stop); also record `.models[0].kv_per_token` (expect 20480) and `.models[0].recurrent_state_bytes` (expect 65863680). Stop the daemon: `kill $(cat target/reap48-base-live/boot1/pid)` after verifying `readlink`; wait until the PID is gone.
-- [ ] **Step 4: Boot 2** — same, port 8398, `boot2/`.
-- [ ] **Step 5: Copy journals + recompute** — `cp target/reap48-base-live/boot1/data/journal/boot-*.jsonl docs/superpowers/evidence/<date>-g5v4-reap48-boot1-journal.jsonl` (exactly one `boot-*.jsonl` per fresh `data_dir`) and `cp target/reap48-base-live/boot1/data/journal/tasks.jsonl docs/superpowers/evidence/<date>-g5v4-reap48-boot1-tasks.jsonl`; same for boot 2; then `python3 -m tools.evidence.recompute --journal …-boot1-journal.jsonl --tasks …-boot1-tasks.jsonl --g5-fixtures crates/bloomery-daemon/fixtures/codec-tasks-v4-mixed.toml --json docs/superpowers/evidence/<date>-g5v4-reap48-boot1-recompute.json` (exit 0; `join.mode == "keyed"`, `keyed_equals_ordinal true`, `violations []`, both `journaled_verdict_matches true`); same for boot 2.
-- [ ] **Step 6: Evidence doc** — `## 3. Method`, `## 4. Boot 1 (anchor)`, `## 5. Boot 2 (corroboration)`, `## 6. Both boots side by side` (identical or not — stated), `## 7. Serving facts at the fixed geometry` (window_tokens from `AgentCreated`, kv_per_token, recurrent_state_bytes, decode/prefill tps from the POST profile, peak VRAM if captured), `## 8. Scorecard vs §1`, `## 9. Caveats`, `## 10. Committed artifacts`. **Every count, composition, endpoint, grant-violation number and verb histogram is pasted from the recompute JSON; anatomy sentences (trajectory shapes, `done` > fixtures, out-of-slice reads) are computed by a short script whose output is quoted — never written from memory.** Never re-run a boot. Commit `docs: REAP-48-ours baselines under envelope-v4 at the fixed geometry — two boots, boot 1 anchor`.
-- [ ] **Step 7: Evidence review** — an independent reviewer re-derives the headline counts from the JSONL (jq) and checks every prose number against the recompute JSON; fix round if needed; commit; push master; `git rev-list --left-right --count origin/master...master` → `0 0`.
+- [ ] **Step 3: Boot 1** (`cd ~/workspace/bloomery && PYTHONPATH=/home/brice/workspace/assay/src setsid nohup target/release/bloomery-daemon --config target/reap48-base-live/boot1/bloomery.toml > target/reap48-base-live/boot1/daemon.log 2>&1 &` then `echo $! > target/reap48-base-live/boot1/pid`; `readlink /proc/$(cat …/pid)/exe` must be the featured binary; wait for `Post` then the two verdict rows (the boot journal is `target/reap48-base-live/boot1/data/journal/boot-<epoch>.jsonl`, the task journal `…/data/journal/tasks.jsonl`; `grep -c '"event":"CodecVerdictMixed"' target/reap48-base-live/boot1/data/journal/boot-*.jsonl` → 1; allow ~20–30 min); `curl -s localhost:8399/status > target/reap48-base-live/boot1/status-boot1.json`; assert `jq -r '.models[0].digest' status-boot1.json` == `90e2181e8c3175c7f59f911ee70dfcc58cd068977fc657be3a4101d041f591a5` (else BLOCKED), stop); also record `.models[0].kv_per_token` (expect 20480) and `.models[0].recurrent_state_bytes` (expect 65863680). Stop the daemon: `kill $(cat target/reap48-base-live/boot1/pid)` after verifying `readlink`; wait until the PID is gone.
+- [ ] **Step 4: Boot 2**: same, port 8398, `boot2/`.
+- [ ] **Step 5: Copy journals + recompute**: `cp target/reap48-base-live/boot1/data/journal/boot-*.jsonl docs/superpowers/evidence/<date>-g5v4-reap48-boot1-journal.jsonl` (exactly one `boot-*.jsonl` per fresh `data_dir`) and `cp target/reap48-base-live/boot1/data/journal/tasks.jsonl docs/superpowers/evidence/<date>-g5v4-reap48-boot1-tasks.jsonl`; same for boot 2; then `python3 -m tools.evidence.recompute --journal …-boot1-journal.jsonl --tasks …-boot1-tasks.jsonl --g5-fixtures crates/bloomery-daemon/fixtures/codec-tasks-v4-mixed.toml --json docs/superpowers/evidence/<date>-g5v4-reap48-boot1-recompute.json` (exit 0; `join.mode == "keyed"`, `keyed_equals_ordinal true`, `violations []`, both `journaled_verdict_matches true`); same for boot 2.
+- [ ] **Step 6: Evidence doc** (`## 3. Method`, `## 4. Boot 1 (anchor)`, `## 5. Boot 2 (corroboration)`, `## 6. Both boots side by side` (identical or not), stated), `## 7. Serving facts at the fixed geometry` (window_tokens from `AgentCreated`, kv_per_token, recurrent_state_bytes, decode/prefill tps from the POST profile, peak VRAM if captured), `## 8. Scorecard vs §1`, `## 9. Caveats`, `## 10. Committed artifacts`. **Every count, composition, endpoint, grant-violation number and verb histogram is pasted from the recompute JSON; anatomy sentences (trajectory shapes, `done` > fixtures, out-of-slice reads) are computed by a short script whose output is quoted, never written from memory.** Never re-run a boot. Commit `docs: REAP-48-ours baselines under envelope-v4 at the fixed geometry — two boots, boot 1 anchor`.
+- [ ] **Step 7: Evidence review**: an independent reviewer re-derives the headline counts from the JSONL (jq) and checks every prose number against the recompute JSON; fix round if needed; commit; push master; `git rev-list --left-right --count origin/master...master` → `0 0`.
 
 ---
 
-## Branch 2 — `flywheel5-turn5`
+## Branch 2: `flywheel5-turn5`
 
 Worktree: `git worktree add .worktrees/flywheel5 -b flywheel5-turn5 master` (after Task 6 is on master).
 
@@ -1085,7 +1085,7 @@ Worktree: `git worktree add .worktrees/flywheel5 -b flywheel5-turn5 master` (aft
 - Produces (`train_common`): `MAX_SEQ = 4096`, `LORA_R = 16`, `LORA_ALPHA = 32`, `PROCEDURE_SEED = 20260816`, `load_pairs(corpus: Path, fingerprint: Path) -> tuple[list, list]`, `class PairDataset`, `collate_single(batch)`, `tokenize_fn(tokenizer)`, `assert_batch_shape(tokenizer, ds)`, `training_args(out: Path, max_steps: int = -1, **overrides) -> TrainingArguments`, `PINNED_ARGS: dict` (the exact kwargs).
 - Produces (`train_moe`): `TARGET_MODULES` (12 names), `apply_lora(model, seed=PROCEDURE_SEED) -> PeftModel`, `assert_frozen(model) -> dict(trainable=int, total=int)`, `main(argv=None)`.
 
-- [ ] **Step 1: Failing `train_common` tests** — `tools/flywheel/tests/train_fixture.py`:
+- [ ] **Step 1: Failing `train_common` tests**: `tools/flywheel/tests/train_fixture.py`:
 
 ```python
 """A mini tokenizer that can spell `</action>` as one token, for the
@@ -1161,9 +1161,9 @@ class PinnedRecipe(unittest.TestCase):
             self.assertEqual((len(train), len(val)), (4, 2))
 ```
 
-- [ ] **Step 2: Run, expect ImportError** — `~/flywheel-venv/bin/python -m unittest tools.flywheel.tests.test_train_common -v 2>&1 | tail -3`.
+- [ ] **Step 2: Run, expect ImportError**: `~/flywheel-venv/bin/python -m unittest tools.flywheel.tests.test_train_common -v 2>&1 | tail -3`.
 
-- [ ] **Step 3: Write `tools/flywheel/train_common.py`** — move `load_pairs`, `PairDataset`, `collate_single`, `tokenize_fn`, `assert_batch_shape` and the constants out of `train.py` **byte-identical in body**, add:
+- [ ] **Step 3: Write `tools/flywheel/train_common.py`**: move `load_pairs`, `PairDataset`, `collate_single`, `tokenize_fn`, `assert_batch_shape` and the constants out of `train.py` **byte-identical in body**, add:
 
 ```python
 PINNED_ARGS = dict(num_train_epochs=2, per_device_train_batch_size=1, per_device_eval_batch_size=1,
@@ -1183,9 +1183,9 @@ def training_args(out: Path, max_steps: int = -1, **overrides):
 
 Module docstring: "Binding rules shared by `train.py` (turns 1-4, unsloth QLoRA) and `train_moe.py` (turn 5, bf16 LoRA on qwen3_5_moe). Moved here 2026-08-22 without behaviour change; pinned by `tests/test_train_common.py`." Then edit `train.py`: replace the moved definitions with `from tools.flywheel.train_common import (MAX_SEQ, LORA_R, LORA_ALPHA, PROCEDURE_SEED, load_pairs, PairDataset, collate_single, tokenize_fn, assert_batch_shape, training_args)`; `TrainingArguments(...)` call becomes `targs = training_args(args.out, args.max_steps)`; `random_state=PROCEDURE_SEED`; add to the header: "**Turn 5 (2026-08-22):** the shared helpers moved to `train_common.py`; behaviour pinned by `tests/test_train_common.py`; no hyperparameter, seed, or code path of the recipe changed." Keep `TARGET_MODULES` (the 7-name 14B list) in `train.py`.
 
-- [ ] **Step 4: Run** — `~/flywheel-venv/bin/python -m unittest tools.flywheel.tests.test_train_common -v` → 4 pass; `python3 -c "import ast,sys; ast.parse(open('tools/flywheel/train.py').read())"` (syntax; unsloth import is not exercised here).
+- [ ] **Step 4: Run**: `~/flywheel-venv/bin/python -m unittest tools.flywheel.tests.test_train_common -v` → 4 pass; `python3 -c "import ast,sys; ast.parse(open('tools/flywheel/train.py').read())"` (syntax; unsloth import is not exercised here).
 
-- [ ] **Step 5: Failing `train_moe` tests** — `tools/flywheel/tests/test_train_moe.py`:
+- [ ] **Step 5: Failing `train_moe` tests**: `tools/flywheel/tests/test_train_moe.py`:
 
 ```python
 import json, tempfile, unittest
@@ -1251,7 +1251,7 @@ class CpuSmoke(unittest.TestCase):
             self.assertTrue((out / "tokenizer_config.json").exists())
 ```
 
-- [ ] **Step 6: Run, expect ImportError** — `~/flywheel-venv/bin/python -m unittest tools.flywheel.tests.test_train_moe -v 2>&1 | tail -3`.
+- [ ] **Step 6: Run, expect ImportError**: `~/flywheel-venv/bin/python -m unittest tools.flywheel.tests.test_train_moe -v 2>&1 | tail -3`.
 
 - [ ] **Step 7: Write `tools/flywheel/train_moe.py`**:
 
@@ -1378,9 +1378,9 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 8: Run** — `~/flywheel-venv/bin/python -m unittest tools.flywheel.tests.test_train_moe -v` → 4 pass (the CPU smoke takes ~1 min). Then the whole venv suite: `~/flywheel-venv/bin/python -m unittest discover -s tools/flywheel/tests -t . 2>&1 | tail -3`; and stdlib: `python3 -m unittest discover -s tools -t . 2>&1 | tail -3` (the new tests skip).
+- [ ] **Step 8: Run**: `~/flywheel-venv/bin/python -m unittest tools.flywheel.tests.test_train_moe -v` → 4 pass (the CPU smoke takes ~1 min). Then the whole venv suite: `~/flywheel-venv/bin/python -m unittest discover -s tools/flywheel/tests -t . 2>&1 | tail -3`; and stdlib: `python3 -m unittest discover -s tools -t . 2>&1 | tail -3` (the new tests skip).
 
-- [ ] **Step 9: README** — add a `## train_moe.py — turn 5's bf16-LoRA recipe for qwen3_5_moe` section to `tools/flywheel/README.md` (the forced changes, the frozen set, the unpacked ruling, the usage line, the pod note "installs before the job").
+- [ ] **Step 9: README**: add a `## train_moe.py — turn 5's bf16-LoRA recipe for qwen3_5_moe` section to `tools/flywheel/README.md` (the forced changes, the frozen set, the unpacked ruling, the usage line, the pod note "installs before the job").
 
 - [ ] **Step 10: Commit**
 
@@ -1391,7 +1391,7 @@ git commit -m "feat(flywheel): train_moe.py — bf16 LoRA for qwen3_5_moe (exper
 
 ---
 
-### Task 8: RunPod network volume (HUMAN-GATED — the first spend of the turn)
+### Task 8: RunPod network volume (HUMAN-GATED: the first spend of the turn)
 
 **STOP for Brice's go.** Creates the volume only (storage billing ≈ $0.07/GB/mo); the 38 GB upload happens in Task 10 step 2 on the training pod, once, and is skipped on any later re-cut.
 
@@ -1405,7 +1405,7 @@ curl -s https://api.runpod.io/graphql -H "Authorization: Bearer $KEY" -H 'Conten
 python3 -c "import json;d=json.load(open('target/flywheel5/dc-availability.json'));[print(dc['id'],dc['name'],[g for g in dc['gpuAvailability'] if g['gpuTypeId']=='NVIDIA A100-SXM4-80GB']) for dc in d['data']['gpuTypes'][0]['nodeGroupDatacenters']]"
 ```
 
-Pick a DC with `available: true` for the SXM (prefer one that also lists `stockStatus` High/Medium); record its id as `DC`. If the schema rejects a field, `curl -s https://api.runpod.io/graphql … -d '{"query":"{ __type(name:\"DataCenter\") { fields { name } } }"}'` and adapt — record the working query in the ledger.
+Pick a DC with `available: true` for the SXM (prefer one that also lists `stockStatus` High/Medium); record its id as `DC`. If the schema rejects a field, `curl -s https://api.runpod.io/graphql … -d '{"query":"{ __type(name:\"DataCenter\") { fields { name } } }"}'` and adapt, record the working query in the ledger.
 
 - [ ] **Step 2: Create the volume**:
 
@@ -1415,7 +1415,7 @@ curl -s -X POST https://rest.runpod.io/v1/networkvolumes -H "Authorization: Bear
 VOL=$(python3 -c "import json;print(json.load(open('target/flywheel5/volume.json'))['id'])")
 ```
 
-- [ ] **Step 3: Ledger** — start `target/flywheel5/pod-ledger.md` (local) with: date, DC, volume id + size, the balance before (`curl -s https://api.runpod.io/graphql -H "Authorization: Bearer $KEY" -d '{"query":"{ myself { clientBalance } }"}'`), and every later pod id / start / stop / cost line. The training evidence (Task 10) copies it in.
+- [ ] **Step 3: Ledger**: start `target/flywheel5/pod-ledger.md` (local) with: date, DC, volume id + size, the balance before (`curl -s https://api.runpod.io/graphql -H "Authorization: Bearer $KEY" -d '{"query":"{ myself { clientBalance } }"}'`), and every later pod id / start / stop / cost line. The training evidence (Task 10) copies it in.
 
 ---
 
@@ -1425,20 +1425,20 @@ VOL=$(python3 -c "import json;print(json.load(open('target/flywheel5/volume.json
 - Create: `docs/superpowers/evidence/<date>-flywheel5-preregistration.md`
 - Local: `~/flywheel5/corpus.jsonl`, `~/flywheel5/fingerprint.json`, `~/flywheel5/SHAS.txt` (started)
 
-- [ ] **Step 1: Corpus copy + sha** — `mkdir -p ~/flywheel5 && cp ~/flywheel4/corpus.jsonl ~/flywheel5/corpus.jsonl && cp docs/superpowers/evidence/2026-08-21-flywheel4-fingerprint.json ~/flywheel5/fingerprint.json && sha256sum ~/flywheel5/corpus.jsonl` → must print `9c51a8668b4ce861dbe3c8528f59655a9a78eee12523f397b33e28d5d7928a7d`; write that line to `~/flywheel5/SHAS.txt` with the header "flywheel5 (turn 5) artifact SHA-256s".
+- [ ] **Step 1: Corpus copy + sha**: `mkdir -p ~/flywheel5 && cp ~/flywheel4/corpus.jsonl ~/flywheel5/corpus.jsonl && cp docs/superpowers/evidence/2026-08-21-flywheel4-fingerprint.json ~/flywheel5/fingerprint.json && sha256sum ~/flywheel5/corpus.jsonl` → must print `9c51a8668b4ce861dbe3c8528f59655a9a78eee12523f397b33e28d5d7928a7d`; write that line to `~/flywheel5/SHAS.txt` with the header "flywheel5 (turn 5) artifact SHA-256s".
 - [ ] **Step 2: Write the prereg** (template: `2026-08-21-flywheel4-preregistration.md`'s section order), with these contents, all specific:
   - **Subject:** `qwen36-reap48-flywheel5` = REAP-48-ours (sha `8027ca0a…`) + turn-5 LoRA, served Q4_K_M; model line `qwen36-reap48`; gates.md 2026-08-22 amendment cited.
   - **The battery (decides alone; all under envelope-v4, greedy):** (1) G4 on codec-tasks-v1, pass ≥16/20; (2) G5 on codec-tasks-v4-mixed, pass ≥13/16 per class; decided/provisional by the two-sided rule, stated separately. Two boots, identical configs (the Task 6 TOML with the new model name/path), **boot 1 decides**, boot 2 corroborates. **Success = both pass. Kill: G4 < 16/20 OR refuse < 8/16 → adapter shelved, recorded with anatomy. Secondary endpoints never kill.** Reporting discipline bT1/R1, bT10/R1 verbatim.
   - **The measured anchors (from `<date>-g5v4-reap48-baselines.md`, verbatim):** boot 1's G4, patch, refuse, composition, all endpoints, grant-violation rows, verb histogram, serving facts; then "What fw5 must do, stated as arithmetic" (refuse ≥13 of 16 = +N over the anchor; patch must not fall below 13; G4 must not fall below 16).
-  - **Secondary endpoints:** the six with denominators (productive find /6, find-usage /6, run-before-done /5, per-family 6/5/5, productive run /5, reason-grounding over the 11 target-present refuse fixtures; zero spans = unmeasured) + the two reported line facts (grant-violation rows; verb histogram, `done` > 32 as the over-eagerness signature) — all computed by `tools/evidence/recompute.py` (keyed join, ordinal cross-check asserted).
-  - **Corpus identity:** `~/flywheel5/corpus.jsonl` = turn-4 corpus byte-identical, sha; the turn-4 fingerprint and contamination report apply verbatim (nothing regenerated); "the pruner was calibrated on 512 samples (seed 42) of this same corpus — stated, not a confound claim".
+  - **Secondary endpoints:** the six with denominators (productive find /6, find-usage /6, run-before-done /5, per-family 6/5/5, productive run /5, reason-grounding over the 11 target-present refuse fixtures; zero spans = unmeasured) + the two reported line facts (grant-violation rows; verb histogram, `done` > 32 as the over-eagerness signature), all computed by `tools/evidence/recompute.py` (keyed join, ordinal cross-check asserted).
+  - **Corpus identity:** `~/flywheel5/corpus.jsonl` = turn-4 corpus byte-identical, sha; the turn-4 fingerprint and contamination report apply verbatim (nothing regenerated); "the pruner was calibrated on 512 samples (seed 42) of this same corpus, stated, not a confound claim".
   - **Training (pinned):** the spec §4.2 recipe verbatim; `train_moe.py` at the branch commit sha; TARGET_MODULES list; "experts + router frozen, asserted at load (the trainable count is recorded in the training evidence)"; unpacked bs 1 ruling + why; seeds statement (20260816 unchanged = procedure identity; no bitwise-reproducibility claim); pod pins; post-train chain; artifact names (`~/flywheel5/adapter/`, `~/flywheel5/qwen36-reap48-flywheel5-Q4_K_M.gguf`).
   - **Cost bounds (upper):** upload ≈ $0.8 · train ≈ 3.7 h ≈ $5.1 · evals ≈ $0.5 · post-train ≈ $0.5 · download ≈ $0.3 → ≈ $7.2 of the $10 cap; the cap is a stop rule; a stop = pod down, report, ask.
-  - **Honesty lines** (each plainly): bf16-trained / Q4-served; torch-fallback DeltaNet on the pod (timings are upper bounds); the planted-test leak caveat carried from turn 4; the `Found instead:` frame and reason-grounding's known limitation; TaskStep now carries args (a journal addition since turn 4 — the recompute's keyed join is new, the ordinal join is still asserted alongside).
+  - **Honesty lines** (each plainly): bf16-trained / Q4-served; torch-fallback DeltaNet on the pod (timings are upper bounds); the planted-test leak caveat carried from turn 4; the `Found instead:` frame and reason-grounding's known limitation; TaskStep now carries args (a journal addition since turn 4. The recompute's keyed join is new, the ordinal join is still asserted alongside).
   - **Honest possibilities, pre-registered:** spec §5's list verbatim (patch-at-the-floor over-refusal; no transfer through attention+shared LoRA; persisting grant violations; speed/window at the fixed geometry; eval-loss uninterpreted; slow fallback → stop rule; reason-grounding at ceiling).
   - **Amendment rule:** separate dated files; nothing re-run; baselines never re-run for a nicer verdict.
   - **Committed artifacts.**
-- [ ] **Step 3: Commit BEFORE any pod** — `docs: pre-register the flywheel5 battery before any training step` — and **push the branch** (`git push -u origin flywheel5-turn5`) so the ordering is provable from the remote too.
+- [ ] **Step 3: Commit BEFORE any pod**, `docs: pre-register the flywheel5 battery before any training step`, and **push the branch** (`git push -u origin flywheel5-turn5`) so the ordering is provable from the remote too.
 
 ---
 
@@ -1461,7 +1461,7 @@ POD=$(python3 -c "import json;print(json.load(open('target/flywheel5/pod.json'))
 
 If COMMUNITY returns no machine, retry with `"cloudType":"SECURE"` and record `costPerHr`. Poll `curl -s https://rest.runpod.io/v1/pods/$POD -H "Authorization: Bearer $KEY"` every 30 s for `publicIp` + a `portMappings` entry for 22; **if none within 5 min: `curl -s -X DELETE https://rest.runpod.io/v1/pods/$POD …`, record the waste, re-cut**. `SSH="ssh -i ~/.ssh/runpod_spike -p $PORT root@$IP"`. Start a persistent Monitor (hourly): pods count (`GET /pods` → length) and `myself { clientBalance }`; stop condition pods == 0 after teardown.
 
-- [ ] **Step 2: Upload the base once (skip if `/workspace/Qwen3.6-35B-A3B-REAP48-ours/model.safetensors` already exists with the right sha)** — on the box: `cd ~/models/hf/Qwen3.6-35B-A3B-REAP48-ours && split -b 7G -d model.safetensors /tmp/claude-1000/-home-brice/*/scratchpad/reap48.part.` (use this session's scratchpad dir); `$SSH mkdir -p /workspace/Qwen3.6-35B-A3B-REAP48-ours /workspace/parts`; in parallel (6 at once): `for p in reap48.part.0[0-5]; do scp -i ~/.ssh/runpod_spike -P $PORT $p root@$IP:/workspace/parts/ & done; wait`; then on the pod: `cat /workspace/parts/reap48.part.0? > /workspace/Qwen3.6-35B-A3B-REAP48-ours/model.safetensors && sha256sum …/model.safetensors` → must equal `8027ca0a8277b540cd4c62eb7a5bdf6028875e84b33ddcf4f9cd4b0e9d63423b` (else delete and re-transfer the failing part; never train on an unverified base); `rm -rf /workspace/parts`; scp the small files (`config.json generation_config.json tokenizer.json tokenizer_config.json vocab.json merges.txt chat_template.jinja reap_pruning.json summary.json`) and `~/flywheel5/corpus.jsonl` + `fingerprint.json` → `/workspace/flywheel5/`; `sha256sum /workspace/flywheel5/corpus.jsonl` → `9c51a866…`. Record minutes and MB/s.
+- [ ] **Step 2: Upload the base once (skip if `/workspace/Qwen3.6-35B-A3B-REAP48-ours/model.safetensors` already exists with the right sha)**: on the box: `cd ~/models/hf/Qwen3.6-35B-A3B-REAP48-ours && split -b 7G -d model.safetensors /tmp/claude-1000/-home-brice/*/scratchpad/reap48.part.` (use this session's scratchpad dir); `$SSH mkdir -p /workspace/Qwen3.6-35B-A3B-REAP48-ours /workspace/parts`; in parallel (6 at once): `for p in reap48.part.0[0-5]; do scp -i ~/.ssh/runpod_spike -P $PORT $p root@$IP:/workspace/parts/ & done; wait`; then on the pod: `cat /workspace/parts/reap48.part.0? > /workspace/Qwen3.6-35B-A3B-REAP48-ours/model.safetensors && sha256sum …/model.safetensors` → must equal `8027ca0a8277b540cd4c62eb7a5bdf6028875e84b33ddcf4f9cd4b0e9d63423b` (else delete and re-transfer the failing part; never train on an unverified base); `rm -rf /workspace/parts`; scp the small files (`config.json generation_config.json tokenizer.json tokenizer_config.json vocab.json merges.txt chat_template.jinja reap_pruning.json summary.json`) and `~/flywheel5/corpus.jsonl` + `fingerprint.json` → `/workspace/flywheel5/`; `sha256sum /workspace/flywheel5/corpus.jsonl` → `9c51a866…`. Record minutes and MB/s.
 
 - [ ] **Step 3: Environment (all BEFORE any job; then freeze)**:
 
@@ -1476,9 +1476,9 @@ $SSH 'pip install --break-system-packages "transformers==5.5.0" "peft==0.20.0" "
 
 Expect `2.9.1+cu129 5.5.0 0.20.0 True`. **From here on, no `pip install` on this pod.**
 
-- [ ] **Step 4: Smoke (pre-registered part of the procedure)** — `$SSH 'cd /workspace/bloomery && python -m tools.flywheel.train_moe --corpus /workspace/flywheel5/corpus.jsonl --fingerprint /workspace/flywheel5/fingerprint.json --base /workspace/Qwen3.6-35B-A3B-REAP48-ours --out /workspace/flywheel5/smoke --max-steps 5 2>&1 | tail -40'` → prints `model class Qwen3_5MoeForCausalLM; num_experts=133; layers=40`, the trainable count (record it; spike: 21.17 M), `label-check ok`, 5 steps, `EXIT` 0. Record peak VRAM (`nvidia-smi --query-gpu=memory.used --format=csv` during the run). If OOM or any assertion: pod down, report, ask.
+- [ ] **Step 4: Smoke (pre-registered part of the procedure)**: `$SSH 'cd /workspace/bloomery && python -m tools.flywheel.train_moe --corpus /workspace/flywheel5/corpus.jsonl --fingerprint /workspace/flywheel5/fingerprint.json --base /workspace/Qwen3.6-35B-A3B-REAP48-ours --out /workspace/flywheel5/smoke --max-steps 5 2>&1 | tail -40'` → prints `model class Qwen3_5MoeForCausalLM; num_experts=133; layers=40`, the trainable count (record it; spike: 21.17 M), `label-check ok`, 5 steps, `EXIT` 0. Record peak VRAM (`nvidia-smi --query-gpu=memory.used --format=csv` during the run). If OOM or any assertion: pod down, report, ask.
 
-- [ ] **Step 5: The run, detached** — write `/workspace/flywheel5/train-wrapper.sh` on the pod:
+- [ ] **Step 5: The run, detached**: write `/workspace/flywheel5/train-wrapper.sh` on the pod:
 
 ```bash
 #!/usr/bin/env bash
@@ -1500,7 +1500,7 @@ exit "$rc"
 
 `$SSH 'chmod +x /workspace/flywheel5/train-wrapper.sh && setsid nohup /workspace/flywheel5/train-wrapper.sh > /workspace/flywheel5/train-wrapper.out 2>&1 < /dev/null &'`. Poll every 15 min: `$SSH 'tail -3 /workspace/flywheel5/train.log; ls /workspace/flywheel5/train.DONE 2>/dev/null'` (log file, never `pgrep`). Expected ≈ 3.7 h upper bound (8,680 micro-steps at ≤1.52 s); record step rate, losses at each `logging_steps`, eval losses. **Stop rule:** if the ledger's projected total would exceed $10, stop the pod at the next poll, report, ask.
 
-- [ ] **Step 6: Post-train chain on the pod** — `/workspace/flywheel5/posttrain-wrapper.sh`:
+- [ ] **Step 6: Post-train chain on the pod**: `/workspace/flywheel5/posttrain-wrapper.sh`:
 
 ```bash
 #!/usr/bin/env bash
@@ -1538,13 +1538,13 @@ PY
 } > /workspace/flywheel5/posttrain.log 2>&1
 ```
 
-Run it detached the same way; expect `block_count 40` (the source config carries `mtp_num_hidden_layers: 0`; a 41 here is a STOP — do not metadata-patch, report). Note: the merge loads 38 GB on CPU RAM — the pod has ≥ 80 GB RAM? Check `free -g` first; if not, load with `device_map="cuda"` instead (the GPU is idle after training).
+Run it detached the same way; expect `block_count 40` (the source config carries `mtp_num_hidden_layers: 0`; a 41 here is a STOP, do not metadata-patch, report). Note: the merge loads 38 GB on CPU RAM. The pod has ≥ 80 GB RAM? Check `free -g` first; if not, load with `device_map="cuda"` instead (the GPU is idle after training).
 
-- [ ] **Step 7: Bring it home** — chunked download of the Q4_K_M GGUF (split on the pod into 6 parts, parallel scp, cat, sha compare to the pod's line), plus `adapter/` (`adapter_model.safetensors`, `adapter_config.json`, tokenizer files), `train.log`, `trainer_state.json`, `pip-freeze.txt`, `smoke/` logs, `posttrain.log` → `~/flywheel5/`. `sha256sum ~/flywheel5/qwen36-reap48-flywheel5-Q4_K_M.gguf ~/flywheel5/adapter/adapter_model.safetensors ~/flywheel5/corpus.jsonl >> ~/flywheel5/SHAS.txt`. Local boot sanity is Task 11's job — no boot here.
+- [ ] **Step 7: Bring it home**: chunked download of the Q4_K_M GGUF (split on the pod into 6 parts, parallel scp, cat, sha compare to the pod's line), plus `adapter/` (`adapter_model.safetensors`, `adapter_config.json`, tokenizer files), `train.log`, `trainer_state.json`, `pip-freeze.txt`, `smoke/` logs, `posttrain.log` → `~/flywheel5/`. `sha256sum ~/flywheel5/qwen36-reap48-flywheel5-Q4_K_M.gguf ~/flywheel5/adapter/adapter_model.safetensors ~/flywheel5/corpus.jsonl >> ~/flywheel5/SHAS.txt`. Local boot sanity is Task 11's job, no boot here.
 
-- [ ] **Step 8: Teardown** — `curl -s -X DELETE https://rest.runpod.io/v1/pods/$POD -H "Authorization: Bearer $KEY"`; verify `GET /pods` → 0 and GraphQL `myself { pods { id } }` → `[]`; balance after; Monitor stops. The volume stays (holds the base; ≈ $3.50/mo at 50 GB — Brice decides later whether to delete it).
+- [ ] **Step 8: Teardown**: `curl -s -X DELETE https://rest.runpod.io/v1/pods/$POD -H "Authorization: Bearer $KEY"`; verify `GET /pods` → 0 and GraphQL `myself { pods { id } }` → `[]`; balance after; Monitor stops. The volume stays (holds the base; ≈ $3.50/mo at 50 GB: Brice decides later whether to delete it).
 
-- [ ] **Step 9: Evidence** — `docs/superpowers/evidence/<date>-flywheel5-training.md`: pod ledger (ids, DC, cloud type, $/h, start/stop, cost per phase, balance before/after), environment freeze (the `pip freeze` verbatim or its sha + path), upload metrics, smoke output, trainable count, step rate, losses (train curve at `logging_steps`, eval losses, final), wall time, post-train timings, **the sha chain** (base `8027ca0a…` re-verified on the pod; corpus `9c51a866…` before and after; adapter; bf16 GGUF; Q4_K_M on the pod and at home, equal), `block_count 40`, any deviation from the runbook verbatim. Commit `docs: flywheel5 training record — rental run, sha chain, costs`.
+- [ ] **Step 9: Evidence**: `docs/superpowers/evidence/<date>-flywheel5-training.md`: pod ledger (ids, DC, cloud type, $/h, start/stop, cost per phase, balance before/after), environment freeze (the `pip freeze` verbatim or its sha + path), upload metrics, smoke output, trainable count, step rate, losses (train curve at `logging_steps`, eval losses, final), wall time, post-train timings, **the sha chain** (base `8027ca0a…` re-verified on the pod; corpus `9c51a866…` before and after; adapter; bf16 GGUF; Q4_K_M on the pod and at home, equal), `block_count 40`, any deviation from the runbook verbatim. Commit `docs: flywheel5 training record — rental run, sha chain, costs`.
 
 ---
 
@@ -1552,11 +1552,11 @@ Run it detached the same way; expect `block_count 40` (the source config carries
 
 **STOP for Brice's go before the first boot.**
 
-- [ ] **Step 1: Boot configs** — the Task 6 TOML twice, with `[models."qwen36-reap48-flywheel5"]` `path = "/home/brice/flywheel5/qwen36-reap48-flywheel5-Q4_K_M.gguf"`, `data_dir` under `target/fw5-live/boot{1,2}/data`, ports 8399/8398. Preflight as Task 6 (no daemon, `nm -C … ggml_vulkan`, no source change since the featured build — if Branch 2 changed no Rust, the Task 5 binary stands; record its mtime).
-- [ ] **Step 2: Boot 1 (decides), then boot 2** — exactly Task 6 steps 3–5, digest must equal the `SHAS.txt` Q4_K_M line; copy journals to `docs/superpowers/evidence/<date>-flywheel5-boot{1,2}-{journal,tasks}.jsonl`; recompute both → `…-boot{1,2}-recompute.json` (`keyed`, `keyed_equals_ordinal true`, no violations, `journaled_verdict_matches true`).
-- [ ] **Step 3: Judge against the prereg verbatim** — `docs/superpowers/evidence/<date>-flywheel5-battery.md`: `## 1. Verdicts` (boot 1: G4 landed/n + flag; patch; refuse; pass/kill per the rule; `done_trust`), `## 2. Identity chain` (master/branch shas, binary, PIDs via `readlink`, GGUF sha = daemon digest, adapter sha, corpus sha, fixture TOML shas, assay pin), `## 3. Method and preflight`, `## 4. Boot 1`, `## 5. Boot 2` (+ identical-or-not), `## 6. The named reads` — the **refuse class per family row by row** (the leg the turn exists to move; anatomy from a script), the **patch class: held or regressed** (vs the anchor's 13/16), grant-violation rows vs the anchor's, `done` count vs 32, the 5 run-granted and 6 find-shaped rows, reason-grounding with its real denominator and the by-eye read kept separate, surprises verbatim, `## 7. Verdict vs the pre-registration`, `## 8. Ladder under envelope-v4` (stock-14B, fw3, fw4, REAP-48-ours untrained, fw5 — descriptive, no causal sentence across bases), `## 9. Caveats`, `## 10. Committed artifacts`. Numbers from the recompute JSON only.
-- [ ] **Step 4: CARRIED-DEBT + README** — append a "Delivered in flywheel turn 5" section to `docs/CARRIED-DEBT.md` (struck on arrival: the TaskStep observability debt, the hybrid-geometry defects 1 and 4 from the spike; recorded-not-fixed: compute-buffer growth with n_ctx; deferred: packing side study, honesty instrument = turn 6, router/expert training = parked research; process lessons of the wave); README: one line for the new line and the `ctx_overhead_mib = 512` hybrid note.
-- [ ] **Step 5: Evidence review, commit, PR, merge** — independent re-derivation of the headline counts with jq + the recompute JSON check; fix round; commits `docs: the flywheel turn-5 battery — <verdict>` and `docs: CARRIED-DEBT — the flywheel turn-5 merge-time append`; `git push`; `gh pr create --title "flywheel turn 5: the REAP-48 line's first adapter — <verdict>"`; Brice merges (or delegated: from the main checkout on master, `gh pr merge <N> --merge --delete-branch && git pull --ff-only`); verify `git rev-list --left-right --count origin/master...master` → `0 0`; remove the worktree; update the memory file with the verdict and what is next (turn 6 = honesty instrument spec; packing side study).
+- [ ] **Step 1: Boot configs**: the Task 6 TOML twice, with `[models."qwen36-reap48-flywheel5"]` `path = "/home/brice/flywheel5/qwen36-reap48-flywheel5-Q4_K_M.gguf"`, `data_dir` under `target/fw5-live/boot{1,2}/data`, ports 8399/8398. Preflight as Task 6 (no daemon, `nm -C … ggml_vulkan`, no source change since the featured build, if Branch 2 changed no Rust, the Task 5 binary stands; record its mtime).
+- [ ] **Step 2: Boot 1 (decides), then boot 2**: exactly Task 6 steps 3–5, digest must equal the `SHAS.txt` Q4_K_M line; copy journals to `docs/superpowers/evidence/<date>-flywheel5-boot{1,2}-{journal,tasks}.jsonl`; recompute both → `…-boot{1,2}-recompute.json` (`keyed`, `keyed_equals_ordinal true`, no violations, `journaled_verdict_matches true`).
+- [ ] **Step 3: Judge against the prereg verbatim**: `docs/superpowers/evidence/<date>-flywheel5-battery.md`: `## 1. Verdicts` (boot 1: G4 landed/n + flag; patch; refuse; pass/kill per the rule; `done_trust`), `## 2. Identity chain` (master/branch shas, binary, PIDs via `readlink`, GGUF sha = daemon digest, adapter sha, corpus sha, fixture TOML shas, assay pin), `## 3. Method and preflight`, `## 4. Boot 1`, `## 5. Boot 2` (+ identical-or-not), `## 6. The named reads`: the **refuse class per family row by row** (the leg the turn exists to move; anatomy from a script), the **patch class: held or regressed** (vs the anchor's 13/16), grant-violation rows vs the anchor's, `done` count vs 32, the 5 run-granted and 6 find-shaped rows, reason-grounding with its real denominator and the by-eye read kept separate, surprises verbatim, `## 7. Verdict vs the pre-registration`, `## 8. Ladder under envelope-v4` (stock-14B, fw3, fw4, REAP-48-ours untrained, fw5, descriptive, no causal sentence across bases), `## 9. Caveats`, `## 10. Committed artifacts`. Numbers from the recompute JSON only.
+- [ ] **Step 4: CARRIED-DEBT + README**: append a "Delivered in flywheel turn 5" section to `docs/CARRIED-DEBT.md` (struck on arrival: the TaskStep observability debt, the hybrid-geometry defects 1 and 4 from the spike; recorded-not-fixed: compute-buffer growth with n_ctx; deferred: packing side study, honesty instrument = turn 6, router/expert training = parked research; process lessons of the wave); README: one line for the new line and the `ctx_overhead_mib = 512` hybrid note.
+- [ ] **Step 5: Evidence review, commit, PR, merge**: independent re-derivation of the headline counts with jq + the recompute JSON check; fix round; commits `docs: the flywheel turn-5 battery — <verdict>` and `docs: CARRIED-DEBT — the flywheel turn-5 merge-time append`; `git push`; `gh pr create --title "flywheel turn 5: the REAP-48 line's first adapter — <verdict>"`; Brice merges (or delegated: from the main checkout on master, `gh pr merge <N> --merge --delete-branch && git pull --ff-only`); verify `git rev-list --left-right --count origin/master...master` → `0 0`; remove the worktree; update the memory file with the verdict and what is next (turn 6 = honesty instrument spec; packing side study).
 
 ---
 
@@ -1565,4 +1565,4 @@ Run it detached the same way; expect `block_count 40` (the source config carries
 - **Spec coverage:** §2 → Task 2 (both derived fields, both charge sites, `/status`, comment amendments, skip-if-absent real-GGUF test; `ctx_overhead_mib = 512` + no override in Tasks 6/11 configs); §3 → Task 3 (`args`, `agent`, compat pins, probe tests) + Task 4 (recompute, turn-4 pins, keyed+ordinal); §4.1/§4.2 → Task 7 (+ pinned args test, 12 targets, freeze assertion, seed test, CPU smoke); §4.3 → Tasks 8, 10 (volume, DC binding, 150 GB, image, pins-before-job, smoke, detached run, post-train chain, download-only-what's-needed, teardown, cost bounds + stop rule); §5 → Task 1 (gates amendment), Task 6 (two identical boots, boot 1 anchor, pre-registered expectations, serving facts), Task 9 (prereg before the pod, all sections), Task 11 (battery, rule verbatim, ladder, named reads); §6 → each task's tests + the house rules in Global Constraints; §7 non-goals → no task touches a frozen set, envelope, scoring, enforcement, packing, router/expert training, HF publication; §8 order → Tasks 1–11 in that order.
 - **Placeholder scan:** the one deliberate name-placeholder is flagged in Task 2 step 6 (`register_like_the_other_tests` = copy the file's own registration lines); `<date>` in evidence filenames is the day produced (spec §5 rule); `$DC`, `$VOL`, `$POD`, `$IP`, `$PORT` are shell variables set in-step.
 - **Type/name consistency:** `attention_layers` / `recurrent_state_bytes` (Task 2 struct, tests, pager accessor, status field); `args` / `agent` (Task 3 events, `StepReport`, `TaskStepRecord`, helpers, Task 4 `journal.py` reads `fx.get("agent")`, `r["id"]`); `recompute()` signature `(journal, tasks, g5_fixtures, g4_set)` used identically in Task 4 tests and Tasks 6/11 CLI; `train_common` names used by `train.py`, `train_moe.py`, and both test files; `apply_lora` / `assert_frozen` / `main(argv)` in Task 7 tests and code; `~/flywheel5/` artifact names identical in Tasks 9, 10, 11.
-- **Verified pins (2026-08-22, jq over the committed journals):** fw4-g4 20/20, 60 steps, 20 groups; fw4-g5 20/20 · 16/16 · 16/16, 151 steps, 52 groups, 0 grant violations, histogram {done 52, find 6, patch 36, read 52, run 5}, 5 `ran … exit 0` rows; fw3@v4 20/20 · 15/16 · 16/16, 149 steps, 5 grant violations, {52, 6, 35, 51, 5}, 0 exit-0 runs; stock@v4 6/20 · 5/16 · 8/16, 203 steps, **42** grant-violation rows (the spike's "38" was a different count — the journal wins), {done 32, find 9, patch 94, read 68}. Composition and endpoint counts come from the committed evidence tables (baselines §5.2/§5.3/§6.2/§6.3; battery §5.2/§5.3).
+- **Verified pins (2026-08-22, jq over the committed journals):** fw4-g4 20/20, 60 steps, 20 groups; fw4-g5 20/20 · 16/16 · 16/16, 151 steps, 52 groups, 0 grant violations, histogram {done 52, find 6, patch 36, read 52, run 5}, 5 `ran … exit 0` rows; fw3@v4 20/20 · 15/16 · 16/16, 149 steps, 5 grant violations, {52, 6, 35, 51, 5}, 0 exit-0 runs; stock@v4 6/20 · 5/16 · 8/16, 203 steps, **42** grant-violation rows (the spike's "38" was a different count: the journal wins), {done 32, find 9, patch 94, read 68}. Composition and endpoint counts come from the committed evidence tables (baselines §5.2/§5.3/§6.2/§6.3; battery §5.2/§5.3).

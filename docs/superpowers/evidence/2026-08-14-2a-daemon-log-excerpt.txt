@@ -1,4 +1,4 @@
-bloomery — provenance for config.rs's ctx_overhead_mib default (384 MiB)
+bloomery, provenance for config.rs's ctx_overhead_mib default (384 MiB)
 
 Verbatim excerpt from the daemon log of the ABORTED first natural-pressure
 attempt, 2026-08-14 16:45:02-05:00 (see 2026-08-14-2a-natural-pressure.md,

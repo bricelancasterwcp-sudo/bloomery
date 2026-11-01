@@ -2,30 +2,30 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a task-scoped verification probe to the memory organ: at retrieval, before injection, re-run the episode's stored `run_evidence.argv` under the incoming task's grant; pass injects, clean nonzero exit contradicts and silences, ungranted/demoted skips, timeout/spawn-failure is inconclusive — all config-gated off by default.
+**Goal:** Add a task-scoped verification probe to the memory organ: at retrieval, before injection, re-run the episode's stored `run_evidence.argv` under the incoming task's grant; pass injects, clean nonzero exit contradicts and silences, ungranted/demoted skips, timeout/spawn-failure is inconclusive, all config-gated off by default.
 
 **Architecture:** All behavior lives at the worker's `organ_before_run` seam (`task/registry.rs`): after the exact-match retrieval and before rendering, a covered probe executes through the existing `exec_run` (same grant check, env, bounds, and process-group discipline as a task's own `run` verb), with the store lock NOT held across the execution. One additive field on `Event::MemoryStamp` ledgers the verdict; `MemoryConfig`/`MemoryContext` gain the `refalsify` flag.
 
 **Tech Stack:** Rust workspace, real-subprocess integration tests mirroring `memory_task_test.rs`, JSONL journal/store with serde-default compat pins.
 
-**Spec:** `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md` — read it first; every rule below argues from it. The organ's own spec (`2026-08-26-memory-organ-design.md`) is the surrounding law.
+**Spec:** `docs/superpowers/specs/2026-08-27-refalsify-on-exact-design.md`, read it first; every rule below argues from it. The organ's own spec (`2026-08-26-memory-organ-design.md`) is the surrounding law.
 
 ## Global Constraints
 
-- Flag-off identity: with `[memory] refalsify` absent or `false`, behavior and journal bytes are identical to today. Existing memory suites (`memory_task_test.rs`, `memory_render_test.rs`, `memory_capture_test.rs`, `memory_mint_test.rs`, `memory_retrieve_test.rs`, `memory_store_test.rs`, `api_memory_test.rs`) pass UNTOUCHED except where a struct literal needs the new field — never an expected-string change.
-- The probe executes ONLY through `exec_run` with the incoming task's `Grant`, `cwd`, and `ExecBounds` — no second executor, no env deviation, no bespoke timeout knob.
+- Flag-off identity: with `[memory] refalsify` absent or `false`, behavior and journal bytes are identical to today. Existing memory suites (`memory_task_test.rs`, `memory_render_test.rs`, `memory_capture_test.rs`, `memory_mint_test.rs`, `memory_retrieve_test.rs`, `memory_store_test.rs`, `api_memory_test.rs`) pass UNTOUCHED except where a struct literal needs the new field, never an expected-string change.
+- The probe executes ONLY through `exec_run` with the incoming task's `Grant`, `cwd`, and `ExecBounds`, no second executor, no env deviation, no bespoke timeout knob.
 - The store `Mutex` is NEVER held across the probe's execution (a probe can run `run_timeout_secs`): lock→retrieve→unlock, probe, then on failure lock→`mark_contradicted`→unlock.
-- Verdict classification: only a genuine nonzero exit code contradicts. `exec_run`'s clean-exit Observation is `failed: false` with pinned outcome `"ran {program} exit {code}"`; code 0 → `passed`, code > 0 → `failed`, code -1 (the signal-death "no code" sentinel) → `inconclusive`. Every `failed: true` Observation (timeout `"ran {program} timed out"`, spawn/wait failures `"run failed: ..."`) → `inconclusive`. The grant refusal arm is unreachable behind the pre-check — `grant.check_command(argv)` runs first and a non-Ok skips before anything spawns.
+- Verdict classification: only a genuine nonzero exit code contradicts. `exec_run`'s clean-exit Observation is `failed: false` with pinned outcome `"ran {program} exit {code}"`; code 0 → `passed`, code > 0 → `failed`, code -1 (the signal-death "no code" sentinel) → `inconclusive`. Every `failed: true` Observation (timeout `"ran {program} timed out"`, spawn/wait failures `"run failed: ..."`) → `inconclusive`. The grant refusal arm is unreachable behind the pre-check: `grant.check_command(argv)` runs first and a non-Ok skips before anything spawns.
 - Demotion outranks refalsification: `spec.mutating_verbs == false` → skip (`skipped_ungranted`), even with a covering grant.
 - The retrieval MATCH is untouched: no change to `retrieve()`, the fingerprint gate, the single-injection cap, or the rendered block. A probe never renders into any prompt and never journals a `TaskStep`.
-- `Event::MemoryStamp` gains `refalsify: Option<String>` with `#[serde(default)]` — absent-key replay as `None` (the house additive pattern). No new counters, no record-schema change.
+- `Event::MemoryStamp` gains `refalsify: Option<String>` with `#[serde(default)]`, absent-key replay as `None` (the house additive pattern). No new counters, no record-schema change.
 - Claim discipline: no number from this arc's tests appears in a capability sentence, anywhere.
 - Run verification with full output redirected to a file and check the exit code; NEVER pipe through tail/head without capturing the exit.
 - Commit per green step, conventional commits, no attribution footers. Featured binary (`cargo build -p bloomery-daemon --features vulkan`) rebuilt only in the FINAL task, after the last test run. Do NOT push.
 
 ---
 
-### Task 1: The flag — config, context, and organ plumbing (behavior-inert)
+### Task 1: The flag: config, context, and organ plumbing (behavior-inert)
 
 **Files:**
 - Modify: `crates/bloomery-daemon/src/config.rs` (`MemoryConfig`, ~line 441)
@@ -55,12 +55,12 @@ fn memory_refalsify_defaults_false_and_parses_true() {
 }
 ```
 
-Adapt the deserialization entry point to however the existing `[memory]` tests parse (whole-`Config` fixture vs direct `MemoryConfig` — copy their pattern; the assertions above are the contract).
+Adapt the deserialization entry point to however the existing `[memory]` tests parse (whole-`Config` fixture vs direct `MemoryConfig`, copy their pattern; the assertions above are the contract).
 
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `cargo test -p bloomery-daemon --test config_test 2>&1 | tee /tmp/r1.log; echo exit=$?`
-Expected: FAIL to compile — no field `refalsify`.
+Expected: FAIL to compile, no field `refalsify`.
 
 - [ ] **Step 3: Add the field and thread it**
 
@@ -83,7 +83,7 @@ Update the `Default` impl (`refalsify: false`). `MemoryContext` gains `pub refal
 - [ ] **Step 4: Run the workspace**
 
 Run: `cargo test --workspace 2>&1 > /tmp/r1full.log; echo exit=$?; grep -E "test result|FAILED" /tmp/r1full.log | head`
-Expected: all green, zero ignored — the flag exists and changes nothing.
+Expected: all green, zero ignored: the flag exists and changes nothing.
 
 - [ ] **Step 5: Commit**
 
@@ -94,7 +94,7 @@ git commit -m "feat: [memory] refalsify flag — config, context, organ plumbing
 
 ---
 
-### Task 2: The stamp ledger — `refalsify` on `Event::MemoryStamp` (still behavior-inert)
+### Task 2: The stamp ledger: `refalsify` on `Event::MemoryStamp` (still behavior-inert)
 
 **Files:**
 - Modify: `crates/bloomery-core/src/journal.rs` (`Event::MemoryStamp`, ~line 371)
@@ -103,7 +103,7 @@ git commit -m "feat: [memory] refalsify flag — config, context, organ plumbing
 
 **Interfaces:**
 - Consumes: nothing from Task 1.
-- Produces: `Event::MemoryStamp { .., refalsify: Option<String> }` (`#[serde(default)]`); `OrganDecision { .., refalsify: Option<&'static str> }` with `None` in `OrganDecision::off()` and every current constructor — Task 3 sets real values. The stamp emit site maps `decision.refalsify.map(String::from)` into the event.
+- Produces: `Event::MemoryStamp { .., refalsify: Option<String> }` (`#[serde(default)]`); `OrganDecision { .., refalsify: Option<&'static str> }` with `None` in `OrganDecision::off()` and every current constructor: Task 3 sets real values. The stamp emit site maps `decision.refalsify.map(String::from)` into the event.
 
 - [ ] **Step 1: Write the failing compat tests**
 
@@ -145,9 +145,9 @@ fn a_memory_stamp_round_trips_its_refalsify_verdict() {
 }
 ```
 
-Capture the `raw` literal by serializing a current `MemoryStamp` BEFORE adding the field (or copy from an existing test's bytes) — the pre-change wire format is the thing under pin.
+Capture the `raw` literal by serializing a current `MemoryStamp` BEFORE adding the field (or copy from an existing test's bytes). The pre-change wire format is the thing under pin.
 
-- [ ] **Step 2: Run to verify failure** — compile error, no field `refalsify`.
+- [ ] **Step 2: Run to verify failure**: compile error, no field `refalsify`.
 
 - [ ] **Step 3: Implement**
 
@@ -167,7 +167,7 @@ Capture the `raw` literal by serializing a current `MemoryStamp` BEFORE adding t
 
 `OrganDecision` gains `refalsify: Option<&'static str>` (doc: set only by the Task-3 probe; `None` = un-probed). Set `refalsify: None` in `OrganDecision::off()` and both in-function constructors; the stamp emit site passes `refalsify: decision.refalsify.map(String::from)`. `cargo check --workspace` and fix any other `MemoryStamp { .. }` literal (tests) with `refalsify: None`.
 
-- [ ] **Step 4: Workspace green** — `cargo test --workspace 2>&1 > /tmp/r2full.log; echo exit=$?` all green, zero ignored.
+- [ ] **Step 4: Workspace green**: `cargo test --workspace 2>&1 > /tmp/r2full.log; echo exit=$?` all green, zero ignored.
 
 - [ ] **Step 5: Commit**
 
@@ -178,11 +178,11 @@ git commit -m "feat: refalsify verdict field on MemoryStamp, absent-key compat p
 
 ---
 
-### Task 3: The probe — pre-check, execution, four verdicts
+### Task 3: The probe: pre-check, execution, four verdicts
 
 **Files:**
 - Modify: `crates/bloomery-daemon/src/task/registry.rs` (`organ_before_run` + its caller closure, which must now also pass the agent id for the contradiction row)
-- Test: `crates/bloomery-daemon/tests/memory_refalsify_test.rs` (NEW — mirror `memory_task_test.rs`'s fixture: real pager + FakeSubstrate scripted turns, real store file, real journal, real tempdir sandbox; read that file FIRST and reuse its helper shapes)
+- Test: `crates/bloomery-daemon/tests/memory_refalsify_test.rs` (NEW, mirror `memory_task_test.rs`'s fixture: real pager + FakeSubstrate scripted turns, real store file, real journal, real tempdir sandbox; read that file FIRST and reuse its helper shapes)
 
 **Interfaces:**
 - Consumes: Task 1's organ-tuple bool; Task 2's `OrganDecision.refalsify`.
@@ -190,7 +190,7 @@ git commit -m "feat: refalsify verdict field on MemoryStamp, absent-key compat p
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `memory_refalsify_test.rs`. Fixture: copy `memory_task_test.rs`'s pattern — a first task that reads a file, lands a patch, runs a granted command, and ends `done` (this MINTS the episode through the real mint path — never hand-build a record the system can produce), then a second, byte-identical task (same goal, same workspace bytes) whose retrieval is the thing under test. The grant for both tasks includes the command prefixes used below. Memory context: `enabled: true`, `refalsify` per test. The daemon-side scripted replies for task 2 need only a `done` turn (probe verdicts are visible in the stamp/store/prompt without further steps).
+Create `memory_refalsify_test.rs`. Fixture: copy `memory_task_test.rs`'s pattern (a first task that reads a file, lands a patch, runs a granted command, and ends `done` (this MINTS the episode through the real mint path), never hand-build a record the system can produce), then a second, byte-identical task (same goal, same workspace bytes) whose retrieval is the thing under test. The grant for both tasks includes the command prefixes used below. Memory context: `enabled: true`, `refalsify` per test. The daemon-side scripted replies for task 2 need only a `done` turn (probe verdicts are visible in the stamp/store/prompt without further steps).
 
 The seven binding tests (assertions are the contract; adapt fixture plumbing to `memory_task_test.rs`'s real helpers):
 
@@ -271,12 +271,12 @@ fn classify_probe_calls_signal_death_inconclusive() {
 }
 ```
 
-Every test asserts through public observables: the substrate-received prompt (`pager.substrate().ctx_history(..)` — block present/absent), the journal (`replay` → `MemoryStamp.refalsify`, `MemoryContradicted`), and the store file (re-open and check status), exactly as `memory_task_test.rs` already does. If `sh` is unavailable under `exec_run`'s cleared env (`PATH` = its pinned `RUN_PATH`), use `/bin/sh` absolute or whatever the existing run-exec tests use — mirror `task_exec_run_test.rs`.
+Every test asserts through public observables: the substrate-received prompt (`pager.substrate().ctx_history(..)`, block present/absent), the journal (`replay` → `MemoryStamp.refalsify`, `MemoryContradicted`), and the store file (re-open and check status), exactly as `memory_task_test.rs` already does. If `sh` is unavailable under `exec_run`'s cleared env (`PATH` = its pinned `RUN_PATH`), use `/bin/sh` absolute or whatever the existing run-exec tests use, mirror `task_exec_run_test.rs`.
 
 - [ ] **Step 2: Run to verify failure**
 
 Run: `cargo test -p bloomery-daemon --test memory_refalsify_test 2>&1 | tee /tmp/r3.log; echo exit=$?`
-Expected: the flag-off test may pass (it pins existing behavior); every probe test FAILS — stamps are `None` and the fail test still injects (no probe exists).
+Expected: the flag-off test may pass (it pins existing behavior); every probe test FAILS. Stamps are `None` and the fail test still injects (no probe exists).
 
 - [ ] **Step 3: Implement the probe**
 
@@ -362,19 +362,19 @@ In `organ_before_run` (signature gains the agent id; the organ tuple's bool is n
     }
 ```
 
-and the surviving injected decision carries `refalsify: refalsify_verdict`. ADAPT to the function's real local names and error-handling idioms — in particular, match how the existing code treats `lock_store` poisoning and journal append failures at this seam (the organ's failure is never the task's failure; follow the surrounding arms rather than the `let _ =` sketches above if the neighbors do it differently — but preserve the spec §7 rule that silence stands regardless). The silent and off decisions keep `refalsify: None`; a silent-because-oversize decision also keeps `None` (nothing was probed — the probe runs only on an episode that would otherwise inject; if the probe passed and THEN the oversize rule silences, the stamp keeps the oversize behavior with `refalsify: Some("passed")` — order: probe after the oversize check, so a too-big block skips the probe entirely; pick that order, it is the cheaper one, and document it in the code).
+and the surviving injected decision carries `refalsify: refalsify_verdict`. ADAPT to the function's real local names and error-handling idioms, in particular, match how the existing code treats `lock_store` poisoning and journal append failures at this seam (the organ's failure is never the task's failure; follow the surrounding arms rather than the `let _ =` sketches above if the neighbors do it differently, but preserve the spec §7 rule that silence stands regardless). The silent and off decisions keep `refalsify: None`; a silent-because-oversize decision also keeps `None` (nothing was probed (the probe runs only on an episode that would otherwise inject; if the probe passed and THEN the oversize rule silences, the stamp keeps the oversize behavior with `refalsify: Some("passed")`), order: probe after the oversize check, so a too-big block skips the probe entirely; pick that order, it is the cheaper one, and document it in the code).
 
 Thread the agent id from the caller closure (the worker has it; add a parameter).
 
 - [ ] **Step 4: Run the new tests, iterate**
 
 Run: `cargo test -p bloomery-daemon --test memory_refalsify_test 2>&1 | tee /tmp/r3b.log; echo exit=$?`
-Expected: 7/7. Iterate on fixture plumbing (env, sh path, uncited-file trick) — never on the verdict rules.
+Expected: 7/7. Iterate on fixture plumbing (env, sh path, uncited-file trick), never on the verdict rules.
 
 - [ ] **Step 5: Workspace green**
 
 Run: `cargo test --workspace 2>&1 > /tmp/r3full.log; echo exit=$?; grep -E "test result|FAILED" /tmp/r3full.log | head`
-Expected: all green, zero ignored — flag-off suites untouched.
+Expected: all green, zero ignored, flag-off suites untouched.
 
 - [ ] **Step 6: Commit**
 
@@ -398,15 +398,15 @@ git commit -m "feat: refalsify-on-exact — task-scoped verification probe befor
 
 Discipline per mutant: single hand edit → `cargo test -p bloomery-daemon --test memory_refalsify_test 2>&1 | tee /tmp/m.log; echo exit=$?` → ≥1 named test FAILS → revert exactly → `touch` the file → re-run green. Record edit/command/failing-test/revert per mutant; every "because" in the record must be a quoted trace, never inference (the window-ladder arc's lesson).
 
-- Mutant A — skip-vs-fail boundary: invert the pre-check (`.is_err()` → `.is_ok()`). Expected kills: `an_ungranted_command_skips_and_injects` (probe of an ungranted argv now attempted/refused → wrong stamp) and/or the pass test (granted argv now skipped).
-- Mutant B — flag gate: replace `refalsify_flag` with `true`. Expected kill: `flag_off_injects_without_probing_and_stamps_none` (stamp becomes Some).
-- Mutant C — contradiction citation: cite a literal `"wrong"` instead of `task_id` in `mark_contradicted`. Expected kill: `a_failing_probe_...`'s `contradicted_by` assert.
-- Mutant D — verdict boundary: `Some(code) if code > 0` → `code >= 0`. Expected kill: the pass test (exit 0 now contradicts).
+- Mutant A, skip-vs-fail boundary: invert the pre-check (`.is_err()` → `.is_ok()`). Expected kills: `an_ungranted_command_skips_and_injects` (probe of an ungranted argv now attempted/refused → wrong stamp) and/or the pass test (granted argv now skipped).
+- Mutant B, flag gate: replace `refalsify_flag` with `true`. Expected kill: `flag_off_injects_without_probing_and_stamps_none` (stamp becomes Some).
+- Mutant C, contradiction citation: cite a literal `"wrong"` instead of `task_id` in `mark_contradicted`. Expected kill: `a_failing_probe_...`'s `contradicted_by` assert.
+- Mutant D, verdict boundary: `Some(code) if code > 0` → `code >= 0`. Expected kill: the pass test (exit 0 now contradicts).
 
 - [ ] **Step 2: Amendment pointer in the organ spec**
 
 `docs/superpowers/specs/2026-08-26-memory-organ-design.md` §5 still reads
-as permanently passive-only. Specs are historical records — do not rewrite
+as permanently passive-only. Specs are historical records, do not rewrite
 §5's text; append one errata-style line directly under the §5 heading:
 
 ```markdown
@@ -420,14 +420,14 @@ Commit it with the mutation-evidence commit below.
 
 - [ ] **Step 3: Spec cross-check**
 
-Walk refalsify spec §2-§8 clause by clause against the branch (the four outcomes, lock discipline, demotion rule, stamp values, flag default, §8's nine tests) and record the walk in the report — any clause without an implementing line or pinning test is a finding to report, not to quietly patch.
+Walk refalsify spec §2-§8 clause by clause against the branch (the four outcomes, lock discipline, demotion rule, stamp values, flag default, §8's nine tests) and record the walk in the report, any clause without an implementing line or pinning test is a finding to report, not to quietly patch.
 
 - [ ] **Step 4: Full workspace acceptance**
 
 Run: `cargo test --workspace 2>&1 > /tmp/r4full.log; echo exit=$?; grep -E "test result" /tmp/r4full.log`
 Expected: all green, ZERO ignored.
 
-- [ ] **Step 5: Featured binary (box rule — LAST)**
+- [ ] **Step 5: Featured binary (box rule: LAST)**
 
 Run: `cargo build -p bloomery-daemon --features vulkan 2>&1 > /tmp/r4build.log; echo exit=$?`
 Expected: exit 0.

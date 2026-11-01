@@ -4,13 +4,13 @@
 
 **Goal:** Make a confirmed cumulative drift regression refuse new admission, with an operator-clearable block that never rewrites the measurement it came from.
 
-**Architecture:** Slice 1 measures drift into `ModelDrift { step, cumulative }` and explicitly never acts on it. This slice adds `admission_block: Option<AdmissionBlock>` to the pager's per-model entry, set by the drift watch when — and only when — `cumulative` settles `DriftStatus::Confirmed`. `admit()` gains one clause consulting it. Recovery is a new `POST /models/{name}/unblock` that clears the block and journals the clearing, leaving both the reading and the blessed baseline untouched.
+**Architecture:** Slice 1 measures drift into `ModelDrift { step, cumulative }` and explicitly never acts on it. This slice adds `admission_block: Option<AdmissionBlock>` to the pager's per-model entry, set by the drift watch when, and only when, `cumulative` settles `DriftStatus::Confirmed`. `admit()` gains one clause consulting it. Recovery is a new `POST /models/{name}/unblock` that clears the block and journals the clearing, leaving both the reading and the blessed baseline untouched.
 
-**Tech Stack:** Rust (workspace crates `bloomery-core`, `bloomery-daemon`), stdlib + serde. Tests are **integration** tests under `crates/bloomery-daemon/tests/` — `drift_test.rs` and `pager_test.rs` are the two this slice extends.
+**Tech Stack:** Rust (workspace crates `bloomery-core`, `bloomery-daemon`), stdlib + serde. Tests are **integration** tests under `crates/bloomery-daemon/tests/`: `drift_test.rs` and `pager_test.rs` are the two this slice extends.
 
 **Everything these tests touch must be `pub`.** Integration tests link against the crate from outside, so `admission_block_for`, `clear_admission_block`, `AdmissionBlock` and its `reference` field, and `ModelStatus.admission_block` are all public API, not `pub(crate)`. This is the single easiest way to write a task in this plan that does not compile.
 
-**The real construction idioms**, copied from `tests/drift_test.rs:108` and `tests/pager_test.rs:99` — use these, do not invent helpers:
+**The real construction idioms**, copied from `tests/drift_test.rs:108` and `tests/pager_test.rs:99`, use these, do not invent helpers:
 
 ```rust
 let mut pager = Pager::new(
@@ -27,7 +27,7 @@ pager.register_model("qwen", &gguf, qwen_like_meta(), None).unwrap();
 let agent = pager.create_agent("qwen", 50, None, 10_000).unwrap();
 ```
 
-`scratch(tag)`, `store_in(tag)`, `qwen_like_meta()` and `scripted_assay()` already exist in `tests/drift_test.rs`; `Pager` comes from `bloomery_daemon::pager::Pager`, the drift types from `bloomery_daemon::drift::{...}`, `FakeSubstrate` from `bloomery_substrate::fake`. A model needs a profile before drift means anything — follow how `drift_test.rs` gets one onto a model rather than reaching for a shortcut.
+`scratch(tag)`, `store_in(tag)`, `qwen_like_meta()` and `scripted_assay()` already exist in `tests/drift_test.rs`; `Pager` comes from `bloomery_daemon::pager::Pager`, the drift types from `bloomery_daemon::drift::{...}`, `FakeSubstrate` from `bloomery_substrate::fake`. A model needs a profile before drift means anything, follow how `drift_test.rs` gets one onto a model rather than reaching for a shortcut.
 
 **Spec:** [`docs/superpowers/specs/2026-08-18-verdict-gated-admission-design.md`](../specs/2026-08-18-verdict-gated-admission-design.md)
 
@@ -39,10 +39,10 @@ let agent = pager.create_agent("qwen", 50, None, 10_000).unwrap();
 - **The reading is immutable.** No operator action may rewrite `ModelDrift`. Slice 1's rule: "a comparison nobody re-ran must never acquire a new verdict."
 - **`done_trust`, `codec_gate`, and the G4/G5 gates are untouched.** They remain the sole property of their own gates.
 - **The gate is at agent creation, never per inference.** An agent admitted before a block appeared keeps working.
-- **`PagerError` variants must be mapped on BOTH surfaces** — `api_native.rs` (bare JSON) and `api_v1.rs` (`error_envelope`). One without the other is a 500 waiting for whichever client hits the unmapped path.
+- **`PagerError` variants must be mapped on BOTH surfaces**: `api_native.rs` (bare JSON) and `api_v1.rs` (`error_envelope`). One without the other is a 500 waiting for whichever client hits the unmapped path.
 - **Build/test:** `cargo test -p bloomery-daemon -p bloomery-core`. Daemon rebuilds that must run against real hardware need `--features vulkan`; the tests in this plan do not.
-- **NEVER wrap a command in `timeout`** on this box — the uutils wrapper segfaults (exit 139) and the crash misreads as your program's failure.
-- Conventional commits. Attribution is disabled globally — no co-author or "Generated with" trailer.
+- **NEVER wrap a command in `timeout`** on this box: the uutils wrapper segfaults (exit 139) and the crash misreads as your program's failure.
+- Conventional commits. Attribution is disabled globally, no co-author or "Generated with" trailer.
 - House TDD: write the failing test first, see it fail, then implement. Mutation-check each load-bearing test by breaking its pinned line and confirming the test fails.
 
 ---
@@ -79,7 +79,7 @@ The type and its storage, with nothing yet setting or reading it. Reviewable on 
 
 - [ ] **Step 1: Write the failing test**
 
-In `crates/bloomery-daemon/src/pager/status.rs`'s test module (or the crate's existing pager test module — follow whichever the file already uses):
+In `crates/bloomery-daemon/src/pager/status.rs`'s test module (or the crate's existing pager test module, follow whichever the file already uses):
 
 ```rust
 #[test]
@@ -100,7 +100,7 @@ Use whatever pager-construction helper the surrounding tests already use; do not
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `cargo test -p bloomery-daemon a_model_with_no_admission_block_renders_none`
-Expected: FAIL to compile — no field `admission_block` on `ModelStatus`.
+Expected: FAIL to compile, no field `admission_block` on `ModelStatus`.
 
 - [ ] **Step 3: Add the type**
 
@@ -147,7 +147,7 @@ In `crates/bloomery-daemon/src/pager.rs`, in the per-model entry struct, immedia
     admission_block: Option<crate::drift::AdmissionBlock>,
 ```
 
-Update the entry's constructor(s) to default it to `None`. Find every construction site with `rg 'ModelEntry\s*\{'` (or whatever the struct is named — read it first) and add the field; the compiler will name any you miss.
+Update the entry's constructor(s) to default it to `None`. Find every construction site with `rg 'ModelEntry\s*\{'` (or whatever the struct is named, read it first) and add the field; the compiler will name any you miss.
 
 - [ ] **Step 5: Render it**
 
@@ -171,7 +171,7 @@ Expected: PASS.
 - [ ] **Step 7: Run the crate suites**
 
 Run: `cargo test -p bloomery-daemon -p bloomery-core`
-Expected: green. Record the pass count — later tasks compare against it.
+Expected: green. Record the pass count, later tasks compare against it.
 
 - [ ] **Step 8: Commit**
 
@@ -182,7 +182,7 @@ git commit -m "feat: carry an admission block beside the drift reading"
 
 ---
 
-### Task 2: The watch sets the block — the enumerated policy
+### Task 2: The watch sets the block: the enumerated policy
 
 The whole content of this slice's policy is which words mean what, so the test is an enumeration, not a sample.
 
@@ -290,7 +290,7 @@ fn an_instrument_change_never_blocks_the_fleet() {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo test -p bloomery-daemon blocks_admission a_confirmed_step a_confirmed_cumulative an_instrument_change`
-Expected: FAIL to compile — no `admission_block_for`.
+Expected: FAIL to compile, no `admission_block_for`.
 
 - [ ] **Step 3: Implement**
 
@@ -350,7 +350,7 @@ git commit -m "feat: a confirmed cumulative regression sets an admission block"
 - Modify: `crates/bloomery-daemon/src/api_v1.rs` (~:511)
 
 **Interfaces:**
-- Consumes: Task 2's invariant — `admission_block` is `Some` iff cumulative is `Confirmed`.
+- Consumes: Task 2's invariant: `admission_block` is `Some` iff cumulative is `Confirmed`.
 - Produces: `PagerError::DriftBlocked { model: String, reference: String }`, rendered 422 on both surfaces.
 
 - [ ] **Step 1: Write the failing tests**
@@ -409,7 +409,7 @@ fn an_unprofiled_model_still_refuses_as_unprofiled() {
 }
 ```
 
-Match the crate's real `create_agent` signature and its existing agent-spec helper — read the surrounding tests and reuse them rather than inventing arguments.
+Match the crate's real `create_agent` signature and its existing agent-spec helper, read the surrounding tests and reuse them rather than inventing arguments.
 
 Then, one test per error surface:
 
@@ -443,12 +443,12 @@ fn the_v1_surface_renders_drift_blocked_as_422() {
 }
 ```
 
-Use each surface's existing error-rendering entry point — read how the current `Unprofiled` tests call it and match them exactly.
+Use each surface's existing error-rendering entry point, read how the current `Unprofiled` tests call it and match them exactly.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo test -p bloomery-daemon drift_blocked before_the_block still_refuses_as_unprofiled`
-Expected: FAIL to compile — no `DriftBlocked` variant.
+Expected: FAIL to compile, no `DriftBlocked` variant.
 
 - [ ] **Step 3: Add the variant**
 
@@ -493,7 +493,7 @@ Extend the function's doc comment: it currently enumerates three outcomes (profi
         ),
 ```
 
-Also extend that function's doc-comment status table, which lists `| `Unprofiled` | 422 | …` — a table that silently omits a variant is the next reader's wrong answer.
+Also extend that function's doc-comment status table, which lists `| `Unprofiled` | 422 | …`, a table that silently omits a variant is the next reader's wrong answer.
 
 `api_v1.rs`, beside its `Unprofiled` arm (:511):
 
@@ -536,7 +536,7 @@ git commit -m "feat: refuse admission while a drift block stands, on both surfac
 
 **Interfaces:**
 - Consumes: `AdmissionBlock` (Task 1), `admission_block_for` (Task 2), `PROVENANCE_OPERATOR` (`drift/watch.rs:145`).
-- Produces: `Pager::clear_admission_block(&mut self, model: &str) -> Result<Option<AdmissionBlock>, PagerError>` — `Ok(None)` is "known model, nothing was blocking"; `Event::Admission`.
+- Produces: `Pager::clear_admission_block(&mut self, model: &str) -> Result<Option<AdmissionBlock>, PagerError>`: `Ok(None)` is "known model, nothing was blocking"; `Event::Admission`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -604,7 +604,7 @@ fn unblock_does_not_rebaseline_and_bless_does_not_unblock() {
 - [ ] **Step 2: Run to verify they fail**
 
 Run: `cargo test -p bloomery-daemon unblock_`
-Expected: FAIL to compile — no `clear_admission_block`.
+Expected: FAIL to compile, no `clear_admission_block`.
 
 - [ ] **Step 3: Add the journal event**
 
@@ -658,7 +658,7 @@ In `crates/bloomery-daemon/src/pager/drift_watch.rs`:
     }
 ```
 
-**Do NOT signal "nothing to clear" with `PagerError::Contract`.** That variant maps to **502** on both surfaces (`api_native.rs:325`, `api_v1.rs:480`), not the 409 this route's table specifies, and its `kind` field is documented as "currently always `MissingStats`, kept identical to the journal's `ContractViolation`/`kind` field" — writing anything else into it corrupts a field two places treat as single-valued. The three outcomes map as:
+**Do NOT signal "nothing to clear" with `PagerError::Contract`.** That variant maps to **502** on both surfaces (`api_native.rs:325`, `api_v1.rs:480`), not the 409 this route's table specifies, and its `kind` field is documented as "currently always `MissingStats`, kept identical to the journal's `ContractViolation`/`kind` field", writing anything else into it corrupts a field two places treat as single-valued. The three outcomes map as:
 
 | method result | route |
 | --- | --- |
@@ -680,7 +680,7 @@ In `crates/bloomery-daemon/src/api_native.rs`, dispatch entry beside bless (:61)
 And the handler, in the file's established doc-comment-table style:
 
 ```rust
-/// `POST /models/{name}/unblock` — clear this boot's admission block
+/// `POST /models/{name}/unblock`, clear this boot's admission block
 /// (verdict-gated-admission design §4).
 ///
 /// | outcome | status | body |

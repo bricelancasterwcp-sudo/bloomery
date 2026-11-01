@@ -1,12 +1,12 @@
-# `s5-weight-battery-v1` — pre-registration (committed BEFORE any real run)
+# `s5-weight-battery-v1`: pre-registration (committed BEFORE any real run)
 
 **Date:** 2026-08-29 (spec/plan/machinery 2026-08-28 night, same
 session). **Branch:** `s5-weight-battery` in the main checkout, base
 `master` `efa8e6a` (crates tip `e3cad71`). **Spec:**
-`docs/superpowers/specs/2026-08-28-s5-weight-battery-v1-design.md` —
+`docs/superpowers/specs/2026-08-28-s5-weight-battery-v1-design.md`,
 binding, including its dated V1 amendment (Task-4 finding: `Error`
 halves drop at the join; mechanism not intent). **Amendment protocol:**
-the house rule verbatim — all values below are frozen; changes require a
+the house rule verbatim, all values below are frozen; changes require a
 recorded protocol amendment executed before re-running, never
 tune-and-rerun.
 
@@ -25,13 +25,13 @@ lock.
 > W_C of matched right lessons (collateral, via model non-verification),
 > while on stale lessons it corrected W_B_mint (refresh with a landed
 > re-verify) and removed W_B_contra (contradiction) of matched
-> retrievals — each with its 95% Wilson interval (lens: this
+> retrievals, each with its 95% Wilson interval (lens: this
 > battery)."* The three lanes' splits ARE the registered endpoints;
-> there is no pass/fail bar on the rates themselves — the weight is the
+> there is no pass/fail bar on the rates themselves. The weight is the
 > number, reported whatever it is.
 
 Named absences (spec §1): any §5 design amendment (Brice's future
-ruling — these numbers inform it, they do not make it); refalsify-on
+ruling. These numbers inform it, they do not make it); refalsify-on
 behavior on these lanes; the premise_gone shield (settled, not
 re-litigated); probe cost; novel tasks/models/shapes/accuracy; every
 cross-battery number comparison (the motivating 47/50 is cited as the
@@ -44,12 +44,12 @@ result.
 
 | pin | value | source |
 |---|---|---|
-| **daemon commit** (crates/ tip) | `e3cad71` — verified at lock: `git diff e3cad71 HEAD -- crates/` EMPTY on this branch (all commits tools/+docs). Re-verify immediately before boot; non-empty → STOP. | this session |
+| **daemon commit** (crates/ tip) | `e3cad71`: verified at lock: `git diff e3cad71 HEAD -- crates/` EMPTY on this branch (all commits tools/+docs). Re-verify immediately before boot; non-empty → STOP. | this session |
 | **binary served** | `/home/brice/workspace/bloomery/target/debug/bloomery-daemon` (featured vulkan build of the `e3cad71` tree, unchanged since the flip arc). `readlink /proc/<pid>/exe` after boot and before kill; pid via `ps`, never `$!`. | box rule |
 | **served-model digest** | `7020b925c07c5a3808e1155700ca707598cb4f6d6089bb6daff4147b4d6b00bd` | prior battery preregs; driver-asserted per phase; recompute CLI-FATAL |
 | model identity (API name) / envelope / window_cap | `qwen36-reap48-flywheel5` / `v4` / `16384` | boot config below; `driver.py` constants |
 | poll cadence / task deadline | `5.0` s / `600.0` s | `driver.py` defaults |
-| **arm** | single: `s5_off` (`[memory] enabled = true, refalsify = false` — explicit opt-out of the shipped default), port `8497`, fresh empty store, fresh scratch `data_dir`; dry label `S5_OFF_DRY` | spec §4 |
+| **arm** | single: `s5_off` (`[memory] enabled = true, refalsify = false`: explicit opt-out of the shipped default), port `8497`, fresh empty store, fresh scratch `data_dir`; dry label `S5_OFF_DRY` | spec §4 |
 | **corpus** | `tools/memory_battery/corpus-s5-v1`, seed `20260830`, n = `48` (16/lane), FROZEN at commit `5025410`; manifest sha256 `f5d415ff75c590f4f2c49189d4dd0f7140c66f6c9606114fd0204b3224ff08c4`; `corpus_check_s5` OVERALL: PASS at freeze AND re-run before the real boot | spec §3; ledger Task 3 |
 | **intervals** | Wilson score, `WILSON_Z = 1.959963984540054`, NO RNG anywhere in the instrument | `recompute_s5.py` (vector-pinned by 4 independent hand derivations) |
 | **per-lane matched floor** | `8` | `recompute_s5.py` `FLOOR_S5` (test-pinned) |
@@ -93,7 +93,7 @@ copied and never reach any run tree.
 ## 4. Endpoints, computed exactly as spec §5 states them
 
 By reference (spec §5 incl. its dated V1 amendment, binding): validity
-gates **V1** (§5 conformance, live — both-events / unexplained-neither /
+gates **V1** (§5 conformance, live, both-events / unexplained-neither /
 unscored-in-matched → INVALID; the `Degraded`-explained class counted,
 expected 0), **V2** (stamp audit: refalsify all `None`, retired
 spellings nowhere, zero p1 injections, zero oversize `Degraded`),
@@ -153,7 +153,7 @@ across generator/checker/recompute, each killed; battery suite 176 OK).
 
 ## 7. DRY-numbers prohibition
 
-The dry shakedown (3 tasks — lanes moot×2 + stale×1 as the first three
+The dry shakedown (3 tasks, lanes moot×2 + stale×1 as the first three
 manifest entries fall; label `S5_OFF_DRY`) is instrument shakedown only;
 none of its numbers may be quoted in the findings.
 
@@ -162,6 +162,6 @@ none of its numbers may be quoted in the findings.
 All values in this document are frozen at commit time. Any change
 requires a recorded protocol amendment (a dated section added here
 naming what changed and why) executed BEFORE re-running any affected
-step — never tune-and-rerun. The corpus is bytes (§3 above, re-asserted
+step, never tune-and-rerun. The corpus is bytes (§3 above, re-asserted
 at this lock); nothing in `tools/memory_battery/corpus-s5-v1/` is ever
 edited in place.

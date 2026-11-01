@@ -1,4 +1,4 @@
-# Phase 0 — prior-art verification and decision record (D1–D4)
+# Phase 0: prior-art verification and decision record (D1–D4)
 
 **Date:** 2026-08-14
 **Task:** Phase 1 plan, Task 1.
@@ -25,14 +25,14 @@ crate tarball; the file and line are cited. Nothing here is from memory.
 | Rust | `~/.cargo/bin/cargo`, `~/.cargo/bin/rustc` | `which` |
 
 The box is the enthusiast-16GB tier named in the spec (§4.7, G2). The Vulkan
-build prerequisites for Task 11's `vulkan` feature are all present — this is
+build prerequisites for Task 11's `vulkan` feature are all present. This is
 worth recording because `llama-cpp-sys-2`'s `build.rs` links `vulkan` and
 builds shaders with `glslc` (`llama-cpp-sys-2-0.1.154/build.rs:882-953`), and
 a missing `glslc` is the usual first failure of that build.
 
 ---
 
-## D1 — llama.cpp bindings and state APIs
+## D1: llama.cpp bindings and state APIs
 
 **Default:** the `llama-cpp-2` crate (feature `vulkan`) can (a) load a GGUF
 with `n_gpu_layers`, (b) create a context with per-context `n_ctx`, (c) decode
@@ -51,14 +51,14 @@ do *not* overturn the default but change which symbols Task 11 should call
 | llama.cpp vendored by that sys crate | submodule commit **`5f55650a78f92aff4d48d671423e888fac0469ff`**, dated **2026-07-30** | `gh api repos/utilityai/llama-cpp-rs/contents/llama-cpp-sys-2/llama.cpp?ref=0.1.154` |
 | Crate repo | `https://github.com/utilityai/llama-cpp-rs` | `Cargo.toml.orig` |
 
-Sources actually read (not summarized — the tarballs were downloaded and
+Sources actually read (not summarized. The tarballs were downloaded and
 extracted):
 
 - `https://static.crates.io/crates/llama-cpp-2/llama-cpp-2-0.1.154.crate`
 - `https://static.crates.io/crates/llama-cpp-sys-2/llama-cpp-sys-2-0.1.154.crate`
 - `/home/brice/llama.cpp/include/llama.h` (local checkout @ `4988f6e`)
-- `llama-cpp-sys-2-0.1.154/llama.cpp/include/llama.h` (the *vendored* header —
-  this is the one that actually generates the bindings)
+- `llama-cpp-sys-2-0.1.154/llama.cpp/include/llama.h` (the *vendored* header.
+  This is the one that actually generates the bindings)
 
 > **Note on docs.rs.** `https://docs.rs/llama-cpp-2/latest/llama_cpp_2/context/struct.LlamaContext.html`
 > was consulted first and got one signature wrong when read through a
@@ -67,7 +67,7 @@ extracted):
 > this document is quoted from the crate tarball, not from docs.rs.** Task 11
 > should trust the file:line citations here over any rendered docs page.
 
-### D1.1 GGUF load with `n_gpu_layers` — CONFIRMED
+### D1.1 GGUF load with `n_gpu_layers`: CONFIRMED
 
 ```rust
 // llama-cpp-2-0.1.154/src/model.rs:762
@@ -87,7 +87,7 @@ pub fn with_n_gpu_layers(mut self, n_gpu_layers: u32) -> Self
 Also available and relevant to the pager: `with_main_gpu` (`params.rs:524`)
 and `with_split_mode` (`params.rs:552`).
 
-### D1.2 Per-context `n_ctx` — CONFIRMED
+### D1.2 Per-context `n_ctx`: CONFIRMED
 
 ```rust
 // llama-cpp-2-0.1.154/src/model.rs:820
@@ -108,12 +108,12 @@ pub fn with_n_ctx(mut self, n_ctx: Option<NonZeroU32>) -> Self
 ```
 
 **Lifetime note for Task 11 (confirms the plan's borrow-check warning):**
-`new_context<'a>(&'a self, …) -> LlamaContext<'a>` — the context genuinely
+`new_context<'a>(&'a self, …) -> LlamaContext<'a>`: the context genuinely
 borrows the model. The plan's "arena struct owning models and contexts
 together, expose only handles" guidance stands; `Box::leak` remains
 prohibited.
 
-### D1.3 Real token counts — CONFIRMED, with a nuance worth writing down
+### D1.3 Real token counts: CONFIRMED, with a nuance worth writing down
 
 ```rust
 // llama-cpp-2-0.1.154/src/model.rs:302
@@ -131,7 +131,7 @@ pub fn str_to_token(&self, str: &str, add_bos: AddBos)
 "read the token counts off the reply" API to be lied to by. `prompt_tokens` is
 `str_to_token(...)?.len()`; `completion_tokens` is the count of decode
 iterations bloomery itself performs. This is a *stronger* position than the
-default assumed — the counts are real **because we are the ones counting**,
+default assumed. The counts are real **because we are the ones counting**,
 which is exactly the construction design law 4 / spec §4.1 asks for ("a reply
 without stats cannot be constructed"). Task 11 should note in code that the
 honesty here is structural, not a trusted upstream field.
@@ -158,7 +158,7 @@ It wraps `ggml_backend_dev_get_props` (`src/lib.rs:527`). Note this is a
 `device_type == Gpu` and must still return `None`-with-a-reason (not zero) if
 no GPU device is enumerated, per law 5.
 
-### D1.4 Save/restore context state — CONFIRMED, but call the *seq* API
+### D1.4 Save/restore context state: CONFIRMED, but call the *seq* API
 
 The C API in the vendored header (`llama-cpp-sys-2-0.1.154/llama.cpp/include/llama.h`;
 identical shape in the local checkout at `/home/brice/llama.cpp/include/llama.h:783-905`):
@@ -210,33 +210,33 @@ spec §9 "KV image invalidated by an upgrade" risk, and per the spec it must be
 handled as a cold start, never as an error.
 
 `SeqState` also exposes `byte_len() -> usize` (`session.rs:675`) and
-`flags() -> LlamaStateSeqFlags` (`session.rs:669`) — `byte_len` is the KV image
+`flags() -> LlamaStateSeqFlags` (`session.rs:669`): `byte_len` is the KV image
 size the pager accounts and journals.
 
 **Correction 2 (do not use the crate's whole-context trio).** The crate's
 `get_state_size` / `copy_state_data` / `set_state_data` wrap the **deprecated,
 size-unbounded** C symbols. In particular `set_state_data(&mut self, src: &[u8])`
 calls `llama_set_state_data(ctx, src.as_ptr())` and **discards `src.len()`**
-(`session.rs:471`) — a truncated or corrupt image is an out-of-bounds read
+(`session.rs:471`), a truncated or corrupt image is an out-of-bounds read
 inside C, not an error return. If Task 11 ever needs whole-context state
 rather than per-sequence state, it must go through the raw
 `llama_cpp_sys_2::llama_state_set_data(ctx, src.as_ptr(), src.len())` (the
 size-bounded current symbol), not the crate wrapper. The crate does **not**
-wrap the modern non-seq trio at all — verified by
+wrap the modern non-seq trio at all, verified by
 `grep -rn "llama_state_get_size\|llama_state_get_data\|llama_state_set_data" src/`
 over the 0.1.154 tarball returning **no hits**.
 
-> **Correction to Correction 1 — 2026-08-14, Task 11 (implementation).**
+> **Correction to Correction 1 (2026-08-14), Task 11 (implementation).**
 > `state_seq_get` / `state_seq_set` are **unusable for bloomery's pager**
 > (`SeqState` is opaque; images must serialize to NVMe). The size-checked
-> per-sequence `_ext` functions — `state_seq_get_size_ext` /
+> per-sequence `_ext` functions: `state_seq_get_size_ext` /
 > `state_seq_get_data_ext` with `written == size` verification /
-> `state_seq_set_data_ext`, which forwards `bytes.len()` — are the correct
+> `state_seq_set_data_ext`, which forwards `bytes.len()`, are the correct
 > path. The prohibition on `get_state_size` / `copy_state_data` /
 > `set_state_data` stands.
 >
 > Why: `SeqState` (`session.rs:661-690`) exposes only `byte_len()` and
-> `flags()` — private `bytes`, no `AsRef<[u8]>`, no serde, no constructor. So
+> `flags()`, private `bytes`, no `AsRef<[u8]>`, no serde, no constructor. So
 > `state_seq_get` cannot yield the bytes `save_state` must return, and
 > `state_seq_set` cannot be handed a `SeqState` rebuilt from the bytes
 > `load_state` receives. Spec §4.2 requires KV images as **bytes on NVMe**, so
@@ -260,7 +260,7 @@ an "agent" maps most naturally onto a `seq_id` and the KV image is that
 sequence's `SeqState`. Whether Phase 1 gives each agent its own `LlamaContext`
 (simplest; `state_seq_get(0, empty())`) or packs several agents as sequences
 inside one context (better VRAM reuse; needs `with_n_seq_max`) is left to
-Tasks 12–13 — both are reachable through the same pair of per-sequence calls
+Tasks 12–13, both are reachable through the same pair of per-sequence calls
 (the `_ext` variants, per the 2026-08-14 correction above; Task 11 shipped
 one context per agent on `seq_id` 0).
 
@@ -271,8 +271,8 @@ one context per agent on `seq_id` 0).
 `.allowlist_function("ggml_.*")`, `.allowlist_function("gguf_.*")`.
 `wrapper.h` includes `llama.cpp/include/llama.h` and
 `llama.cpp/ggml/include/gguf.h`. Therefore **every** `LLAMA_API` function in
-the table above — including the current, size-bounded
-`llama_state_get_size` / `llama_state_get_data` / `llama_state_set_data` —
+the table above (including the current, size-bounded
+`llama_state_get_size` / `llama_state_get_data` / `llama_state_set_data`)
 is generated as `llama_cpp_sys_2::<name>` and callable through `unsafe`.
 
 ### D1.6 Feature `vulkan` exists and is wired
@@ -288,12 +288,12 @@ Default features are `["openmp", "android-shared-stdcxx", "common"]`.
 box (see "Verification environment").
 
 **Not verified:** an actual end-to-end `cargo build --features vulkan` of
-`llama-cpp-sys-2` was **not** performed in this task — it compiles llama.cpp
+`llama-cpp-sys-2` was **not** performed in this task. It compiles llama.cpp
 plus the Vulkan shader set and is Task 11's cost to pay. This record verifies
 that the feature exists, the build script wires it, and the toolchain is
 installed; it does not claim the build succeeds.
 
-### D1.7 Chat template exposure (feeds D4) — CONFIRMED
+### D1.7 Chat template exposure (feeds D4): CONFIRMED
 
 ```rust
 // llama-cpp-2-0.1.154/src/model.rs:734
@@ -317,11 +317,11 @@ LlamaChatMessage::new(role: String, content: String) -> Result<Self, NewLlamaCha
 
 C side: `llama_model_chat_template` at vendored `llama.h:630`,
 `llama_chat_apply_template` at vendored `llama.h:1205`. Both are plain
-`LLAMA_API` — no `common` feature required.
+`LLAMA_API`, no `common` feature required.
 
 ---
 
-## D2 — nobody already ships the pager
+## D2: nobody already ships the pager
 
 **Default:** no existing OSS system provides priority-driven paging of
 **weights + KV images across multiple agents on one consumer GPU**.
@@ -340,26 +340,26 @@ be verified are marked **unverified** rather than smoothed over.
 | System | What it pages | Levels | For whom | Covers pager? | Citation |
 |---|---|---|---|---|---|
 | **vLLM** (PagedAttention, swap, `cpu_offload_gb`, sleep mode, KV Offloading Connector) | KV blocks; separately weights (sleep mode) | KV: VRAM↔CPU DRAM (NVMe = stated future work). Weights: VRAM↔DRAM or discard | Datacenter farm; **one model per engine**; anonymous requests | **~40%** | [sleep mode](https://docs.vllm.ai/en/latest/features/sleep_mode/), [KV offloading connector](https://vllm.ai/blog/2026-01-08-kv-offloading-connector) |
-| **SGLang RadixAttention + HiCache** | KV **only** — "exclusively manages KV cache, not model weights" | L1 GPU / L2 host RAM / L3 distributed (Mooncake, 3FS, NIXL, file) | Datacenter, cluster-shared, PD-disaggregated; one model | **~25%** | [HiCache design](https://docs.sglang.io/advanced_features/hicache_design.html) |
+| **SGLang RadixAttention + HiCache** | KV **only**: "exclusively manages KV cache, not model weights" | L1 GPU / L2 host RAM / L3 distributed (Mooncake, 3FS, NIXL, file) | Datacenter, cluster-shared, PD-disaggregated; one model | **~25%** | [HiCache design](https://docs.sglang.io/advanced_features/hicache_design.html) |
 | **LMCache** | KV chunks only | GPU / pinned DRAM / local disk incl. NVMe GDS / remote (Redis, Mooncake) | Enterprise vLLM serving; no multi-model, no per-session priority | **~30%** | [architecture](https://docs.lmcache.ai/developer_guide/architecture.html) |
 | **Ollama** scheduler + `keep_alive` | **Weights only** (whole runner processes) | VRAM ↔ gone (reload from disk); no RAM tier, no KV persistence | Single consumer box, **many models**, anonymous, no priority | **~30%** | [FAQ](https://docs.ollama.com/faq) |
 | **llama.cpp `llama-server`** (slots + `--cache-ram` + router) | KV images per slot **and** whole models (router) | KV: VRAM→RAM (auto, byte-budgeted)→disk (manual REST). Weights: resident ↔ process killed | Single consumer GPU; multi-model via subprocess router; no priority | **~40–45% (closest single system)** | [manpage](https://manpages.debian.org/unstable/llama.cpp-tools/llama-server.1.en.html) + local source, see D2.2 |
 | **llama-swap** | Weights, via process start/stop | VRAM ↔ process exit | Single consumer box, many models | **~20%** | [README](https://github.com/mostlygeek/llama-swap) |
 | **ServerlessLLM** (OSDI'24) | Model **checkpoints/weights** only | GPU ↔ pinned DRAM ↔ NVMe, loading-optimized format | Serverless cluster | **~30%** | [OSDI'24](https://www.usenix.org/system/files/osdi24-fu.pdf) |
 | **mistral.rs** | KV in a GPU-only paged pool; multi-model all co-resident | VRAM only for KV; static weight device-mapping | Rust inference engine, general | **~20%** | [paged attention guide](https://ericlbuehler.github.io/mistral.rs/guides/perf/paged-attention/) |
-| **exo** | Nothing — *shards* one model across devices | network/RDMA, not a memory hierarchy | Home multi-device cluster, Apple-Silicon-first | **~5%** | [README](https://github.com/exo-explore/exo) |
+| **exo** | Nothing: *shards* one model across devices | network/RDMA, not a memory hierarchy | Home multi-device cluster, Apple-Silicon-first | **~5%** | [README](https://github.com/exo-explore/exo) |
 | **AIOS** | Agent *semantic* memory; `past_key_values` in a Python dict | in-process dict; no tiering, no eviction, no disk | Research agent-OS framework over LLM APIs | **~10%** | [aios/context/base.py](https://github.com/agiresearch/AIOS/blob/main/aios/context/base.py) |
-| **agent-memory** (yshk-mxim) | KV only, Q4 safetensors, LRU block pool | hot GPU / warm metadata / cold disk | **Multi-agent on one box** — but MLX/Apple-only, ~14 stars | **~30%** | [README](https://github.com/yshk-mxim/agent-memory) |
+| **agent-memory** (yshk-mxim) | KV only, Q4 safetensors, LRU block pool | hot GPU / warm metadata / cold disk | **Multi-agent on one box**: but MLX/Apple-only, ~14 stars | **~30%** | [README](https://github.com/yshk-mxim/agent-memory) |
 
 Notes per system, compressed to the load-bearing point:
 
-- **vLLM.** The only surveyed system that offloads *both* weights and KV — sleep
+- **vLLM.** The only surveyed system that offloads *both* weights and KV, sleep
   mode level 1 "offload the model weights and discard the KV cache", level 2
   "discard both". But both act at **whole-engine granularity**, so it can never
   hold agent A resident while evicting agent B; one engine serves one model, and
   multi-model is explicitly "separate instances behind a request router". Its KV
   storage tier is admitted future work, and V1's default preemption mode moved
-  from `SWAP` to `RECOMPUTE` — i.e. vLLM has partly *retreated* from KV swapping.
+  from `SWAP` to `RECOMPUTE`, i.e. vLLM has partly *retreated* from KV swapping.
 - **SGLang HiCache.** The tier *shape* (L1/L2/L3) is exactly bloomery's and is
   the strongest prior art for the three-level KV hierarchy specifically. But it
   is KV-only by explicit design statement, its unit is a shared token prefix
@@ -382,13 +382,13 @@ Notes per system, compressed to the load-bearing point:
   are empty stubs, and the only concrete manager stashes `outputs.past_key_values`
   in an in-process dict with no tiering, eviction, disk format, or VRAM
   accounting; shipped schedulers are FIFO and round-robin. **It is an
-  orchestration layer, not a pager** — exactly the shape spec §2 says bloomery
+  orchestration layer, not a pager**, exactly the shape spec §2 says bloomery
   is not. (The paper's claim of swapping + LRU-K eviction was **not** verified
   against the paper body.)
 - **Research, no public code.** *TokenCake* ([arXiv 2510.18586](https://arxiv.org/html/2510.18586))
-  is the closest published design — agent-aware temporal offload of idle KV
+  is the closest published design, agent-aware temporal offload of idle KV
   during tool calls plus a spatial scheduler with a hybrid priority metric
-  reserving memory for critical-path agents — but **no public repo**.
+  reserving memory for critical-path agents, but **no public repo**.
   *Continuum* ([arXiv 2511.02230](https://arxiv.org/html/2511.02230v5)) pins KV
   with a TTL derived from reload cost; no public code found.
 
@@ -400,7 +400,7 @@ whatsoever". **That is out of date.** Reading the local checkout
 
 - `tools/server/server-models.cpp` implements a **router** that spawns one
   `llama-server` child subprocess per model.
-- `--models-max N` — "for router server, maximum number of models to load
+- `--models-max N`, "for router server, maximum number of models to load
   simultaneously (default: %d, 0 = unlimited)" (`common/arg.cpp:3140-3145`).
 - `server_models::unload_lru()` (`server-models.cpp:695`) evicts the
   **least-recently-used** running model when `models_max` is reached, comparing
@@ -418,7 +418,7 @@ whatsoever". **That is out of date.** Reading the local checkout
   and `--cache-idle-slots` "save idle slots to the prompt cache on new task…
   (default: enabled, requires cache-ram)" (`common/arg.cpp:1361-1364`).
 
-So llama.cpp has **both halves** — and this is why it is the closest single
+So llama.cpp has **both halves**: and this is why it is the closest single
 system. It still does not reach 80%, for reasons that are structural rather
 than incidental:
 
@@ -456,23 +456,23 @@ object types under one priority-driven admission controller on one consumer GPU.
 
 **Directly load-bearing for G2:** that same study reports **model weight reload,
 not KV transfer, dominates preemption cost (>98%)**. If it replicates, bloomery's
-2 s warm / 5 s cold split is well-chosen — warm switches skip the expensive
-term by construction — and Task 17's G2 run should report the two terms
+2 s warm / 5 s cold split is well-chosen, warm switches skip the expensive
+term by construction, and Task 17's G2 run should report the two terms
 separately so this is measured on our box rather than inherited.
 
 ### D2.4 Reuse rather than rebuild
 
-1. **llama.cpp's KV serialization C API — the highest-value reuse, and already
+1. **llama.cpp's KV serialization C API: the highest-value reuse, and already
    the plan of record.** `llama_state_seq_*` is a battle-tested per-sequence KV
    image serializer reachable from Rust. **Do not invent a KV image format**;
    wrap it and add bloomery's digest header, accounting, and journaling around
    it. (D1 already selects the safe `state_seq_get`/`state_seq_set` wrappers.)
 2. **`--cache-ram` / `--cache-idle-slots` as a behavioural template for L1→L2
-   demotion — plus a free bug lesson.** Do **not** copy its accounting.
+   demotion, plus a free bug lesson.** Do **not** copy its accounting.
    [Issue #22629](https://github.com/ggml-org/llama.cpp/issues/22629) (verified
    via `gh issue view`) reports that eviction in
    `server_prompt_cache::alloc()` triggers only on `std::bad_alloc`, which under
-   Linux's default overcommit is never thrown — `malloc` returns virtual
+   Linux's default overcommit is never thrown: `malloc` returns virtual
    addresses, pages fault in on write, and the OOM killer arrives with SIGKILL,
    bypassing the C++ exception path entirely; the size limit is also checked
    only reactively, after the state is appended. **Task 13 must account KV image
@@ -481,22 +481,22 @@ separately so this is measured on our box rather than inherited.
    failure as design law 4: do not trust an implicit signal that can silently
    not arrive.
 3. **ServerlessLLM's loading-optimized checkpoint idea** (chunked sequential
-   reads into a pinned pool for DMA'd GPU transfer) for the weights→NVMe tier —
+   reads into a pinned pool for DMA'd GPU transfer) for the weights→NVMe tier,
    port the idea, do not vendor the Ray/Kubernetes-shaped codebase.
 4. **Ollama's eviction ordering** (refCount → earliest expiry → LRU) is the
    shipped consumer-box state of the art in ~40 lines. Treat it as the control
    arm the priority scheduler must beat, not as a dependency.
 5. **SGLang's `write_through` / `write_through_selective` / `write_back`
-   taxonomy** as vocabulary for tier-promotion knobs — no code, but the policy
+   taxonomy** as vocabulary for tier-promotion knobs, no code, but the policy
    space is already well-named and matching the terms makes bloomery legible.
 6. **No eviction-policy crate is worth adding.** Every system surveyed
    hand-rolls LRU, and bloomery's policy is priority/deadline/budget-driven, not
-   recency-driven — a generic LRU crate would be the wrong abstraction. The
+   recency-driven, a generic LRU crate would be the wrong abstraction. The
    allowlist stays as it is.
 
 ---
 
-## D3 — `tiny_http` chunked responses for SSE
+## D3: `tiny_http` chunked responses for SSE
 
 **Default:** `tiny_http` supports chunked responses adequate for SSE streaming
 (Task 15); else fall back to `hyper` (which would be an allowlist change).
@@ -506,7 +506,7 @@ no allowlist change.** Verified by reading the crate source *and* by compiling
 and running two probe programs against a real socket.
 
 `tiny_http` 0.12.0 is the current `max_version` (published 2022-10-06, per
-`https://crates.io/api/v1/crates/tiny_http`) — old but stable, not abandoned
+`https://crates.io/api/v1/crates/tiny_http`), old but stable, not abandoned
 in a way that matters here.
 
 ### D3.1 Chunked transfer is selected automatically
@@ -518,8 +518,8 @@ returns `true` for `None`. It is also forced to chunked whenever additional
 headers are in play (`response.rs:169-172`). The body is then written through
 `chunked_transfer::Encoder` (`response.rs:433-437`).
 
-**Measured (probe 1):** an `Arc<Server>` shared across 4 worker threads — the
-exact threading shape Task 14 specifies — compiled and served; a response
+**Measured (probe 1):** an `Arc<Server>` shared across 4 worker threads, the
+exact threading shape Task 14 specifies, compiled and served; a response
 built with `data_length: None` from a channel-backed `Read` produced this on
 the wire:
 
@@ -537,7 +537,7 @@ data: {"delta":"tok0"}
 
 Two things are proved at once: `Server` is `Send + Sync` and usable behind an
 `Arc` from several threads (`recv(&self)` / `incoming_requests(&self)` take
-`&self` — `src/lib.rs:363,380`), and chunked framing is emitted correctly.
+`&self`: `src/lib.rs:363,380`), and chunked framing is emitted correctly.
 
 ### D3.2 The limit Task 15 must know about
 
@@ -545,8 +545,8 @@ In that same probe **all four SSE events arrived inside one 0x56-byte chunk**,
 not four chunks. `Response::respond` does
 `io::copy(&mut reader, &mut Encoder::new(writer))` (`response.rs:433-437`),
 and `chunked_transfer::Encoder::new` is
-`with_chunks_size(output, 8192)` (`chunked_transfer-1.5.0/src/encoder.rs:52`)
-— an 8192-byte buffer that `io::copy` never flushes mid-stream, and which
+`with_chunks_size(output, 8192)` (`chunked_transfer-1.5.0/src/encoder.rs:52`),
+an 8192-byte buffer that `io::copy` never flushes mid-stream, and which
 `tiny_http` gives no way to shrink. So the high-level `Response` API gives
 correct chunked framing but **not real-time incremental delivery**: a
 `Read`-driven SSE stream is coalesced until ~8 KiB accumulates or the response
@@ -556,7 +556,7 @@ This is exactly compatible with what Task 15 Step 3 already plans for Phase 1
 (buffer the whole reply, emit one delta chunk + usage + `[DONE]`): the payload
 is small, the framing is SSE-correct, clients work. **No change to Task 15.**
 
-### D3.3 The escape hatch for real token streaming — measured, works
+### D3.3 The escape hatch for real token streaming: measured, works
 
 `Request::into_writer(self) -> Box<dyn Write + Send + 'static>`
 (`tiny_http-0.12.0/src/request.rs:390`) hands over the raw stream. Framing the
@@ -572,22 +572,22 @@ delivery. **Measured (probe 2)**, client-side arrival times:
 ```
 
 Server-side sleep between events was 120 ms and the client observed exactly
-that spacing — per-event flush confirmed.
+that spacing, per-event flush confirmed.
 
 **Consequence:** when Phase 2 adds a streaming `Substrate::infer`, token-by-token
 SSE stays inside `tiny_http` via `into_writer`; `hyper` is not needed then
-either. The caveat in `into_writer`'s own docs applies — destroy the writer
+either. The caveat in `into_writer`'s own docs applies, destroy the writer
 promptly, since dropping it releases the next pipelined response.
 
 ---
 
-## D4 — chat templating
+## D4: chat templating
 
 **Default:** use the model's embedded template via llama.cpp if the binding
 exposes it; else the documented fallback is the plain concatenation
 `"{role}: {content}\n"` + `"assistant: "`.
 
-**Verdict: CONFIRMED — Task 15 gets the model template as the primary path,
+**Verdict: CONFIRMED: Task 15 gets the model template as the primary path,
 with the fallback genuinely reachable and therefore genuinely required.**
 The `X-Bloomery-Template: model|fallback` response header the plan specifies
 is not decoration; both branches really occur.
@@ -598,14 +598,14 @@ is not decoration; both branches really occur.
 assistant opening tag (the crate's own doc note, `model.rs:925-928`).
 Header value: `model`.
 
-**Two distinct failure modes fall back — both must map to `fallback`:**
+**Two distinct failure modes fall back, both must map to `fallback`:**
 
 1. **No embedded template.** `llama_model_chat_template` returns `NULL` and the
    crate returns `ChatTemplateError::MissingTemplate` (`model.rs:747-748`).
 
 2. **Embedded template present but not understood.** This is the one worth
    flagging: `llama_chat_apply_template` **does not run a Jinja parser**. The
-   header says so verbatim — "*NOTE: This function does not use a jinja parser.
+   header says so verbatim. "*NOTE: This function does not use a jinja parser.
    It only support a pre-defined list of template*"
    (`/home/brice/llama.cpp/include/llama.h:1177`; vendored copy line 1197).
    The implementation calls `llm_chat_detect_template(curr_tmpl)` and, on
@@ -642,9 +642,9 @@ produced a prompt.
 **None. All four pre-registered defaults (D1, D2, D3, D4) are CONFIRMED.**
 No plan amendment is required, and the dependency allowlist
 (`llama-cpp-2` + `llama-cpp-sys-2` w/ `vulkan`, `tiny_http`, `serde`,
-`serde_json`, `toml`, `sha2`) is unchanged — `hyper` is **not** added.
+`serde_json`, `toml`, `sha2`) is unchanged: `hyper` is **not** added.
 
-**Correction (2026-08-14, final whole-branch review):** the statement above is superseded — Task 11 added `self_cell = "1"` to bloomery-substrate, outside the original allowlist. Reason: the model/context arena needs a self-referential struct (contexts borrow their model); `self_cell` makes that ownership machine-checked (`#[covariant]`) instead of hand-written unsafe. The alternative was bespoke unsafe code, which this project treats as the worse dependency. Recorded here because the allowlist rule requires a plan amendment for any addition, and this record previously claimed none existed.
+**Correction (2026-08-14, final whole-branch review):** the statement above is superseded: Task 11 added `self_cell = "1"` to bloomery-substrate, outside the original allowlist. Reason: the model/context arena needs a self-referential struct (contexts borrow their model); `self_cell` makes that ownership machine-checked (`#[covariant]`) instead of hand-written unsafe. The alternative was bespoke unsafe code, which this project treats as the worse dependency. Recorded here because the allowlist rule requires a plan amendment for any addition, and this record previously claimed none existed.
 
 Two **corrections within a confirmed default** (D1 stands; the symbols Task 11
 calls change):
@@ -652,7 +652,7 @@ calls change):
 1. **Task 11 must call `LlamaContext::state_seq_get` / `state_seq_set`
    (safe, size-checked, opaque `SeqState`)** rather than the plan sketch's
    `unsafe` route through `llama_cpp_sys_2::{llama_state_get_size,
-   llama_state_get_data, llama_state_set_data}`. The safe pair is recent — it
+   llama_state_get_data, llama_state_set_data}`. The safe pair is recent. It
    is **absent from 0.1.150 and present from 0.1.152** (published 2026-07-21),
    verified by extracting `src/context/session.rs` from the 0.1.150 / 0.1.152 /
    0.1.153 tarballs and grepping for it. So it did exist when the plan was
@@ -660,7 +660,7 @@ calls change):
    `unsafe` block from the KV-image path entirely.
 2. **The crate's `get_state_size` / `copy_state_data` / `set_state_data` are
    prohibited.** They wrap deprecated, size-unbounded C symbols, and
-   `set_state_data` silently drops `src.len()` — a corrupt KV image would be
+   `set_state_data` silently drops `src.len()`, a corrupt KV image would be
    an out-of-bounds read in C rather than an error return. If whole-context
    state is ever needed, go through raw `llama_state_set_data(ctx, ptr, len)`.
 
@@ -671,7 +671,7 @@ Findings that **help other tasks** and were not asked for:
   the requested `n_ctx`.
 - **Task 5** can implement the VRAM probe with
   `llama_cpp_2::list_llama_ggml_backend_devices()` (`memory_free` /
-  `memory_total` per device) instead of shelling out to `nvidia-smi` — while
+  `memory_total` per device) instead of shelling out to `nvidia-smi`, while
   still returning `None`-with-a-reason if no GPU device is enumerated.
 - **Task 13** gets its KV-image invalidation mechanism for free:
   `StateSeqError::SizeMismatch` from `state_seq_set` is llama.cpp's own
@@ -683,7 +683,7 @@ Findings that **help other tasks** and were not asked for:
   the documented `--cache-ram` cap is silently unenforced until the OOM killer
   arrives. Never infer memory pressure from allocation failure.
 - **Task 15** must catch the chat-template failure at the *apply* step, not
-  only at the *fetch* step (D4) — otherwise a model with a novel Jinja template
+  only at the *fetch* step (D4), otherwise a model with a novel Jinja template
   500s instead of falling back.
 - **Task 17 (G2)** should report warm and cold switch costs as two separate
   terms: the literature claims weight reload, not KV transfer, dominates

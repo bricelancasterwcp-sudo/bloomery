@@ -4,32 +4,32 @@
 
 **Goal:** Port robigo's fixed degradation ladder into `run_task` as opt-in client behavior on `PromptTooLarge`: re-render one rung smaller and re-submit, refusing only when rung 4 still doesn't fit, with the sent rung ledgered on every step row.
 
-**Architecture:** All behavior lives in `task_loop.rs`'s `propose_action`, which walks a fixed 4-rung ladder (full → drop memory block → elide all but last 2 transcript entries to headers → all but last 1) by re-submitting to `pager.infer` — the pager stays the ONLY measurer; the loop never estimates tokens. A new `TaskSpec::window_ladder` bool (default false everywhere) gates it; a new `rung` field on `Event::TaskStep`/`TaskStepRecord` ledgers it.
+**Architecture:** All behavior lives in `task_loop.rs`'s `propose_action`, which walks a fixed 4-rung ladder (full → drop memory block → elide all but last 2 transcript entries to headers → all but last 1) by re-submitting to `pager.infer`. The pager stays the ONLY measurer; the loop never estimates tokens. A new `TaskSpec::window_ladder` bool (default false everywhere) gates it; a new `rung` field on `Event::TaskStep`/`TaskStepRecord` ledgers it.
 
 **Tech Stack:** Rust workspace, `FakeSubstrate` scripted-reply tests, JSONL journal with serde-default compat pins.
 
-**Spec:** `docs/superpowers/specs/2026-08-27-window-ladder-design.md` — read it first; every rule below argues from it.
+**Spec:** `docs/superpowers/specs/2026-08-27-window-ladder-design.md`, read it first; every rule below argues from it.
 
 ## Global Constraints
 
-- Byte-identity law: rung-1 rendering and every ladder-off behavior must be bit-identical to today. Existing goldens (`task_render_test.rs`, `memory_render_test.rs`, the four flywheel anti-drift tests) must pass UNTOUCHED — never edit them to make them pass.
-- No client-side token estimation anywhere — the pager's accept/refuse is the only measurement (spec §4).
+- Byte-identity law: rung-1 rendering and every ladder-off behavior must be bit-identical to today. Existing goldens (`task_render_test.rs`, `memory_render_test.rs`, the four flywheel anti-drift tests) must pass UNTOUCHED, never edit them to make them pass.
+- No client-side token estimation anywhere. The pager's accept/refuse is the only measurement (spec §4).
 - `Event::TaskStep::rung` serde default is a NAMED fn returning 1 (`default_rung_one`), never bare `#[serde(default)]` (which would replay old rows as nonexistent rung 0).
-- Every `TaskSpec` construction site gets `window_ladder: false` except `api_task.rs`'s `create_task`, which wires the request field. `TaskSpec` has no `Default`, so `cargo check --workspace` names every site — use the compiler as the checklist.
+- Every `TaskSpec` construction site gets `window_ladder: false` except `api_task.rs`'s `create_task`, which wires the request field. `TaskSpec` has no `Default`, so `cargo check --workspace` names every site, use the compiler as the checklist.
 - The ladder reacts to `PagerError::PromptTooLarge` ONLY. `Budget` stays terminal `BudgetExhausted`; everything else stays `Error` (g4 Amendment 1 carve-out, unchanged).
-- Run verification as `cargo test --workspace 2>&1 > /tmp/claude-ladder-test.log; echo "exit=$?"` style — full output to a file, check the exit code. NEVER pipe through `tail`/`head` without capturing the exit (this box has masked failures twice that way).
+- Run verification as `cargo test --workspace 2>&1 > /tmp/claude-ladder-test.log; echo "exit=$?"` style, full output to a file, check the exit code. NEVER pipe through `tail`/`head` without capturing the exit (this box has masked failures twice that way).
 - The featured daemon binary is clobbered by `cargo test`. Rebuild it (`cargo build -p bloomery-daemon --features vulkan`) only in the FINAL task, after the last test run.
 - Commit after every green step; conventional-commit messages; no attribution footers (disabled globally on this box).
-- Useful constants already in the codebase: `STEP_MAX_TOKENS = 1024` (task_loop.rs), `CHARS_PER_TOKEN = 3` (pager.rs — `needed_tokens = prompt.len()/3 + max_tokens`). Tests size windows from these, computed from the test's own expected strings, never hardcoded magic numbers.
+- Useful constants already in the codebase: `STEP_MAX_TOKENS = 1024` (task_loop.rs), `CHARS_PER_TOKEN = 3` (pager.rs: `needed_tokens = prompt.len()/3 + max_tokens`). Tests size windows from these, computed from the test's own expected strings, never hardcoded magic numbers.
 
 ---
 
-### Task 1: The rung ledger — `rung` on journal rows and step records
+### Task 1: The rung ledger: `rung` on journal rows and step records
 
 **Files:**
 - Modify: `crates/bloomery-core/src/journal.rs` (the `Event::TaskStep` variant, ~line 84)
 - Modify: `crates/bloomery-daemon/src/task/task_loop.rs` (`TaskStepRecord`, `StepReport`, every `StepReport { .. }` literal)
-- Test: `crates/bloomery-core/tests/journal_test.rs` (or wherever `grep -rn "default_expect_patch" crates/bloomery-core/tests` lands — the existing compat-pin file; add alongside)
+- Test: `crates/bloomery-core/tests/journal_test.rs` (or wherever `grep -rn "default_expect_patch" crates/bloomery-core/tests` lands: the existing compat-pin file; add alongside)
 
 **Interfaces:**
 - Consumes: nothing new.
@@ -37,7 +37,7 @@
 
 - [ ] **Step 1: Write the failing compat-pin test**
 
-In the journal's existing test file (same file that pins `CodecFixture`'s `expect` default — find it with `grep -rln "default_expect_patch\|expect.*patch" crates/bloomery-core/tests`), add:
+In the journal's existing test file (same file that pins `CodecFixture`'s `expect` default, find it with `grep -rln "default_expect_patch\|expect.*patch" crates/bloomery-core/tests`), add:
 
 ```rust
 #[test]
@@ -77,12 +77,12 @@ fn a_task_step_row_round_trips_its_rung() {
 }
 ```
 
-Adapt the `raw` literal's exact key set to the variant's real serde shape — copy an existing `TaskStep` serialization from a neighboring test or serialize one first. If the enum uses a different tag layout (e.g. externally tagged `{"TaskStep":{...}}`), match whatever the existing compat-pin test in that file uses.
+Adapt the `raw` literal's exact key set to the variant's real serde shape, copy an existing `TaskStep` serialization from a neighboring test or serialize one first. If the enum uses a different tag layout (e.g. externally tagged `{"TaskStep":{...}}`), match whatever the existing compat-pin test in that file uses.
 
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `cargo test -p bloomery-core a_pre_ladder_task_step_row 2>&1 | tee /tmp/t1.log; echo exit=$?`
-Expected: FAIL to compile — `Event::TaskStep` has no field `rung`.
+Expected: FAIL to compile: `Event::TaskStep` has no field `rung`.
 
 - [ ] **Step 3: Add the field**
 
@@ -119,7 +119,7 @@ In `crates/bloomery-daemon/src/task/task_loop.rs`:
     pub rung: u32,
 ```
 
-`StepReport` gains `rung: u32`. `record_step` passes it into both the `Event::TaskStep` append (`rung: report.rung`) and the `TaskStepRecord` push (`rung: report.rung`). Every existing `StepReport { .. }` literal (`propose_action`'s parse-failure report, the `done` report, the demoted-verb report, the executed-action report) gets `rung: 1` — Task 3 replaces these with the real value.
+`StepReport` gains `rung: u32`. `record_step` passes it into both the `Event::TaskStep` append (`rung: report.rung`) and the `TaskStepRecord` push (`rung: report.rung`). Every existing `StepReport { .. }` literal (`propose_action`'s parse-failure report, the `done` report, the demoted-verb report, the executed-action report) gets `rung: 1`: Task 3 replaces these with the real value.
 
 Then `cargo check --workspace 2>&1 | tee /tmp/t1c.log; echo exit=$?` and fix every site the compiler names (test files constructing `TaskStepRecord` or `Event::TaskStep` literals get `rung: 1`).
 
@@ -143,7 +143,7 @@ git commit -m "feat: rung field on TaskStep journal rows and step records (windo
 - Modify: `crates/bloomery-daemon/src/task/task_loop.rs` (`TaskSpec`)
 - Modify: `crates/bloomery-daemon/src/api_task.rs` (`CreateTaskReq`, the `TaskSpec { .. }` literal ~line 204)
 - Modify: every other `TaskSpec { .. }` site the compiler names (`codec_probe/mod.rs` ~363, `codec_probe/refuse.rs` ~231, `task/registry.rs` test ~904, flywheel_tool bin, all test files)
-- Test: `crates/bloomery-daemon/tests/task_ladder_test.rs` (NEW — this file grows through Tasks 2-4)
+- Test: `crates/bloomery-daemon/tests/task_ladder_test.rs` (NEW. This file grows through Tasks 2-4)
 
 **Interfaces:**
 - Consumes: Task 1's `StepReport.rung` (test fixtures may construct records).
@@ -151,7 +151,7 @@ git commit -m "feat: rung field on TaskStep journal rows and step records (windo
 
 - [ ] **Step 1: Create the test file with its fixtures and the failing identity test**
 
-Create `crates/bloomery-daemon/tests/task_ladder_test.rs`. The fixtures mirror `task_loop_test.rs`'s (same pattern, plus a `window_cap` parameter — `Pager::create_agent(model, priority, window_cap, budget)`'s third argument caps the agent's window, which is how every ladder test makes prompts refuse):
+Create `crates/bloomery-daemon/tests/task_ladder_test.rs`. The fixtures mirror `task_loop_test.rs`'s (same pattern, plus a `window_cap` parameter: `Pager::create_agent(model, priority, window_cap, budget)`'s third argument caps the agent's window, which is how every ladder test makes prompts refuse):
 
 ```rust
 //! The window ladder (docs/superpowers/specs/2026-08-27-window-ladder-design.md):
@@ -330,12 +330,12 @@ fn ladder_off_dies_window_exhausted_on_the_first_refusal() {
 }
 ```
 
-Note: check `Event::Refusal`'s real field names in `crates/bloomery-core/src/journal.rs` (`id`, `needed_tokens`, `window_tokens`, `detail` — see `pager/journal.rs::refusal`) and adapt the `filter_map` arm if they differ. Same for `replay`'s exact signature — `task_loop_test.rs` imports and uses it; copy that usage.
+Note: check `Event::Refusal`'s real field names in `crates/bloomery-core/src/journal.rs` (`id`, `needed_tokens`, `window_tokens`, `detail`. See `pager/journal.rs::refusal`) and adapt the `filter_map` arm if they differ. Same for `replay`'s exact signature: `task_loop_test.rs` imports and uses it; copy that usage.
 
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `cargo test -p bloomery-daemon --test task_ladder_test 2>&1 | tee /tmp/t2.log; echo exit=$?`
-Expected: FAIL to compile — `TaskSpec` has no field `window_ladder`.
+Expected: FAIL to compile: `TaskSpec` has no field `window_ladder`.
 
 - [ ] **Step 3: Add the field and wire every site**
 
@@ -367,15 +367,15 @@ In `api_task.rs`, `CreateTaskReq` gains:
 
 and the `TaskSpec { .. }` literal gains `window_ladder: req.window_ladder,`.
 
-Then `cargo check --workspace 2>&1 | tee /tmp/t2c.log; echo exit=$?` and add `window_ladder: false,` at every site the compiler names — `codec_probe/mod.rs`, `codec_probe/refuse.rs`, the flywheel_tool bin, `task/registry.rs`'s test, and every test file (`task_loop_test.rs`, `memory_render_test.rs`, `memory_task_test.rs`, the four `flywheel_tool_*_test.rs`, etc.). Struct-update-syntax sites (`..demoted_spec(...)`) need no edit.
+Then `cargo check --workspace 2>&1 | tee /tmp/t2c.log; echo exit=$?` and add `window_ladder: false,` at every site the compiler names: `codec_probe/mod.rs`, `codec_probe/refuse.rs`, the flywheel_tool bin, `task/registry.rs`'s test, and every test file (`task_loop_test.rs`, `memory_render_test.rs`, `memory_task_test.rs`, the four `flywheel_tool_*_test.rs`, etc.). Struct-update-syntax sites (`..demoted_spec(...)`) need no edit.
 
 - [ ] **Step 4: Run the new test and the workspace**
 
 Run: `cargo test -p bloomery-daemon --test task_ladder_test 2>&1 | tee /tmp/t2b.log; echo exit=$?`
-Expected: PASS (the identity test exercises existing behavior — it pins it before Task 3 changes the neighborhood).
+Expected: PASS (the identity test exercises existing behavior. It pins it before Task 3 changes the neighborhood).
 
 Run: `cargo test --workspace 2>&1 > /tmp/t2full.log; echo exit=$?; grep -E "test result|FAILED" /tmp/t2full.log | head -20`
-Expected: all green — proving the field addition changed no behavior anywhere.
+Expected: all green, proving the field addition changed no behavior anywhere.
 
 - [ ] **Step 5: Commit**
 
@@ -386,7 +386,7 @@ git commit -m "feat: TaskSpec::window_ladder opt-in flag, default false everywhe
 
 ---
 
-### Task 3: The ladder walk — rung rendering, head note, re-submit on refusal
+### Task 3: The ladder walk: rung rendering, head note, re-submit on refusal
 
 **Files:**
 - Modify: `crates/bloomery-daemon/src/task/task_loop.rs` (`render_prompt` → `render_prompt_at_rung`, new `degraded_transcript`/`elided_entry`/`head_note` helpers, `propose_action`'s walk, `ProposeOutcome::Action` carries the rung, `run_task` threads it into every `StepReport`)
@@ -642,7 +642,7 @@ fn rung_4_refusal_is_terminal_window_exhausted() {
 - [ ] **Step 2: Run to verify the new tests fail**
 
 Run: `cargo test -p bloomery-daemon --test task_ladder_test 2>&1 | tee /tmp/t3.log; echo exit=$?`
-Expected: `ladder_off_dies...` still PASSES; every new test FAILS — `ladder_on_lands_rung_2...` gets `WindowExhausted` instead of `Done` (no walk exists yet).
+Expected: `ladder_off_dies...` still PASSES; every new test FAILS: `ladder_on_lands_rung_2...` gets `WindowExhausted` instead of `Done` (no walk exists yet).
 
 - [ ] **Step 3: Implement the walk in `task_loop.rs`**
 
@@ -756,7 +756,7 @@ fn render_prompt_at_rung(
 }
 ```
 
-Change `ProposeOutcome::Action(Action, u64)` to `Action(Action, u64, u32)` (doc: "A validated action, how long the successful `infer` took, and the ladder rung the prompt was sent at — 1 for every ladder-off task"). Rewrite `propose_action`'s loop body:
+Change `ProposeOutcome::Action(Action, u64)` to `Action(Action, u64, u32)` (doc: "A validated action, how long the successful `infer` took, and the ladder rung the prompt was sent at: 1 for every ladder-off task"). Rewrite `propose_action`'s loop body:
 
 ```rust
     for attempt in 1..=MAX_PARSE_ATTEMPTS {
@@ -812,17 +812,17 @@ Change `ProposeOutcome::Action(Action, u64)` to `Action(Action, u64, u32)` (doc:
     }
 ```
 
-In `run_task`, destructure the third element — `ProposeOutcome::Action(action, duration_ms, rung) => (action, duration_ms, rung)` — and set `rung` (instead of the Task 1 literal `1`) on the `done`, demoted-verb, and executed-action `StepReport` literals.
+In `run_task`, destructure the third element, `ProposeOutcome::Action(action, duration_ms, rung) => (action, duration_ms, rung)`, and set `rung` (instead of the Task 1 literal `1`) on the `done`, demoted-verb, and executed-action `StepReport` literals.
 
 - [ ] **Step 4: Run the ladder tests, iterate on sizing**
 
 Run: `cargo test -p bloomery-daemon --test task_ladder_test 2>&1 | tee /tmp/t3b.log; echo exit=$?`
-Expected: all PASS. If a rung-3/4 test fails on `ends_with`, print the tail of `history` and fix the test's `e1`/`e2`/`e3` outcome strings to `exec_read`'s real outcome shape (e.g. the exact "read N bytes" spelling) — the IMPLEMENTATION's formats are pinned by spec; the test's fixture literals adapt to the executor's real outcome text, never the other way around.
+Expected: all PASS. If a rung-3/4 test fails on `ends_with`, print the tail of `history` and fix the test's `e1`/`e2`/`e3` outcome strings to `exec_read`'s real outcome shape (e.g. the exact "read N bytes" spelling). The IMPLEMENTATION's formats are pinned by spec; the test's fixture literals adapt to the executor's real outcome text, never the other way around.
 
-- [ ] **Step 5: Run the workspace — the byte-identity gate**
+- [ ] **Step 5: Run the workspace: the byte-identity gate**
 
 Run: `cargo test --workspace 2>&1 > /tmp/t3full.log; echo exit=$?; grep -E "test result|FAILED" /tmp/t3full.log | head -20`
-Expected: all green, in particular `task_render_test`, `memory_render_test`, and all four flywheel anti-drift tests — UNTOUCHED and green, proving rung-1 bytes never moved.
+Expected: all green, in particular `task_render_test`, `memory_render_test`, and all four flywheel anti-drift tests: UNTOUCHED and green, proving rung-1 bytes never moved.
 
 - [ ] **Step 6: Commit**
 
@@ -833,14 +833,14 @@ git commit -m "feat: the window ladder — fixed rung walk on PromptTooLarge in 
 
 ---
 
-### Task 4: HTTP surface — request wiring proof and rung exposure via `get_task`
+### Task 4: HTTP surface: request wiring proof and rung exposure via `get_task`
 
 **Files:**
-- Test: `crates/bloomery-daemon/tests/api_task_test.rs` (extend — mirror its existing fixture/server pattern exactly)
+- Test: `crates/bloomery-daemon/tests/api_task_test.rs` (extend, mirror its existing fixture/server pattern exactly)
 
 **Interfaces:**
-- Consumes: Task 2's `CreateTaskReq.window_ladder`, Task 1's `TaskStepRecord.rung` (already serialized into `get_task`'s `"steps"` array — `get_task` returns `result.steps` whole, so no api_task code change exists in this task; it is test-only).
-- Produces: nothing new — pins.
+- Consumes: Task 2's `CreateTaskReq.window_ladder`, Task 1's `TaskStepRecord.rung` (already serialized into `get_task`'s `"steps"` array: `get_task` returns `result.steps` whole, so no api_task code change exists in this task; it is test-only).
+- Produces: nothing new, pins.
 
 - [ ] **Step 1: Write the tests**
 
@@ -877,7 +877,7 @@ These are deliberately wire-level pins, not behavior duplicates: `task_ladder_te
 - [ ] **Step 2: Run to verify**
 
 Run: `cargo test -p bloomery-daemon --test api_task_test 2>&1 | tee /tmp/t4.log; echo exit=$?`
-Expected: both PASS immediately (the wiring landed in Tasks 1-2 — these are regression pins; RED was played at Task 2 Step 2 when the field didn't compile). If `"rung"` is absent from the JSON, `TaskStepRecord`'s field isn't serializing — fix THAT (it must be a plain `pub rung: u32` with no skip attribute), not the test.
+Expected: both PASS immediately (the wiring landed in Tasks 1-2. These are regression pins; RED was played at Task 2 Step 2 when the field didn't compile). If `"rung"` is absent from the JSON, `TaskStepRecord`'s field isn't serializing, fix THAT (it must be a plain `pub rung: u32` with no skip attribute), not the test.
 
 - [ ] **Step 3: Commit**
 
@@ -891,7 +891,7 @@ git commit -m "test: pin window_ladder request field and rung exposure on the ta
 ### Task 5: Mutation spot-checks, full acceptance, featured binary
 
 **Files:**
-- No production edits expected — this task VERIFIES. (If a mutant survives, the fix is a new test in `task_ladder_test.rs`, then re-run.)
+- No production edits expected. This task VERIFIES. (If a mutant survives, the fix is a new test in `task_ladder_test.rs`, then re-run.)
 
 **Interfaces:**
 - Consumes: everything above.
@@ -899,27 +899,27 @@ git commit -m "test: pin window_ladder request field and rung exposure on the ta
 
 - [ ] **Step 1: Mutation spot-check the two spec §8-test-9 boundaries**
 
-For each mutant: apply by hand with Edit, run ONLY the ladder test file, confirm at least one test FAILS (the kill), revert the edit, and `touch` the reverted file (NEVER `cp -p`-style timestamp restore — cargo's fingerprint would run the stale mutant; this box has been burned).
+For each mutant: apply by hand with Edit, run ONLY the ladder test file, confirm at least one test FAILS (the kill), revert the edit, and `touch` the reverted file (NEVER `cp -p`-style timestamp restore, cargo's fingerprint would run the stale mutant; this box has been burned).
 
-Mutant A — elision boundary: in `render_prompt_at_rung`, change rung 3's `degraded_transcript(steps, 2)` to `degraded_transcript(steps, 1)`.
+Mutant A, elision boundary: in `render_prompt_at_rung`, change rung 3's `degraded_transcript(steps, 2)` to `degraded_transcript(steps, 1)`.
 Run: `cargo test -p bloomery-daemon --test task_ladder_test 2>&1 | tee /tmp/m1.log; echo exit=$?`
 Expected kill: `ladder_lands_rung_3_...` fails (e2 would render elided).
 
-Mutant B — ladder length: change `const MAX_RUNG: u32 = 4` to `3`.
+Mutant B, ladder length: change `const MAX_RUNG: u32 = 4` to `3`.
 Run: same command.
 Expected kill: `ladder_lands_rung_4_...` fails (terminal at rung 3 → WindowExhausted, no Done).
 
-Mutant C — head-note range: in `degraded_transcript`, swap `steps[0].step` and `steps[elide_end - 1].step`.
-Expected kill: with the current fixtures both rung-3/4 tests elide exactly one entry (`1-1`), which a swap cannot distinguish — so FIRST extend `ladder_lands_rung_4_...` to three big entries (add one `read_big` script and an `e3`; rung-4 tail becomes `note(1, 2)` + two elided + one full; note that step 3 itself now degrades too — two big entries no longer fit rung 1 — so the expected rung sequence becomes `[1, 1, 4, 4]` and the refusal count grows; re-green it), THEN apply the swap and confirm the kill (`2-1` renders). Revert, `touch`.
+Mutant C, head-note range: in `degraded_transcript`, swap `steps[0].step` and `steps[elide_end - 1].step`.
+Expected kill: with the current fixtures both rung-3/4 tests elide exactly one entry (`1-1`), which a swap cannot distinguish, so FIRST extend `ladder_lands_rung_4_...` to three big entries (add one `read_big` script and an `e3`; rung-4 tail becomes `note(1, 2)` + two elided + one full; note that step 3 itself now degrades too, two big entries no longer fit rung 1, so the expected rung sequence becomes `[1, 1, 4, 4]` and the refusal count grows; re-green it), THEN apply the swap and confirm the kill (`2-1` renders). Revert, `touch`.
 
 Record each kill (mutant, command, failing test name) in the task's ledger notes.
 
 - [ ] **Step 2: Full workspace acceptance**
 
 Run: `cargo test --workspace 2>&1 > /tmp/t5full.log; echo exit=$?; grep -E "test result" /tmp/t5full.log`
-Expected: all green, ZERO ignored, zero failures — and eyeball that the totals line up with ~825+ tests plus this arc's additions.
+Expected: all green, ZERO ignored, zero failures, and eyeball that the totals line up with ~825+ tests plus this arc's additions.
 
-- [ ] **Step 3: Rebuild the featured binary (box rule — LAST, after the final test run)**
+- [ ] **Step 3: Rebuild the featured binary (box rule: LAST, after the final test run)**
 
 Run: `cargo build -p bloomery-daemon --features vulkan 2>&1 > /tmp/t5build.log; echo exit=$?`
 Expected: exit=0. `cargo test` clobbers the featured binary; this restores it so the daemon is safe to boot.
@@ -933,4 +933,4 @@ git commit -m "test: window-ladder mutation-kill extensions and acceptance evide
 git log --oneline -6
 ```
 
-Leave the branch/master state for Brice's merge ruling — do NOT push without an explicit go.
+Leave the branch/master state for Brice's merge ruling, do NOT push without an explicit go.

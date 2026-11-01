@@ -1,4 +1,4 @@
-# Swap-candidate live acceptance — the fw1 candidate against the standing fw2 baseline
+# Swap-candidate live acceptance: the fw1 candidate against the standing fw2 baseline
 
 **Date:** 2026-08-19 (boot 3 of the standing lineage, 22:41 CDT →
 23:03 CDT; all timestamps below are UTC, i.e. 2026-08-20T03:41Z →
@@ -18,9 +18,9 @@ binary built **after** the tests (`cargo build -p bloomery-daemon
 **assay:** master at `bdb7f92` (the PR #6 merge, v1.11), **0.13.0**,
 `cover` present in `--help`. Suite green: **1073 passed**
 (`.venv/bin/python -m pytest -q`).
-**Box/tier:** `enthusiast-16gb`, `emulated = false` — RTX 5080 16 GB,
+**Box/tier:** `enthusiast-16gb`, `emulated = false`: RTX 5080 16 GB,
 Vulkan. GPU **1821 MiB** used (desktop) before the boot; **1709 MiB**
-after shutdown with `pgrep -x bloomery-daemon` empty — the
+after shutdown with `pgrep -x bloomery-daemon` empty. The
 bloomery-attributable delta at close is zero.
 **Model:** `/home/brice/flywheel2/qwen3-14b-flywheel2-Q4_K_M.gguf`,
 configured as `qwen3-14b-flywheel2`, standing config
@@ -28,8 +28,8 @@ configured as `qwen3-14b-flywheel2`, standing config
 **Candidate:** `/home/brice/flywheel1/qwen3-14b-flywheel1-Q4_K_M.gguf`
 (9,001,752,960 bytes; sha256
 `80bc0ea9042aef7f5fa16ab64e641d5ed30da6f7c2faf6da1084a388d26ff293`).
-The sibling `fw1-bf16.gguf` is the training artifact — a different
-quant class from the baseline's Q4_K_M and too large for this GPU — and
+The sibling `fw1-bf16.gguf` is the training artifact, a different
+quant class from the baseline's Q4_K_M and too large for this GPU, and
 was deliberately not used.
 
 ## Verdict
@@ -48,14 +48,14 @@ finding, and it is a defect in this slice, not a fact about flywheel1.
 
 Both negative controls passed. The two candidate jobs produced the same
 sentence, the same candidate digest and the same floor digest, and
-their two journal rows are byte-equal — this is deterministic, not
+their two journal rows are byte-equal. This is deterministic, not
 flaky, so no third run was made.
 
 | comparison | reference | current | outcome | exit code |
 |---|---|---|---|---|
 | boot 3 drift-step | `…previous.json` (0.12.0/v10) | boot 3's (0.13.0/v10) | **`instrument-changed`** | `null` (diff never spawned) |
 | boot 3 drift-cumulative | `…baseline.json` (0.12.0/v10) | boot 3's (0.13.0/v10) | **`instrument-changed`** | `null` (diff never spawned) |
-| swap-candidate coverage | `…baseline.json` | *never written* | **`infra:` — unmeasured** | `null` (cover never spawned) |
+| swap-candidate coverage | `…baseline.json` | *never written* | **`infra:`: unmeasured** | `null` (cover never spawned) |
 
 No `SwapCandidate` row was journaled on either run. That is correct and
 by design: the verdict row is written when a comparison happened, and
@@ -73,7 +73,7 @@ HTTP 202
 
 `GET` immediately after: `{"model":"qwen3-14b-flywheel2","state":"running"}` (200).
 
-`GET` at `03:57:57Z` (4m11s after the POST) — the whole body:
+`GET` at `03:57:57Z` (4m11s after the POST): the whole body:
 
 ```json
 {"model":"qwen3-14b-flywheel2","report":{"candidate_gguf_sha":"80bc0ea9042aef7f5fa16ab64e641d5ed30da6f7c2faf6da1084a388d26ff293","candidate_profile_path":"/home/brice/.local/share/bloomery/drift/data/profiles/qwen3-14b-flywheel2!swap-candidate.confirm.json","exit_code":null,"floor_sha":"f2a2cabc360a7423f5f963975103672cda04242c55fc04897ee0e2aa5a5b1b98","notes":["done_trust/G4/G5 are unmeasured for this candidate until its first real boot with tasks enabled","on swap: edit config, restart; the next boot reads not-comparable against the old lineage's baseline until you POST /models/{name}/bless"],"outcome":"infra: the candidate probe for qwen3-14b-flywheel2 (registered as qwen3-14b-flywheel2!swap-candidate) failed: assay exited 4: assay: infrastructure failure: HTTP 422 from http://127.0.0.1:8399/v1/chat/completions; no coverage verdict was reached — this candidate is unmeasured, not refused"},"state":"done"}
@@ -82,8 +82,8 @@ HTTP 202
 Run 2 (POST `03:59:09Z`, done `04:03:29Z`, 4m20s) returned the same
 `report` object, field for field. HTTP bodies are ephemeral, so the
 durable form of that claim is in the journal, where both runs left a
-row: lines **558 and 559** of `boot-1787197252.jsonl` are **byte-equal**
-— re-checkable by anyone holding the file, no transcript required:
+row: lines **558 and 559** of `boot-1787197252.jsonl` are **byte-equal**,
+re-checkable by anyone holding the file, no transcript required:
 
 ```
 $ grep '"reason":"swap:' boot-1787197252.jsonl | sort -u | wc -l
@@ -93,7 +93,7 @@ $ grep '"reason":"swap:' boot-1787197252.jsonl | uniq -c
 ```
 
 **The two `notes` came back on both runs, whatever the outcome, exactly
-as §4's amendment promises** — this is the operator handover §5 owes,
+as §4's amendment promises**. This is the operator handover §5 owes,
 and it is here reproduced as the surface printed it:
 
 > `done_trust/G4/G5 are unmeasured for this candidate until its first real boot with tasks enabled`
@@ -126,7 +126,7 @@ Boot 3's drift-relevant rows
 {"event":"Drift","model":"qwen3-14b-flywheel2","comparison":"cumulative","outcome":"instrument-changed (0.12.0/v10 -> 0.13.0/v10)","reference_path":"/home/brice/.local/share/bloomery/drift/data/profiles/qwen3-14b-flywheel2.baseline.json","current_path":"/home/brice/.local/share/bloomery/drift/data/profiles/qwen3-14b-flywheel2.json","exit_code":null,"reference_sha":"f2a2cabc360a7423f5f963975103672cda04242c55fc04897ee0e2aa5a5b1b98","current_sha":"34cc643b1ef321b2f30b3a0a204bdd313b1c33ff724885013c0bf74cdcbc968c"}
 ```
 
-The two candidate jobs, at lines 558 and 559 — byte-equal to each
+The two candidate jobs, at lines 558 and 559, byte-equal to each
 other, printed once:
 
 ```json
@@ -138,13 +138,13 @@ other, printed once:
 Three predictions were written down **before** the POST (during boot
 3's own probe), from reading the floor document and assay's gate:
 
-1. The verdict will be **exit 2, `refused`**, on instrument grounds —
-   the floor is `probe_version 0.12.0` and the live pin serves 0.13.0,
+1. The verdict will be **exit 2, `refused`**, on instrument grounds.
+   The floor is `probe_version 0.12.0` and the live pin serves 0.13.0,
    and `cover_identity_gate` demands exact equality.
 2. `model.name` stays informational: the scratch name
    `qwen3-14b-flywheel2!swap-candidate` appears in `identity_notes`,
    never as the fatal term.
-3. Boot 3's drift rows will read **`within-noise`** — assay's `diff`
+3. Boot 3's drift rows will read **`within-noise`**: assay's `diff`
    gate does not require `probe_version` equality, and `SEMANTIC_BREAKS`
    registers only `verdict.parallel` at `(0, 11, 0)`, which neither
    0.12.0 nor 0.13.0 straddles.
@@ -159,7 +159,7 @@ says outright "The diff is never spawned"), so assay was never asked.
 The daemon is stricter than the tool it drives, and this boot is the
 first time that rule fired in production.
 
-**Predictions 1 and 2 were not tested at all** — the job failed before
+**Predictions 1 and 2 were not tested at all**: the job failed before
 the cover step, so no candidate profile and no cover document exist.
 The brief asked for the run's `identity_notes` quoted verbatim; the
 honest answer is **there are none, because `cover` never ran**. What
@@ -188,7 +188,7 @@ standing admission block **first**, before the profile gate. So the
 snippet below starts at that branch rather than after it. Verbatim from
 `crates/bloomery-daemon/src/pager.rs:664-688` **as it stood at
 `a236de4`**, the commit this run's binary was built from (the file has
-since moved — a later fix commit `dc0ae2d` changed `admit`; nothing
+since moved, a later fix commit `dc0ae2d` changed `admit`; nothing
 below describes the current tree):
 
 ```rust
@@ -221,7 +221,7 @@ below describes the current tree):
 
 **The `DriftBlocked` branch is excluded by observation, not by
 argument.** `/status`, read immediately before run 1's POST, carried
-`"admission_block": null` for `qwen3-14b-flywheel2` — no block stood,
+`"admission_block": null` for `qwen3-14b-flywheel2`, no block stood,
 so that first branch could not have fired. (It could not have fired for
 the scratch identity either, which had just been registered and carried
 no block, but the reading above settles it without needing that
@@ -230,23 +230,23 @@ outcomes that installs an admission block, which is why the row and the
 null block coexist.
 
 That leaves the second refusal, and its three terms are all pinned by
-this run: the swap job's scratch identity has no profile — producing one
+this run: the swap job's scratch identity has no profile. Producing one
 is the whole point of the probe; `allow_unprofiled` is not set in the
 standing config; and `posting` is a **daemon-global** flag owned by the
 boot-time POST window, which had closed ~37 seconds before run 1's POST
 (the boot probe's own provenance finishes at `03:53:09Z`; the POST is at
-`03:53:46Z`) — `/status` read `"posting": false` immediately before the
+`03:53:46Z`): `/status` read `"posting": false` immediately before the
 request, and again before run 2. So agent creation for
 `qwen3-14b-flywheel2!swap-candidate` is refused 422 at the door, assay
 gets a 422 from `/v1/chat/completions`, exits **4** (its own
 infrastructure-failure code, not one of `cover`'s four), and the job
-reports it as `infra:` — unmeasured, explicitly not a verdict.
+reports it as `infra:`, unmeasured, explicitly not a verdict.
 
 **Design §4 step 2 says "probe it through the daemon's own `/v1`", and
 on this daemon that is currently impossible outside the boot POST
-window.** The endpoint's error handling is exactly right — it named the
+window.** The endpoint's error handling is exactly right. It named the
 probe's own words, invented no verdict, journaled `Degraded`, cleaned up
-and released the slot — but the happy path has never been reachable in
+and released the slot, but the happy path has never been reachable in
 production.
 
 The near-miss is worth naming because it is worse than the failure: a
@@ -255,7 +255,7 @@ admitted, by the global flag, for a reason that has nothing to do with
 this endpoint. This slice would then have appeared to work, intermittently
 and by accident of timing.
 
-**What a fix needs** (named, not built — this task is acceptance): a
+**What a fix needs** (named, not built. This task is acceptance): a
 provisional admission scoped to the candidate job and its scratch
 identity, journaled per model the way POST's already is, rather than the
 daemon-global `posting` flag. That is new pager surface, and it belongs
@@ -267,7 +267,7 @@ Even had the probe succeeded, this pair could not have produced a
 coverage verdict today. The standing floor was written by assay
 **0.12.0**; anything probed under the live pin is **0.13.0**; and
 `cover_identity_gate` is strict. Run on the two real documents this
-boot holds — the blessed floor and boot 3's own current fw2 profile,
+boot holds: the blessed floor and boot 3's own current fw2 profile,
 both genuine, neither synthesised:
 
 ```
@@ -288,15 +288,15 @@ The `--json` document, all seven keys, nothing elided:
 ```
 
 The four empty cell lists are `cover_profiles`' documented behaviour on
-a refused pair — "A refused pair reports NOTHING beyond the notes" — not
+a refused pair, "A refused pair reports NOTHING beyond the notes", not
 a coverage result of zero.
 
-**This is a derivation, not the endpoint's verdict** — the candidate
+**This is a derivation, not the endpoint's verdict**: the candidate
 here is fw2's own current profile, not flywheel1, because flywheel1's
 profile does not exist. It establishes only that pre-registered
 prediction 1's *mechanism* is real and firing on this box: the exit-2
 instrument refusal reproduces on a document pair produced 12 hours
-apart across an assay release. Prediction 2 stays untested — with no
+apart across an assay release. Prediction 2 stays untested, with no
 crossed-name pair to feed it, no `model.name (informational)` note was
 observed, and none is quoted here.
 
@@ -307,7 +307,7 @@ Instrument identity of every document involved:
 | `…baseline.json` (the floor) | 0.12.0 / v10 | quick | `2026-08-19T14:28:59Z → 14:38:45Z` (9m46s) |
 | `…previous.json` | 0.12.0 / v10 | quick | `2026-08-19T14:41:48Z → 14:51:33Z` (9m45s) |
 | `…json` (boot 3's current) | **0.13.0** / v10 | quick | `2026-08-20T03:42:51Z → 03:53:09Z` (**10m18s**) |
-| the candidate's | — | — | **never written** |
+| the candidate's |: |: | **never written** |
 
 All three carry `tier=enthusiast-16gb emulated=False`, so the hardware
 half of the gate agrees; only the instrument half disagrees.
@@ -317,8 +317,8 @@ half of the gate agrees; only the instrument half disagrees.
 **Nothing.** No claim about flywheel1's admissibility as a substitute
 for flywheel2 is supported by this run, in either direction. The
 candidate's weights were read (digested, 9.0 GB) and never loaded: GPU
-held steady at ~10,020 MiB through both candidate jobs — flywheel2's
-resident weights and nothing else — where a real candidate probe would
+held steady at ~10,020 MiB through both candidate jobs, flywheel2's
+resident weights and nothing else, where a real candidate probe would
 have shown a second multi-GB load.
 
 GPU readings are ephemeral, so the durable proof is the journal census
@@ -336,7 +336,7 @@ $ grep -c 'swap-candidate' boot-1787197252.jsonl                       #   2
 `qwen3-14b-flywheel2`; none named the scratch identity.** Only 2 of the
 559 rows mention `swap-candidate` at all, and they are the byte-equal
 `Degraded` pair above. The candidate never got an agent, so it never
-got an inference, so it was never loaded — which is the same fact the
+got an inference, so it was never loaded, which is the same fact the
 422 predicts, arrived at from the other side.
 
 The question the acceptance was
@@ -344,7 +344,7 @@ designed to answer is still open, and answering it needs two fixes
 first:
 
 1. the admission gate above, so the candidate can be probed at all; and
-2. a floor and a candidate measured by the same assay — which on this
+2. a floor and a candidate measured by the same assay, which on this
    box means re-blessing `qwen3-14b-flywheel2` under 0.13.0 (a
    deliberate operator act, `POST /models/{name}/bless`, deliberately
    not performed here: nothing in this task's remit authorises moving
@@ -378,12 +378,12 @@ $ ss -ltn | grep 8399             # not listening
 The scratch identity did not outlive either request: `/status` after
 run 1 listed `['qwen3-14b-flywheel2']` only, and no
 `qwen3-14b-flywheel2!swap-candidate.confirm.json` was left behind in
-the profiles directory — design §4's cleanup law held on the failure
+the profiles directory, design §4's cleanup law held on the failure
 path, which is the path it exists for.
 
 ## What boot 3 left in the standing home
 
-Every artifact this document quotes is durable on the box — in the
+Every artifact this document quotes is durable on the box, in the
 standing home, not in the repo and not in a worktree's `target/`, the
 same convention `2026-08-19-standing-v10-baseline.md` established:
 
@@ -399,8 +399,8 @@ same convention `2026-08-19-standing-v10-baseline.md` established:
     └── profiles/qwen3-14b-flywheel2.{baseline,previous,}.json
 ```
 
-Boot 3 added two files — `boot3.log` (557,942 bytes) and
-`boot-1787197252.jsonl` (559 rows) — and moved the profile documents on
+Boot 3 added two files, `boot3.log` (557,942 bytes) and
+`boot-1787197252.jsonl` (559 rows), and moved the profile documents on
 one rung, the rotation the drift watch runs every boot. State after
 shutdown, read off the files:
 
@@ -413,7 +413,7 @@ shutdown, read off the files:
 `previous.json` held `f2a2cabc` before this boot and holds `179b706e`
 after it, so the rotation ran; its mtime is boot 2's, inherited because
 rotation renames the file rather than rewriting it. **The blessed
-baseline is byte-identical to what boot 1 blessed** — `f2a2cabc`, the
+baseline is byte-identical to what boot 1 blessed**: `f2a2cabc`, the
 same digest the drift-**cumulative** row names as `reference_sha` and
 both swap reports name as `floor_sha` (the drift-step row's
 `reference_sha` is `179b706e`, the previous rung). Nothing in this run

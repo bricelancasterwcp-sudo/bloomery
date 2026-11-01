@@ -1,4 +1,4 @@
-# bloomery — an AI-native operating system for consumer hardware
+# bloomery: an AI-native operating system for consumer hardware
 
 **Date:** 2026-08-14
 **Status:** Design approved in conversation; awaiting written-spec review.
@@ -18,8 +18,8 @@ The thesis is grounded in measured findings from three sibling repos
 
 - Serving layers silently front-truncate oversized prompts and answer
   confidently about whatever survived (robigo; assay canary probe).
-- A daemon can return HTTP 200s that break their own protocol — no token
-  stats — and the failure is *state-transient*: present 40/40 on
+- A daemon can return HTTP 200s that break their own protocol, no token
+  stats, and the failure is *state-transient*: present 40/40 on
   2026-08-10, gone on 2026-08-12 on the same unrestarted process
   (assay live validation). Capability is a point-in-time property of a
   serving state, so it must be probed, never assumed.
@@ -30,7 +30,7 @@ The thesis is grounded in measured findings from three sibling repos
   100% under two lenses on the same daemon (robigo stage 2 vs assay v1).
   A landing rate without its lens is not a model property.
 - Grammar-constrained decoding deforms rather than rejects
-  (`mut acc` → `mutacc`; `=` for `==` in statement position) — 44% of an
+  (`mut acc` → `mutacc`; `=` for `==` in statement position): 44% of an
   entire error class was the instrument (black-oxide SPEC §54, §56).
 - Small local models cannot do general autonomous agency: **1.06%**
   strict repair (940 attempts, pre-registered gate, robigo 2026-08-12).
@@ -45,7 +45,7 @@ was measured lying; rent the layers that never lied.**
 
 ## 2. What bloomery is and is not
 
-**Is:** a bare-metal-feeling appliance OS — Linux kernel vendored and
+**Is:** a bare-metal-feeling appliance OS: Linux kernel vendored and
 treated as firmware (drivers only, no conventional userland), with a
 Rust system as PID 1 that owns the entire path from GPU to agent:
 serving substrate, pager, scheduler, budgets, contracts, capabilities,
@@ -59,7 +59,7 @@ journal, storage, and the model-facing syscall ABI.
   the mission's "usable speed." Bare metal is the **Phase 4 endgame
   flag**, revisited only if a driver path stops being a decade-class
   project.
-- An orchestration/identity product (the 2026 "Agent OS" category —
+- An orchestration/identity product (the 2026 "Agent OS" category:
   AIOS scheduling, OpenClaw personal agents, Windows agent workspaces).
   Those all assume the endpoint is honest and capable; bloomery's
   differentiation is that it assumes neither and measures both.
@@ -73,8 +73,8 @@ Each law was bought with a measured failure; the source is named.
    always reporting which term bound it. (robigo)
 2. **Never send a prompt that does not fit.** Refuse with the arithmetic
    printed; truncation is dishonest. Degradation follows a fixed,
-   recorded ladder chosen by rendering-and-measuring, not estimation —
-   token estimates are non-additive and under-count precisely at the
+   recorded ladder chosen by rendering-and-measuring, not estimation.
+   Token estimates are non-additive and under-count precisely at the
    edge. (robigo; the 1097-of-1100 run)
 3. **Constrain the envelope, never the payload. Never grammar-force.**
    Structure is enforced around model output by a deterministic
@@ -86,8 +86,8 @@ Each law was bought with a measured failure; the source is named.
    envelope parses. `ContractViolation` is a first-class error, and
    infrastructure failure is never recorded as model failure.
    (assay; robigo; already applied in Castle VTT `classify.py`)
-5. **Admission by measured verdict.** No model gets a role — workload or
-   policy — without a tier-marked capability profile supporting it.
+5. **Admission by measured verdict.** No model gets a role, workload or
+   policy, without a tier-marked capability profile supporting it.
    Verdicts name their lens. Unmeasured ≠ failed: `None` with a named
    reason, never a zero. (assay: verdicts, lenses, None-vs-zero)
 6. **No inference without a budget.** Budgets are explicit, charged per
@@ -130,7 +130,7 @@ Linux kernel as firmware                         drivers only, vendored, no user
 ### 4.1 Serving substrate
 
 A Rust-owned inference daemon. v1 wraps llama.cpp's Vulkan path over
-FFI (the same kernels the black-oxide amp runs used) — **own the daemon,
+FFI (the same kernels the black-oxide amp runs used), **own the daemon,
 rent the kernels**; replacing kernels with pure Rust (candle-class) is
 optional later purity, not a requirement. Properties that are design
 requirements, not aspirations, because the daemon is ours:
@@ -154,7 +154,7 @@ migrate are first-class operations. Feasibility arithmetic (enthusiast
 tier, PCIe 4.0 x16 ≈ 25 GB/s practical, NVMe Gen4 ≈ 7 GB/s):
 7B-Q8 weights ≈ 8 GB ≈ 320 ms from RAM, ≈ 1.2 s from NVMe; an 8k-token
 KV image at qwen geometry (56 KiB/tok) ≈ 450 MB ≈ 20 ms from RAM.
-Agent switching is therefore a seconds-granularity operation — the
+Agent switching is therefore a seconds-granularity operation. The
 design point is 1980s process switching, and the scheduler quantum is
 set accordingly. Mechanics:
 
@@ -170,7 +170,7 @@ quanta at seconds granularity; preemption = KV image eviction. Policy
 input from the policy plane is advisory and fail-closed (law 8).
 
 **Contracts.** Law 4 enforced at the boundary between core and serving
-substrate — even though we own the substrate. A canary rides every
+substrate, even though we own the substrate. A canary rides every
 large prompt; missing canary or missing stats is `ContractViolation`
 with the serving state snapshotted for the journal.
 
@@ -194,7 +194,7 @@ also the corpus source for the fine-tune flywheel (§7).
 
 | Level | Role | Managed by |
 |---|---|---|
-| Context window | Register file / working set — tiny, expensive (56–800 KiB/token), quality degrades before protocol does | Degradation ladder (spill policy) |
+| Context window | Register file / working set: tiny, expensive (56–800 KiB/token), quality degrades before protocol does | Degradation ladder (spill policy) |
 | KV images (VRAM/RAM/NVMe) | Suspended process cores | Pager |
 | Content-addressed store | Long-term memory | Store + semantic view |
 
@@ -204,7 +204,7 @@ deliberately, with every spill recorded.
 
 ### 4.4 Store and semantic view
 
-Ground truth is content-addressed and hierarchical — names that do not
+Ground truth is content-addressed and hierarchical, names that do not
 drift, so locks, atomicity, and references keep stable referents. The
 semantic/vector-graph index is a first-class **view**, not the
 namespace: resolution returns ranked candidates with scores, never a
@@ -226,7 +226,7 @@ applier. Properties:
 - **Envelope-constrained, validate-and-reask** (law 3). Never
   grammar-forced.
 - **Diagnostics designed for the repair loop.** Every rejection carries
-  a specific, typed diagnostic naming both ends of the defect —
+  a specific, typed diagnostic naming both ends of the defect,
   black-oxide's measured lesson that repair (+10pp from semantics,
   more from ergonomics) is where small models gain, and that
   diagnostic ergonomics dominate language elegance.
@@ -239,7 +239,7 @@ Tiny (0.5–3B), role-specialized policy models fed compact state
 summaries. A 7B consulted on 8k tokens of raw state costs ~2–3 s per
 decision at measured rates (prefill 3.7–7.7k tok/s + ~50 tokens decoded
 at 66–76 tok/s); a tiny model on a compact summary targets
-~100–500 ms — fast enough to consult every scheduling quantum. Duties: eviction advice, priority advice,
+~100–500 ms, fast enough to consult every scheduling quantum. Duties: eviction advice, priority advice,
 degradation-rung advice, task routing. Constraints:
 
 - Admitted by measured verdict like any other model (law 5).
@@ -247,7 +247,7 @@ degradation-rung advice, task routing. Constraints:
 - Budgeted and journaled like any other inference (laws 6–7).
 
 Large models are workloads, never OS reflexes. This is orthodox
-microkernel doctrine — policy out of the kernel — applied to the LLM.
+microkernel doctrine, policy out of the kernel, applied to the LLM.
 
 ### 4.7 Boot story: assay is the POST
 
@@ -264,25 +264,25 @@ profiled; mid-gamer (8–12 GB) is the second target, per the mission.
 
 ## 5. Phases
 
-- **Phase 0 — spec, prior art, gate pre-registration.** Prior-art pass
+- **Phase 0, spec, prior art, gate pre-registration.** Prior-art pass
   (vLLM/SGLang prefix caching and PagedAttention, LMCache, llama.cpp
   slot save/restore, AIOS, mistral.rs, candle) per the
   research-and-reuse rule. Pin final gate numbers (provisional values
   in §6) before any gate's instrument exists.
-- **Phase 1 — the pager daemon** on stock Linux, current box:
+- **Phase 1: the pager daemon** on stock Linux, current box:
   multi-agent priority paging of weights + KV images, embedded assay
   POST, journal, `/v1` shim. Independently useful ("the serving daemon
   that doesn't lie") and independently publishable. Gate **G2** applies.
-- **Phase 2 — the OS surface:** edit-codec ABI, capability grants,
+- **Phase 2: the OS surface:** edit-codec ABI, capability grants,
   budgets, policy plane. Castle VTT becomes consumer #1 via the `/v1`
   shim, which fixes its audited AI defects (front-truncation, missing
   `max_tokens`, no context visibility) at the substrate. Gates **G1**
   and **G4** apply.
-- **Phase 3 — the appliance image:** vendored Linux kernel as firmware,
+- **Phase 3: the appliance image:** vendored Linux kernel as firmware,
   Rust PID 1, no conventional userland, console interface. This is the
   point where bloomery becomes an operating system rather than a
   daemon.
-- **Phase 4 (conditional) — bare-metal exploration.** Only if a
+- **Phase 4 (conditional), bare-metal exploration.** Only if a
   GPU-driver path stops being decade-class. Not scheduled.
 
 Each phase gets its own spec → plan → implementation cycle; this
@@ -295,23 +295,23 @@ Provisional values below are declared now to prevent drift; Phase 0
 finalizes them **before** any gate's instrument is built, and the
 pinned versions supersede these.
 
-- **G1 — policy value.** On a frozen replay benchmark of recorded
+- **G1, policy value.** On a frozen replay benchmark of recorded
   workloads, tiny-model policy must beat the deterministic heuristic on
   useful-work-per-GPU-second by ≥10% with a contract-violation rate
   ≤5% and per-decision latency ≤500 ms. ("Useful work" gets a pinned,
-  mechanical definition alongside the numbers in Phase 0 — e.g.
+  mechanical definition alongside the numbers in Phase 0, e.g.
   completed-task tokens weighted by priority; the endpoint must be
   computable from the journal alone.) **Kill:** v1 ships
   deterministic-only; LLM policy demoted to human-request granularity.
-- **G2 — pager feasibility.** p95 warm agent switch (KV image in RAM,
+- **G2, pager feasibility.** p95 warm agent switch (KV image in RAM,
   weights resident) ≤2 s on the enthusiast-16GB tier; p95 cold switch
   (weights from NVMe) ≤5 s. **Kill:** the process model is redesigned
   before anything is built on it.
-- **G3 — semantic view value.** On a frozen retrieval task set drawn
+- **G3, semantic view value.** On a frozen retrieval task set drawn
   from real agent runs, semantic resolution must beat a grep/fd
   baseline by ≥15pp top-5 hit rate. **Kill:** the view stays an
   app-level index and never gets syscall status.
-- **G4 — codec landing.** Per model, landing under the OS's real
+- **G4, codec landing.** Per model, landing under the OS's real
   envelope (applies-and-parses lens) ≥80% for the codec the profile
   selected. **Kill:** the model is demoted to a narrower verb set or
   refused for mutating roles.
@@ -353,7 +353,7 @@ than hope.
   policy plane to heuristics (which law 8 makes a supported
   configuration, not a failure).
 - **Policy-model quality at 0.5–3B** for eviction/priority advice is
-  unproven — exactly what G1 exists to answer.
+  unproven, exactly what G1 exists to answer.
 - **Prior-art overlap:** if the Phase 0 pass finds an existing system
   covering the pager's core (multi-agent priority paging of weights +
   KV on one consumer GPU), adopt or wrap it per the reuse rule rather
@@ -380,5 +380,5 @@ than hope.
   `docs/findings/2026-08-12-constrained-decoding-deforms.md`,
   `docs/findings/2026-08-12-ergonomics-beat-ownership.md`; SPEC §32.4, §53–57
 - Landscape: AIOS (arXiv 2403.16971); the 2026 "Agent OS" product
-  category (OpenClaw, Windows agent workspaces) — orchestration-layer
+  category (OpenClaw, Windows agent workspaces), orchestration-layer
   competitors that assume an honest, capable endpoint.

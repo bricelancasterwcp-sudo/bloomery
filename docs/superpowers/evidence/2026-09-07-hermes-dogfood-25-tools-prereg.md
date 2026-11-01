@@ -1,4 +1,4 @@
-# Pre-registration — hermes-on-bloomery dogfood, 25-tool set (2026-09-07)
+# Pre-registration: hermes-on-bloomery dogfood, 25-tool set (2026-09-07)
 
 Written BEFORE the daemon was booted. Nothing below changes after the first number is read.
 
@@ -6,10 +6,10 @@ Written BEFORE the daemon was booted. Nothing below changes after the first numb
 
 - bloomery master `3866da0` (== origin), daemon rebuilt `--release` this session
   (binary mtime 2026-09-07 08:24:53). Includes the 08-31 `/v1` honesty fix,
-  `DELETE /agents/{id}` (PR #22) and `max_placeable_tokens` refusals (PR #23) —
-  none of which the 08-31 runs had.
+  `DELETE /agents/{id}` (PR #22) and `max_placeable_tokens` refusals (PR #23).
+  None of which the 08-31 runs had.
 - adapter `adapters/openai-tools/` at the same commit, 132/132 unit tests OK this session.
-- model `qwen36-reap48-ours` UNTRAINED Q4_K_M — the SAME lens as the 08-31
+- model `qwen36-reap48-ours` UNTRAINED Q4_K_M: the SAME lens as the 08-31
   measurement arc (NOT flywheel7), so numbers are comparable.
 - daemon config = `dogfood-bloomery.toml` (byte-identical to the 08-31
   `measure-bloomery.toml` except `data_dir` → fresh `/mnt/extra/bloomery-dogfood-20260907`
@@ -19,11 +19,11 @@ Written BEFORE the daemon was booted. Nothing below changes after the first numb
 - hermes = live install `~/.hermes/hermes-agent` (gateway PID 1169016 NOT touched,
   `~/.hermes/config.yaml` NOT touched), run under a FRESH `HERMES_HOME` =
   `scratchpad/dogfood/hermes-home` whose `config.yaml` is a copy of the 08-31 scratch profile
-  (provider ollama, base_url adapter). Toolset = hermes-cli DEFAULT (no `-t` flag) — this is
+  (provider ollama, base_url adapter). Toolset = hermes-cli DEFAULT (no `-t` flag). This is
   the 25-tool set captured on 08-31 (`capture.jsonl`, n_tools=25). Non-interactive `-q`,
   tools executing (no `--safe-mode`), no `--yolo` unless a run stalls on an approval
   prompt (if so: recorded, and the stalled run is INFRASTRUCTURE, rerun from zero).
-- sampler: bloomery substrate is `LlamaSampler::greedy()` — pinned by the daemon, not configurable.
+- sampler: bloomery substrate is `LlamaSampler::greedy()`, pinned by the daemon, not configurable.
 
 ## What is new vs 08-31
 
@@ -46,23 +46,23 @@ one-context tier can turn over agents between sessions).
 
 ## Endpoints (decided by the point estimate; no reruns after reading)
 
-- **E1 functional** — after each run, the three files exist with exact contents
+- **E1 functional**: after each run, the three files exist with exact contents
   (`alpha`/`beta`/`gamma`, trailing newline tolerated). PASS = 3/3 runs.
-- **E2 prefill-once** — per run, from the adapter's per-request log: exactly ONE
+- **E2 prefill-once**: per run, from the adapter's per-request log: exactly ONE
   request with `prompt_tokens` ≥ 10,000 (the 25-tool preamble), every other request
   in that session < 1,000, `reset:false` on all but possibly the first, ONE agent
   per session. PASS = 3/3 runs. (08-31's 4-tool run had deltas 32/212/54.)
-- **E3 preamble size** — the preamble `prompt_tokens` recorded (08-31 estimate ≈14,077).
+- **E3 preamble size**: the preamble `prompt_tokens` recorded (08-31 estimate ≈14,077).
   Must be < `window_cap` 30,000 or the adapter refuses honestly (that would be a FAIL of
   the tier claim "25-tool set fits", not of the adapter).
-- **E4 parse** — every per-request `outcome` is `ok`; every tool the model invoked was
+- **E4 parse**: every per-request `outcome` is `ok`; every tool the model invoked was
   an actual tool from the 25 (hermes would error otherwise). Count of tool calls recorded.
   A non-`ok` outcome that is a bloomery refusal (413/409 with arithmetic) is recorded
   as such, not as a parse failure.
-- **E5 daemon health** — after all runs, `GET /status` answers within 5 s and the
+- **E5 daemon health**: after all runs, `GET /status` answers within 5 s and the
   journal shows every `InferStarted` paired with a terminal infer event. A wedge is
   the pager-lock-across-infer class → INFRASTRUCTURE, recorded, run ends (no rerun).
-- **E6 retries** — count of byte-identical retried requests hermes sends (adapter log).
+- **E6 retries**: count of byte-identical retried requests hermes sends (adapter log).
   Informational: the replay path must serve them WITHOUT a reset (E2 covers it).
 
 ## Kill / infrastructure criteria

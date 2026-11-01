@@ -1,21 +1,21 @@
-# bloomery Phase 2b/2c — P1: Action Codec + Validators Implementation Plan
+# bloomery Phase 2b/2c: P1: Action Codec + Validators Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the pure, GPU-free action codec — parse exactly one typed `Action` from a model turn (envelope-constrained, never grammar-forced), with repair-loop diagnostics, both patch codecs (search/replace + whole-file), and the applies-and-parses landing lens as a trait — all in `bloomery-core` with no daemon, no I/O, no substrate.
+**Goal:** Build the pure, GPU-free action codec, parse exactly one typed `Action` from a model turn (envelope-constrained, never grammar-forced), with repair-loop diagnostics, both patch codecs (search/replace + whole-file), and the applies-and-parses landing lens as a trait, all in `bloomery-core` with no daemon, no I/O, no substrate.
 
-**Architecture:** One new module tree under `crates/bloomery-core/src/action/`: `mod.rs` (the `Action`/`ActionError` types + the top-level `parse_action`), `envelope.rs` (find the single `<action>` block), `verbs.rs` (per-verb attribute/body validation), `patch.rs` (the two patch codecs + `PatchCodec` selection), `lens.rs` (the `LandingLens` trait + plain-text impl + `Unparsed` reason). Everything is a pure function or a trait with a pure impl; the only "landing" that touches a real language checker (Python) is deferred to P3 where a subprocess is allowed — P1 ships the trait and the plain-text lens so the shape is fixed and testable now.
+**Architecture:** One new module tree under `crates/bloomery-core/src/action/`: `mod.rs` (the `Action`/`ActionError` types + the top-level `parse_action`), `envelope.rs` (find the single `<action>` block), `verbs.rs` (per-verb attribute/body validation), `patch.rs` (the two patch codecs + `PatchCodec` selection), `lens.rs` (the `LandingLens` trait + plain-text impl + `Unparsed` reason). Everything is a pure function or a trait with a pure impl; the only "landing" that touches a real language checker (Python) is deferred to P3 where a subprocess is allowed: P1 ships the trait and the plain-text lens so the shape is fixed and testable now.
 
-**Tech Stack:** Existing workspace (Rust stable, edition 2021). Dependency allowlist gains exactly one: `regex` (for `find`'s pattern validation and search/replace scanning — add to `[workspace.dependencies]` as `regex = "1"`, used only by `bloomery-core`). No other additions.
+**Tech Stack:** Existing workspace (Rust stable, edition 2021). Dependency allowlist gains exactly one: `regex` (for `find`'s pattern validation and search/replace scanning, add to `[workspace.dependencies]` as `regex = "1"`, used only by `bloomery-core`). No other additions.
 
 **Spec:** `docs/superpowers/specs/2026-08-14-phase2bc-task-abi-grants-design.md` §3 (approved 2026-08-14). Umbrella laws §3 bind everything.
 
 ## Global Constraints
 
 - **Pure and GPU-free:** every symbol in this plan is a pure function or a trait with a pure impl. No `std::fs`, no `std::process`, no sockets, no clocks, no substrate. `cargo test -p bloomery-core` exercises all of it.
-- **Envelope-constrained, never grammar-forced** (law 3): the parser recognizes a fenced `<action …>…</action>` block and ignores all surrounding prose; it never rejects a token mid-stream — it parses what's there and returns a typed diagnostic naming the defect AND the expected shape.
+- **Envelope-constrained, never grammar-forced** (law 3): the parser recognizes a fenced `<action …>…</action>` block and ignores all surrounding prose; it never rejects a token mid-stream. It parses what's there and returns a typed diagnostic naming the defect AND the expected shape.
 - **Exactly one action per turn:** zero → `ActionError::NoAction`; two or more → `ActionError::MultipleActions { found }`. The parser never guesses which of several to use.
-- **Diagnostics are for the repair loop:** every `ActionError` variant carries the expected shape as data (black-oxide's measured lesson — repair ergonomics dominate). No bare "parse error" strings.
+- **Diagnostics are for the repair loop:** every `ActionError` variant carries the expected shape as data (black-oxide's measured lesson, repair ergonomics dominate). No bare "parse error" strings.
 - **Landing lens = applies-and-parses, named in every record** (assay discipline): a patch lands iff the codec applies to the current bytes AND the result parses for the file's language; unknown language → a named `Unparsed` reason, never a false "lands".
 - **Dependency allowlist** gains only `regex`. TDD with RED/GREEN evidence per task; `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings` (default AND `--features llama` for clippy), `cargo test --workspace` green before every commit. Files ≤800 lines; conventional commits.
 - Commands run from repo root `~/workspace/bloomery`, branch `feat/phase2bc-p1-codec` (create from master at start).
@@ -275,8 +275,8 @@ pub enum PatchApplyError {
 
 Rules (binding):
 - SearchReplace body format: `<<<<<<< SEARCH\n{search}\n=======\n{replace}\n>>>>>>> REPLACE` (the robigo/assay codec). Missing `<<<<<<< SEARCH` → `PatchNoSearchMarker`; missing `=======` → `PatchNoDivider`; missing `>>>>>>> REPLACE` → `PatchNoReplaceMarker`. Each carries the expected marker string.
-- WholeFile body: the entire body is the new file contents (may be empty — an empty file is a valid whole-file replacement; no error).
-- `apply_patch` for SearchReplace: the `search` string must appear **exactly once** in `current` (robigo's safety rule) — zero → `SearchNotFound`, ≥2 → `SearchNotUnique { occurrences }`; exactly one → replace it, return the new string. WholeFile: return `contents` verbatim (always applies).
+- WholeFile body: the entire body is the new file contents (may be empty, an empty file is a valid whole-file replacement; no error).
+- `apply_patch` for SearchReplace: the `search` string must appear **exactly once** in `current` (robigo's safety rule), zero → `SearchNotFound`, ≥2 → `SearchNotUnique { occurrences }`; exactly one → replace it, return the new string. WholeFile: return `contents` verbatim (always applies).
 
 - [ ] **Step 1: Write the failing tests.**
 
@@ -382,7 +382,7 @@ impl LandingLens for PlainText { /* name "plaintext"; parses = always Ok */ }
 pub fn land(current: &str, body: &PatchBody, lens: &dyn LandingLens) -> Landing;
 ```
 
-Rules (binding, assay lens discipline): `land` first calls `apply_patch`; on `Err` → `DidNotApply { reason, lens: lens.name() }` (no parse attempted — it didn't apply). On `Ok(new)` → `lens.parses(&new)`: `Ok` → `Lands { new_contents: new, lens }`; `Err(detail)` → `DidNotParse { detail, lens }`. The `Unparsed` variant is produced by a lens whose `parses` cannot judge the language — `PlainText` never returns it (it accepts everything), but the variant exists so P3's Python lens can return `Unparsed` for a non-`.py` file handed to it rather than falsely passing. The lens name rides in every `Landing` (named-lens law).
+Rules (binding, assay lens discipline): `land` first calls `apply_patch`; on `Err` → `DidNotApply { reason, lens: lens.name() }` (no parse attempted. It didn't apply). On `Ok(new)` → `lens.parses(&new)`: `Ok` → `Lands { new_contents: new, lens }`; `Err(detail)` → `DidNotParse { detail, lens }`. The `Unparsed` variant is produced by a lens whose `parses` cannot judge the language: `PlainText` never returns it (it accepts everything), but the variant exists so P3's Python lens can return `Unparsed` for a non-`.py` file handed to it rather than falsely passing. The lens name rides in every `Landing` (named-lens law).
 
 - [ ] **Step 1: Write the failing tests.**
 
@@ -444,7 +444,7 @@ fn an_unparsed_lens_never_falsely_lands() {
 
 - [ ] **Step 2: RED run.**
 
-- [ ] **Step 3: Implement.** `lens.rs` per the interface. `PlainText::parses` returns `Ok(())` always; `name` = `"plaintext"`. `land` = apply then map as specified. (The `Unparsed` variant is part of the public enum for P3; P1 has no lens that emits it, and the test above documents that PlainText does not — that's correct, not a gap.)
+- [ ] **Step 3: Implement.** `lens.rs` per the interface. `PlainText::parses` returns `Ok(())` always; `name` = `"plaintext"`. `land` = apply then map as specified. (The `Unparsed` variant is part of the public enum for P3; P1 has no lens that emits it, and the test above documents that PlainText does not, that's correct, not a gap.)
 
 - [ ] **Step 4: GREEN + gates.**
 
@@ -456,7 +456,7 @@ fn an_unparsed_lens_never_falsely_lands() {
 
 **Files:**
 - Create: `crates/bloomery-core/src/action/card.rs`, `crates/bloomery-core/tests/action_integration_test.rs`
-- Modify: `crates/bloomery-core/src/action/mod.rs` (`pub mod card;` + re-exports), `README.md` (a short "Action codec (Phase 2b P1)" subsection under the status/limits area — what exists now, what P3/P4 add)
+- Modify: `crates/bloomery-core/src/action/mod.rs` (`pub mod card;` + re-exports), `README.md` (a short "Action codec (Phase 2b P1)" subsection under the status/limits area, what exists now, what P3/P4 add)
 - Test: (the integration test above)
 
 **Interfaces:**
@@ -512,7 +512,7 @@ fn multiple_actions_in_one_turn_is_a_single_named_error() {
 
 - [ ] **Step 2: RED run.**
 
-- [ ] **Step 3: Implement.** `card.rs`: `verb_card` builds the static reference — a heading, the exactly-one-action rule, and one worked `<action>` example per verb (the `patch` example uses the passed codec's shape). Fill the integration test's `// ...` with the find/run/whole-file cases (concrete, per Tasks 2–3 shapes). README: a ~10-line subsection listing the five verbs, "one action per turn, envelope-constrained, never grammar-forced", the two patch codecs + applies-and-parses lens, and a one-line pointer that P3 wires executors + grants and P4 gates codec landing (G4).
+- [ ] **Step 3: Implement.** `card.rs`: `verb_card` builds the static reference, a heading, the exactly-one-action rule, and one worked `<action>` example per verb (the `patch` example uses the passed codec's shape). Fill the integration test's `// ...` with the find/run/whole-file cases (concrete, per Tasks 2–3 shapes). README: a ~10-line subsection listing the five verbs, "one action per turn, envelope-constrained, never grammar-forced", the two patch codecs + applies-and-parses lens, and a one-line pointer that P3 wires executors + grants and P4 gates codec landing (G4).
 
 - [ ] **Step 4: GREEN + gates + whole-suite.** `cargo test --workspace`, fmt, clippy both configs.
 
@@ -522,6 +522,6 @@ fn multiple_actions_in_one_turn_is_a_single_named_error() {
 
 ## Self-review (performed at plan-writing time)
 
-- **Spec §3 coverage:** the verb table → Tasks 2–3; exactly-one-action + zero/multiple diagnostics → Task 1; typed repair diagnostics carrying expected shape → every `ActionError` variant across Tasks 1–3; patch codec per-model (both parsed, selection by param) → Task 3 (`parse_action_with_codec`); applies-and-parses landing lens named in every record with an `Unparsed`-never-false-lands guarantee → Task 4; the verb card the loop shows the model → Task 5. Python lens (subprocess) is explicitly deferred to P3 per the spec ("in P1 the lens is a trait with a plain-text impl") — not a gap.
-- **Placeholder scan:** the integration test's `// ...` in Task 5 is filled in Step 3 with concrete cases named in the step text (find/run/whole-file per the Task 2/3 shapes) — not a TBD. No other placeholders.
-- **Type consistency:** `ActionError` variants are declared in full in Task 1 and referenced (not redeclared) in Tasks 2–3; `PatchBody`/`PatchCodec` introduced in Task 3 and consumed by Task 4's `land`; `parse_action` (Task 2, SearchReplace default) and `parse_action_with_codec` (Task 3) coexist as specified; `Landing`/`LandingLens`/`PlainText` (Task 4) match between the lens tests and P3's stated consumer; `verb_card(PatchCodec)` (Task 5) matches its integration test. The Task 2 temporary patch stub (`BadCodec{detail:"patch not wired"}`) is explicitly replaced in Task 3 — a named handoff, not drift.
+- **Spec §3 coverage:** the verb table → Tasks 2–3; exactly-one-action + zero/multiple diagnostics → Task 1; typed repair diagnostics carrying expected shape → every `ActionError` variant across Tasks 1–3; patch codec per-model (both parsed, selection by param) → Task 3 (`parse_action_with_codec`); applies-and-parses landing lens named in every record with an `Unparsed`-never-false-lands guarantee → Task 4; the verb card the loop shows the model → Task 5. Python lens (subprocess) is explicitly deferred to P3 per the spec ("in P1 the lens is a trait with a plain-text impl"), not a gap.
+- **Placeholder scan:** the integration test's `// ...` in Task 5 is filled in Step 3 with concrete cases named in the step text (find/run/whole-file per the Task 2/3 shapes), not a TBD. No other placeholders.
+- **Type consistency:** `ActionError` variants are declared in full in Task 1 and referenced (not redeclared) in Tasks 2–3; `PatchBody`/`PatchCodec` introduced in Task 3 and consumed by Task 4's `land`; `parse_action` (Task 2, SearchReplace default) and `parse_action_with_codec` (Task 3) coexist as specified; `Landing`/`LandingLens`/`PlainText` (Task 4) match between the lens tests and P3's stated consumer; `verb_card(PatchCodec)` (Task 5) matches its integration test. The Task 2 temporary patch stub (`BadCodec{detail:"patch not wired"}`) is explicitly replaced in Task 3, a named handoff, not drift.

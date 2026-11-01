@@ -1,4 +1,4 @@
-# Flywheel 7 pre-registration — the declarations training (committed BEFORE any pod is cut; this commit LOCKS the floors)
+# Flywheel 7 pre-registration: the declarations training (committed BEFORE any pod is cut; this commit LOCKS the floors)
 
 **Date:** 2026-08-29. **Design:**
 `docs/superpowers/specs/2026-08-29-flywheel7-turn7-design.md` (binding).
@@ -12,8 +12,8 @@ all findings closed).
 ## 1. The question
 
 Does ONE training run on declared-`done` ideals produce truthful
-declarations — `different-defect` appearing on symptom-mismatch rows and
-evidence grounding — while landing holds? Success and kill criteria are
+declarations, `different-defect` appearing on symptom-mismatch rows and
+evidence grounding, while landing holds? Success and kill criteria are
 §4's floors, locked by this commit. The point estimate decides; nothing is
 extended, re-rolled, or re-run for a nicer verdict; an infrastructure kill
 with no numbers read may be cleanly rerun from zero.
@@ -35,7 +35,7 @@ python3 -m tools.flywheel.factory.generate \
 ```
 
 - `~/flywheel7/corpus.jsonl` sha256
-  `08c0bc6d8bffbd4051d2c8ebd9c33d8d0d4ce34433062ad047dc29602cfb864d` —
+  `08c0bc6d8bffbd4051d2c8ebd9c33d8d0d4ce34433062ad047dc29602cfb864d`:
   **4,563 pairs / 1,449 tasks** (999 patch = 333 plain / 333 find / 333
   run; 450 refuse = 150 defect_absent / 150 missing_target / 150
   symptom_mismatch; lens 960 python / 489 plaintext; **0 dedup drops**).
@@ -44,12 +44,12 @@ python3 -m tools.flywheel.factory.generate \
   71 / search_match 45 / target_filename_match 606; val_split_ids = 72
   tasks → 233 val / 4,330 train pairs, verified readable by
   `train_common.load_pairs` against this exact fingerprint).
-- **Check 1 — contamination guard (exit 0, clean):** 1,449 tasks against
+- **Check 1, contamination guard (exit 0, clean):** 1,449 tasks against
   the UNION of all five frozen gate sets (136 fixtures);
   `~/flywheel7/contamination-report.json` sha256 `4aaca2a6…`.
-- **Check 2 — structural corpus check (exit 0, 0 violations), the
+- **Check 2, structural corpus check (exit 0, 0 violations), the
   FLAGGED invocation** (re-review LOW-3: composition binds only when the
-  expectations are passed — they were):
+  expectations are passed. They were):
 
   ```
   python3 -m tools.flywheel.check_corpus_v5 --corpus ~/flywheel7/corpus.jsonl \
@@ -61,7 +61,7 @@ python3 -m tools.flywheel.factory.generate \
   classifies `grounded` under the shipped scorer's own rule**
   (`tools.evidence.endpoints._classify_evidence_line`, post-patch bytes
   for patch rows). Report sha256 `fa5b8f37…`.
-- **Check 3 — v4 byte-identity** held at merge: the same generator with
+- **Check 3, v4 byte-identity** held at merge: the same generator with
   `--envelope` omitted reproduces the pre-change master byte-for-byte
   (corpus AND fingerprint), pinned by test and by a master-worktree
   comparison.
@@ -95,13 +95,13 @@ LISTS pods and never touches ones this turn did not create. A Monitor
 watches pod + balance hourly; any failure = pod down, report, ask before
 re-cutting.
 
-## 4. Floors — LOCKED (derived, executed; `~/flywheel7/floors.json` sha256 `f92dde2b…`)
+## 4. Floors: LOCKED (derived, executed; `~/flywheel7/floors.json` sha256 `f92dde2b…`)
 
-Derivation tool: `tools.evidence.derive_turn7_floors` at `6ecee5a` —
+Derivation tool: `tools.evidence.derive_turn7_floors` at `6ecee5a`,
 instrument sha `bf2db8ac…` and comparator sha `7ee27c33…` (the untrained
 base's boot-1 recompute JSON) both verified IN-TOOL; the repo's one
 Wilson implementation; fixed denominators = the frozen set's own row
-counts (spec §4.2 — a fixture with no `done` contributes nothing to any
+counts (spec §4.2: a fixture with no `done` contributes nothing to any
 numerator). Pinned against an independent hand vector and reproduced
 from scratch by the adversarial reviewer.
 
@@ -138,7 +138,7 @@ python3 -m tools.evidence.derive_turn7_floors \
 
 exit 0 = all floors pass; exit 3 = a floor failed; a refusal (duplicated
 / unknown instrument rows, wrong fixture bytes, incomplete subject) means
-NOT A VALID MEASUREMENT — no verdict, investigate the journal.
+NOT A VALID MEASUREMENT, no verdict, investigate the journal.
 
 ## 5. The battery (Brice-gated boots)
 
@@ -158,13 +158,13 @@ committed, G4 + G5-v5 + declarations + carried secondaries.
 ## 6. Honest possibilities, named now
 
 Over-refusal dropping patch below 13/16 beside a refuse pass (the base
-sits AT the patch floor — a turn FAIL by F2); the evidence grammar
-adopted with fabricated quotes (F5 fails while `no_evidence` stays 0 —
+sits AT the patch floor, a turn FAIL by F2); the evidence grammar
+adopted with fabricated quotes (F5 fails while `no_evidence` stays 0:
 the most instructive FAIL, reported as such); the constant
 `different-defect` policy (F6's reason to exist) or its mirror (the
 declaration harder to learn than the trained `Found instead:` prose);
 systematic misalignment replacing fabrication (real quotes, drifted line
-numbers — fails F5, reported apart by construction); landing degraded by
+numbers, fails F5, reported apart by construction); landing degraded by
 declaration length at the same step budget; the bf16-trained/Q4-served
 gap as every turn; torch-fallback cost overrun → the $10 stop rule;
 eval-loss stays uninterpreted (turn-4 stance).

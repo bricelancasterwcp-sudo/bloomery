@@ -2,17 +2,17 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A Python sidecar that lets an OpenAI tool-calling client (hermes) drive a local model served by bloomery, by owning chat templating, tool-schema rendering and tool-call parsing — the things the daemon deliberately refuses to do.
+**Goal:** A Python sidecar that lets an OpenAI tool-calling client (hermes) drive a local model served by bloomery, by owning chat templating, tool-schema rendering and tool-call parsing: the things the daemon deliberately refuses to do.
 
 **Architecture:** An HTTP server speaking the OpenAI chat-completions API upstream and bloomery's **native** `/agents/{id}/infer` downstream. Prompts are rendered through the model's own GGUF chat template. One client session maps to one persistent bloomery agent; conversation state is maintained by **incremental append** (never re-rendering history), so the ~21,931-token tool-schema preamble is prefilled once per session instead of every turn.
 
-**Tech Stack:** Python 3.14, stdlib `http.server` + `urllib.request` (no web framework — none is installed and the repo's Python is dependency-light), `jinja2` 3.1.6 (present), stdlib `unittest` (**pytest is NOT importable on this box**), `gguf` via `PYTHONPATH=~/llama.cpp/gguf-py` for one-time template extraction only.
+**Tech Stack:** Python 3.14, stdlib `http.server` + `urllib.request` (no web framework. None is installed and the repo's Python is dependency-light), `jinja2` 3.1.6 (present), stdlib `unittest` (**pytest is NOT importable on this box**), `gguf` via `PYTHONPATH=~/llama.cpp/gguf-py` for one-time template extraction only.
 
-**Spec:** `docs/superpowers/specs/2026-08-31-openai-tools-adapter-design.md` — including its **2026-08-31 amendment to §6**, which withdraws full-render diffing in favour of incremental append. Read the amendment before Task 3; it is the reason that task exists in the shape it does.
+**Spec:** `docs/superpowers/specs/2026-08-31-openai-tools-adapter-design.md`, including its **2026-08-31 amendment to §6**, which withdraws full-render diffing in favour of incremental append. Read the amendment before Task 3; it is the reason that task exists in the shape it does.
 
 ## Global Constraints
 
-- **Tests are stdlib `unittest`.** `python3 -m unittest discover -s adapters/openai-tools/tests -t adapters/openai-tools` from the repo root. Never `pytest` — it is not importable here.
+- **Tests are stdlib `unittest`.** `python3 -m unittest discover -s adapters/openai-tools/tests -t adapters/openai-tools` from the repo root. Never `pytest`. It is not importable here.
 - **No new runtime dependency beyond `jinja2`.** `gguf` is a build-time tool only; the adapter reads a committed `.jinja` file at runtime.
 - **No daemon change.** This plan touches nothing under `crates/`.
 - **The adapter never fabricates.** A tool call that does not parse is returned as assistant `content`. No guessing, no retry-until-parses.
@@ -37,7 +37,7 @@
   - `ChatTemplate.load(path: str) -> ChatTemplate`
   - `ChatTemplate.render_initial(messages: list[dict], tools: list[dict]) -> str`
   - `ChatTemplate.render_turns(messages: list[dict]) -> str`
-  - `ChatTemplate.GENERATION_SUFFIX: str` — the exact bytes `'<|im_start|>assistant\n<think>\n'`
+  - `ChatTemplate.GENERATION_SUFFIX: str`: the exact bytes `'<|im_start|>assistant\n<think>\n'`
   - `ChatTemplate.sha256: str`
 
 **Why the wrapper is derived, not written.** The per-turn format looks like plain ChatML, but hand-writing it would silently drift if the model or template changes. `render_turns` therefore renders the template twice and takes the difference, and a test pins that the derived result equals the template's own output.
@@ -93,7 +93,7 @@ if __name__ == "__main__":
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `python3 -m unittest discover -s adapters/openai-tools/tests -t adapters/openai-tools -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'openai_tools'`
+Expected: FAIL: `ModuleNotFoundError: No module named 'openai_tools'`
 
 - [ ] **Step 3: Extract the template artifact**
 
@@ -239,7 +239,7 @@ git commit -m "feat: adapter template rendering, wrapper derived from the templa
 - Consumes: nothing from Task 1.
 - Produces:
   - `split_reasoning(raw: str) -> tuple[str, str]` returning `(reasoning, visible)`
-  - `parse_tool_calls(visible: str, tools: list[dict]) -> list[dict] | None` — OpenAI `tool_calls` entries, or `None` when nothing parses cleanly
+  - `parse_tool_calls(visible: str, tools: list[dict]) -> list[dict] | None`: OpenAI `tool_calls` entries, or `None` when nothing parses cleanly
 
 **The format**, as the template instructs the model to emit it:
 
@@ -253,7 +253,7 @@ ls /tmp
 </tool_call>
 ```
 
-**Generation begins inside a reasoning block** — the prompt ends `<|im_start|>assistant\n<think>\n` — so raw output must be split on `</think>` before anything else is attempted.
+**Generation begins inside a reasoning block**, the prompt ends `<|im_start|>assistant\n<think>\n`, so raw output must be split on `</think>` before anything else is attempted.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -337,8 +337,8 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python3 -m unittest adapters.openai-tools.tests.test_toolcall -v` — or the discover command from Global Constraints.
-Expected: FAIL — `ModuleNotFoundError: No module named 'openai_tools.toolcall'`
+Run: `python3 -m unittest adapters.openai-tools.tests.test_toolcall -v`, or the discover command from Global Constraints.
+Expected: FAIL: `ModuleNotFoundError: No module named 'openai_tools.toolcall'`
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -438,7 +438,7 @@ Expected: all Task 1 and Task 2 tests PASS
 
 > **Corrected 2026-08-31, after the Task 2 review.** The reference
 > implementation above originally shipped three fabrication defects, all
-> caught by an adversarial probe rather than by the tests in Step 1 — which
+> caught by an adversarial probe rather than by the tests in Step 1, which
 > is the point: the tests below all passed against the defective parser.
 > Two were Critical. `_FUNC.search` returned the first function in a block
 > and silently discarded any second one (a probe input returned a clean call
@@ -556,7 +556,7 @@ if __name__ == "__main__":
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `python3 -m unittest discover -s adapters/openai-tools/tests -t adapters/openai-tools -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'openai_tools.session'`
+Expected: FAIL: `ModuleNotFoundError: No module named 'openai_tools.session'`
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -630,7 +630,7 @@ Expected: all PASS
 
 - [ ] **Step 5: Mutation check**
 
-A `next_delta` that always returns the full render is correct-looking and destroys the entire KV benefit — the reason this adapter exists. Verify the tests catch it:
+A `next_delta` that always returns the full render is correct-looking and destroys the entire KV benefit: the reason this adapter exists. Verify the tests catch it:
 
 ```bash
 # Mutant: make next_delta always take the render_initial path.
@@ -790,7 +790,7 @@ if __name__ == "__main__":
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `python3 -m unittest discover -s adapters/openai-tools/tests -t adapters/openai-tools -v`
-Expected: FAIL — `ModuleNotFoundError` for `openai_tools.errors` and `openai_tools.bloomery`
+Expected: FAIL: `ModuleNotFoundError` for `openai_tools.errors` and `openai_tools.bloomery`
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -912,7 +912,7 @@ git commit -m "feat: bloomery native client and refusal mapping that keeps the a
 - Consumes: everything from Tasks 1–4.
 - Produces: `build_server(config: dict, client) -> ThreadingHTTPServer` and a `__main__` entry point.
 
-The integration test drives the whole loop against a **stub bloomery** — no model, no GPU — matching the daemon's own discipline that its 911 tests need neither.
+The integration test drives the whole loop against a **stub bloomery** (no model, no GPU), matching the daemon's own discipline that its 911 tests need neither.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1019,21 +1019,21 @@ if __name__ == "__main__":
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `python3 -m unittest discover -s adapters/openai-tools/tests -t adapters/openai-tools -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'openai_tools.server'`
+Expected: FAIL: `ModuleNotFoundError: No module named 'openai_tools.server'`
 
 - [ ] **Step 3: Write minimal implementation**
 
 `server.py` wires the pieces: a `ThreadingHTTPServer` with a handler that
 
 1. parses the JSON body and rejects a missing `messages`,
-2. keys a `Session` by the client's session identity (the `X-Session-Id` header when present, otherwise a hash of the first user message — documented in the README as a heuristic),
+2. keys a `Session` by the client's session identity (the `X-Session-Id` header when present, otherwise a hash of the first user message, documented in the README as a heuristic),
 3. calls `session.next_delta(messages, tools)`,
 4. sends the delta via the injected client's `infer`,
 5. calls `session.record_generation(raw)`,
 6. splits reasoning, parses tool calls, and assembles the OpenAI envelope with `finish_reason` `tool_calls` / `stop` / `length`,
 7. maps any `BloomeryError` through `to_openai_error`.
 
-The client is injected (constructor parameter) rather than constructed inside the handler — that is what lets the whole loop be tested with no daemon.
+The client is injected (constructor parameter) rather than constructed inside the handler. That is what lets the whole loop be tested with no daemon.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1042,7 +1042,7 @@ Expected: all PASS
 
 - [ ] **Step 5: Write the README**
 
-`adapters/openai-tools/README.md` covers: what it is and what it deliberately does not do; how to re-extract the template and why it is committed; how to run it; the config keys; the `keep_reasoning_in_history` flag and the **unmeasured** deviation it controls (spec §6 amendment); and the two known gaps — agent accumulation (bloomery has no `DELETE /agents/{id}`) and the session-identity heuristic.
+`adapters/openai-tools/README.md` covers: what it is and what it deliberately does not do; how to re-extract the template and why it is committed; how to run it; the config keys; the `keep_reasoning_in_history` flag and the **unmeasured** deviation it controls (spec §6 amendment); and the two known gaps. Agent accumulation (bloomery has no `DELETE /agents/{id}`) and the session-identity heuristic.
 
 - [ ] **Step 6: Commit**
 
@@ -1053,7 +1053,7 @@ git commit -m "feat: the OpenAI surface, wired end to end and testable with no G
 
 ---
 
-### Task 6: Live acceptance — HUMAN-GATED
+### Task 6: Live acceptance: HUMAN-GATED
 
 **Do not start without Brice's explicit go.** This needs the GPU and a real hermes session.
 
@@ -1066,15 +1066,15 @@ Config as used on 2026-08-30: port 8498, `ctx_overhead_mib = 512`, `allow_unprof
 
 - [ ] **Step 2: Start the adapter against it and confirm a tool call end to end**
 
-Record: the rendered preamble token count from bloomery's `prompt_tokens`, the parsed tool call, and the turn-2 `prompt_tokens` — which is the measurement that proves the preamble was not re-prefilled.
+Record: the rendered preamble token count from bloomery's `prompt_tokens`, the parsed tool call, and the turn-2 `prompt_tokens`, which is the measurement that proves the preamble was not re-prefilled.
 
 - [ ] **Step 3: Point a SCRATCH hermes profile at the adapter**
 
-Never edit `~/.hermes/config.yaml` — it is a daily driver, running 34+ days. Use a scratch profile or a copied config directory.
+Never edit `~/.hermes/config.yaml`. It is a daily driver, running 34+ days. Use a scratch profile or a copied config directory.
 
 - [ ] **Step 4: Record the honest result**
 
-Report the tool-call parse rate over the session, the reset count, and any 413 the trajectory compressor had to absorb. **A poor parse rate is a finding, not a failure** — the model is an untrained, 48%-pruned MoE and spec §10.1 says so in advance.
+Report the tool-call parse rate over the session, the reset count, and any 413 the trajectory compressor had to absorb. **A poor parse rate is a finding, not a failure**: the model is an untrained, 48%-pruned MoE and spec §10.1 says so in advance.
 
 - [ ] **Step 5: Commit the evidence and append to CARRIED-DEBT**
 
@@ -1084,8 +1084,8 @@ Report the tool-call parse rate over the session, the reset count, and any 413 t
 
 **Spec coverage.** §1 purpose → the whole plan. §2 model choice → Global Constraints and Task 6 Step 1. §3 wire format → Task 2. §4 components → one task per module. §5 data flow → Task 5. §6 session lifecycle *as amended* → Task 3, which cites the amendment. §7 error mapping → Task 4. §8 non-goals → the no-fabrication constraint is enforced by Task 2's negative tests and Task 5's `unparseable_output` test. §9 testing → each task carries its own tests; the GPU-free integration requirement is Task 5. §10 risks → risk 1 is Task 6 Step 4, risk 3 is Task 2's coercion tests, risk 4 is documented in Task 5's README step. §11 non-settled items are not implemented here, correctly.
 
-**Placeholders.** None. Task 3 Step 3 deliberately ships an awkward expression with an implementer note telling them to write it cleanly from the tests — that is a stated instruction, not a gap.
+**Placeholders.** None. Task 3 Step 3 deliberately ships an awkward expression with an implementer note telling them to write it cleanly from the tests. That is a stated instruction, not a gap.
 
 **Type consistency.** `ChatTemplate.render_initial` / `render_turns` / `GENERATION_SUFFIX` are used identically in Tasks 1, 3 and 5. `Session.next_delta` returns `(delta, was_reset)` in both its definition and its use. `BloomeryClient.infer` returns a dict with `text` in Task 4's tests and Task 5's fake. `parse_tool_calls(visible, tools)` takes the same argument order everywhere.
 
-**One gap I am flagging rather than hiding:** Task 5's session-identity heuristic (hash of the first user message when no `X-Session-Id` is supplied) is not specified in the design doc. It is an implementation detail with a real failure mode — two clients opening with identical first messages would share an agent. The README step documents it, and if it proves wrong the fix is a spec amendment, not a silent change.
+**One gap I am flagging rather than hiding:** Task 5's session-identity heuristic (hash of the first user message when no `X-Session-Id` is supplied) is not specified in the design doc. It is an implementation detail with a real failure mode, two clients opening with identical first messages would share an agent. The README step documents it, and if it proves wrong the fix is a spec amendment, not a silent change.
