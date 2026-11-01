@@ -1,4 +1,4 @@
-# hermes-on-bloomery dogfood, 25-tool default set — **PARTIAL** (2 of 3 pre-registered sessions PASS; the third refused by residency, recovered post-hoc via `DELETE /agents/{id}`)
+# hermes-on-bloomery dogfood, 25-tool default set: **PARTIAL** (2 of 3 pre-registered sessions PASS; the third refused by residency, recovered post-hoc via `DELETE /agents/{id}`)
 
 **Date:** 2026-09-07. Pre-registration: [`2026-09-07-hermes-dogfood-25-tools-prereg.md`](2026-09-07-hermes-dogfood-25-tools-prereg.md)
 (written before boot; nothing in it changed after the first number was read).
@@ -7,8 +7,8 @@ Adapter per-request log: [`2026-09-07-hermes-dogfood-25-tools-adapter.log`](2026
 ## Lens
 
 - bloomery master `3866da0`, daemon rebuilt `--release --features llama,vulkan` this session
-  (a plain `--release` build produces a 1.2 MB binary that refuses to serve — "built without the
-  `llama` feature" — the featured binary is 47.5 MB). Includes the 08-31 `/v1` honesty fix,
+  (a plain `--release` build produces a 1.2 MB binary that refuses to serve, "built without the
+  `llama` feature", the featured binary is 47.5 MB). Includes the 08-31 `/v1` honesty fix,
   `DELETE /agents/{id}` (#22) and `max_placeable_tokens` (#23), none of which the 08-31 runs had.
 - adapter `adapters/openai-tools/` at the same commit (132/132 unit tests OK before the run).
 - model `qwen36-reap48-ours` **untrained** Q4_K_M, sha256 `90e2181e…` == the daemon's
@@ -22,7 +22,7 @@ Adapter per-request log: [`2026-09-07-hermes-dogfood-25-tools-adapter.log`](2026
   Live gateway PID 1169016 (41 d uptime) and `~/.hermes/config.yaml` (mtime 2026-07-26) untouched.
 - sampler: substrate greedy, pinned by the daemon.
 - task: create `/tmp/dogfood-20260907/run<N>/` with `a.txt`/`b.txt`/`c.txt` = alpha/beta/gamma,
-  list, report — the 08-31 task with a per-run directory. Three fresh sessions against ONE
+  list, report: the 08-31 task with a per-run directory. Three fresh sessions against ONE
   adapter process.
 
 **Why this run exists:** the 08-31 PASS (0 resets, deltas 32/212/54) was measured with a
@@ -36,7 +36,7 @@ adapter met hermes's real default toolset.
 |---|---|---|---|---|---|---|---|
 | 1 | 19 s (incl. ModelLoaded) | 3 | a1 | 0 | **18,957**, 293, 171 | terminal, write_file ×3, terminal | 3/3 exact |
 | 2 | 12 s | 3 | a2 | 0 | 18,957, 293, 171 | terminal, write_file ×3, terminal | 3/3 exact |
-| 3 | 2 s | 1 | a3 | 0 | `None` | — | 0/3 — **HTTP 409** |
+| 3 | 2 s | 1 | a3 | 0 | `None` |: | 0/3: **HTTP 409** |
 | 4 (post-hoc, after `DELETE` a1–a3) | 11 s | 3 | a4 | 0 | 18,957, 293, 171 | same | 3/3 exact |
 
 Per-request outcomes: runs 1, 2, 4 all `ok`; run 3 `bloomery_error_409` with `prompt_tokens: null`
@@ -44,21 +44,21 @@ Per-request outcomes: runs 1, 2, 4 all `ok`; run 3 `bloomery_error_409` with `pr
 
 ### Endpoints (pre-registered)
 
-- **E1 functional — FAIL, 2/3.** Runs 1 and 2 produced all three files with exact contents.
-  Run 3 wrote nothing: hermes displayed bloomery's refusal unaltered —
+- **E1 functional: FAIL, 2/3.** Runs 1 and 2 produced all three files with exact contents.
+  Run 3 wrote nothing: hermes displayed bloomery's refusal unaltered:
   `HTTP 409: the model could not be made resident: needed 1217134592 B, free 545745056 B, reclaimable 0 B.`
-- **E2 prefill-once — PASS 2/2 measurable sessions.** One 18,957-token preamble, then 293 and 171;
+- **E2 prefill-once: PASS 2/2 measurable sessions.** One 18,957-token preamble, then 293 and 171;
   one agent, zero resets, per session. Session 3 has no measurable request.
-- **E3 preamble — 18,957 tokens**, fits under `window_cap` 30,000. This is ~4,900 more than the
+- **E3 preamble: 18,957 tokens**, fits under `window_cap` 30,000. This is ~4,900 more than the
   08-31 estimate for the 25-tool set (14,077, taken from a request dump), i.e. hermes's current
   system prompt under a fresh profile is larger than the dumped one. Recorded, not explained.
-- **E4 parse — PASS on every served turn.** Ten tool calls across runs 1–2 (fifteen with run 4),
+- **E4 parse: PASS on every served turn.** Ten tool calls across runs 1–2 (fifteen with run 4),
   including a 4-call turn (`terminal` mkdir + three `write_file`, 267 completion tokens), every one
   well-formed and executed by hermes. Still a handful of trajectories, not a rate.
-- **E5 daemon health — PASS.** `/status` answered in 0.2 ms after all runs; journal shows
+- **E5 daemon health: PASS.** `/status` answered in 0.2 ms after all runs; journal shows
   `InferStarted` 9 == `InferCompleted` 9, `AgentCreated` 4, `AgentRemoved` 3, one `Refusal`.
   No wedge (the pager-lock-across-infer class did not fire).
-- **E6 retries — 0.** hermes sent no byte-identical retry; the replay path was not exercised.
+- **E6 retries: 0.** hermes sent no byte-identical retry; the replay path was not exercised.
 
 **Verdict: PARTIAL** (E1 fails at 2/3; E2/E4/E5 pass). The point estimate stands; no rerun.
 
@@ -99,14 +99,14 @@ runs 1–2. That is the first live exercise of #22's endpoint.
 
 - The adapter + daemon + untrained model serve hermes's real 25-tool default set correctly, with
   prefill-once holding at 18,957 tokens and every tool call parsing, at ~12 s per three-turn task.
-- It is **not** a daily driver until agent turnover is owned by someone: candidate fixes, none built —
+- It is **not** a daily driver until agent turnover is owned by someone: candidate fixes, none built,
   (a) the adapter reaps idle sessions (a TTL, then `DELETE`), (b) the adapter creates agents below
   `default_priority` so `plan_residency` can evict its own idle agents, (c) bloomery gains an
   idle-eviction rule that does not require the requester to wait the quantum. (a) needs no Rust
   and is the smallest; (b) is a one-line config choice but makes every adapter agent evictable by
   any native-API agent; (c) is a pager design change. Ruling owed.
 - Tier fact update: **two** 30k contexts fit beside the 10.95 GiB weights on this box today
-  (free VRAM read 14.72 GiB at boot vs 13.10 GiB on 08-31 — the budget is a point-in-time probe).
+  (free VRAM read 14.72 GiB at boot vs 13.10 GiB on 08-31. The budget is a point-in-time probe).
 
 ## Not done / limits
 
@@ -127,14 +127,14 @@ runs 1–2. That is the first live exercise of #22's endpoint.
 
 ---
 
-# Addendum: the idle-reap follow-up run — pre-registration
+# Addendum: the idle-reap follow-up run: pre-registration
 
 Recorded 2026-09-07, BEFORE the daemon was booted for this run, after Brice
 ruled option (a): the adapter owns agent turnover (`adapters/openai-tools/openai_tools/reap.py`,
 branch `adapter-idle-reap`; 152 adapter tests green, 13/13 mutants killed).
 
 **Lens changes vs the run above, and nothing else:** adapter code at the branch head
-(idle TTL 900 s via the default, so the TTL sweep cannot fire inside a ~40 s run — only
+(idle TTL 900 s via the default, so the TTL sweep cannot fire inside a ~40 s run, only
 the residency reap can); fresh `data_dir` `/mnt/extra/bloomery-dogfood-20260907-reap`.
 Same daemon binary, model, daemon config, adapter config values, scratch `HERMES_HOME`,
 25-tool default set, prompt shape, three back-to-back `-q` sessions. Run directories
@@ -142,22 +142,22 @@ Same daemon binary, model, daemon config, adapter config values, scratch `HERMES
 
 **Endpoints (decided by the point estimate; no rerun):**
 
-- **E1 functional — 3/3** files exact (was 2/3).
-- **E2 prefill-once — 3/3** sessions: one preamble ≥ 10,000 tokens, every other request
+- **E1 functional: 3/3** files exact (was 2/3).
+- **E2 prefill-once: 3/3** sessions: one preamble ≥ 10,000 tokens, every other request
   < 1,000, one agent per session, zero resets.
-- **E4 parse —** every served turn `ok`; the run-3 first attempt MAY log `bloomery_error_409`
+- **E4 parse:** every served turn `ok`; the run-3 first attempt MAY log `bloomery_error_409`
   (that is the reap trigger, not a failure) and must then be followed by `ok`.
-- **E5 daemon health —** `/status` answers within 5 s after all runs; every `InferStarted`
+- **E5 daemon health:** `/status` answers within 5 s after all runs; every `InferStarted`
   paired with `InferCompleted`.
-- **E7 reap (new) —** the adapter log contains exactly ONE `session_reaped` event, with
+- **E7 reap (new):** the adapter log contains exactly ONE `session_reaped` event, with
   `reason: "residency"`, naming run 1's agent (`a1`, the LRU), emitted during run 3; zero
   `delete_failed`; the journal shows one `AgentRemoved` before run 3's `InferCompleted`.
-- **E8 residency (new) —** after all runs `/status` lists at most 2 agents, none `fresh`.
+- **E8 residency (new):** after all runs `/status` lists at most 2 agents, none `fresh`.
 
 **Verdict rule:** PASS = E1 ∧ E2 ∧ E4 ∧ E5 ∧ E7 ∧ E8. Anything else PARTIAL, endpoint named.
 Kill criteria unchanged from the pre-registration above.
 
-## Run B result — **PARTIAL** (E7 fails on a logging defect; the reap itself worked)
+## Run B result: **PARTIAL** (E7 fails on a logging defect; the reap itself worked)
 
 Adapter log: [`2026-09-07-hermes-dogfood-25-tools-reap-runB-adapter.log`](2026-09-07-hermes-dogfood-25-tools-reap-runB-adapter.log).
 
@@ -167,40 +167,40 @@ Adapter log: [`2026-09-07-hermes-dogfood-25-tools-reap-runB-adapter.log`](2026-0
 | 2 | 11 s | 3 | a2 | 18,959, 305, 171 | ok ×3 | 3/3 exact |
 | 3 | 12 s | 4 | a3 | `None`, 18,959, 305, 171 | **409, then ok ×3** | 3/3 exact |
 
-- **E1 3/3 PASS. E2 3/3 PASS** (one agent, zero resets per session). **E4 PASS** — run 3's first
-  line is the pre-registered 409 trigger, followed by `ok`. **E5 PASS** — `InferStarted` 9 ==
-  `InferCompleted` 9, `/status` answered. **E8 PASS** — `/status` after: a2, a3 `resident`,
+- **E1 3/3 PASS. E2 3/3 PASS** (one agent, zero resets per session). **E4 PASS**: run 3's first
+  line is the pre-registered 409 trigger, followed by `ok`. **E5 PASS** (`InferStarted` 9 ==
+  `InferCompleted` 9, `/status` answered. **E8 PASS**), `/status` after: a2, a3 `resident`,
   nothing `fresh`. The journal shows `Refusal a3` → `AgentRemoved a1` ("operator requested
   removal via DELETE /agents/{id}") → `InferCompleted a3` in that order: **the residency reap
   fired exactly as designed, 12 s for the whole third conversation.**
-- **E7 FAIL — measured 0 `session_reaped` events, not 1.** Not a reaping defect: the DELETE is
+- **E7 FAIL, measured 0 `session_reaped` events, not 1.** Not a reaping defect: the DELETE is
   in the daemon's journal. A logging defect: `server.py` named its logger from `__name__`, which
   under `python -m openai_tools.server` is `__main__`, while `reap.py` logs to the README's
-  promised `openai_tools.server` — a name that, in production only, had no handler, so an
+  promised `openai_tools.server`, a name that, in production only, had no handler, so an
   INFO event was silently dropped (a WARNING `delete_failed` would have reached Python's
   last-resort handler; the success event did not). Every test imported the module under its
   package name, where the two names coincide, which is why 153 green tests never saw it.
-  **A value that looks like a measurement but is not** — the run's instrument, not its subject.
+  **A value that looks like a measurement but is not**: the run's instrument, not its subject.
 
 Fixed on the branch (fixed logger name; `EntrypointTest` executes `server.py` under the name
 `__main__` exactly as `-m` does, with `serve_forever` stubbed, and asserts the reap and request
 loggers are one object; the mutant that restores `__name__` is killed). A second defect found
 while stabilising the suite: `last_used` was stamped AFTER the response was written, so a reaper
 acting the instant a client got its answer could read a stale stamp or one taken from a clock
-that had already advanced — one flaky failure in six runs. It is now stamped at request start,
+that had already advanced, one flaky failure in six runs. It is now stamped at request start,
 under the lock; 8/8 consecutive green; 14/14 mutants killed; 153 tests.
 
 Run B's point estimate stands as PARTIAL. It is not re-rolled: run C below is a fresh run under
 a new lens (the fixed adapter), pre-registered before boot.
 
-## Run C — pre-registration (written before boot)
+## Run C: pre-registration (written before boot)
 
 Identical to run B's pre-registration in every respect except: adapter at the branch head after
 the two fixes above; fresh `data_dir` `/mnt/extra/bloomery-dogfood-20260907-reapC`; run
 directories `/tmp/dogfood-20260907-reapC/run<N>/`. Endpoints E1, E2, E4, E5, E7, E8 and the
 verdict rule are unchanged and copied by reference, not restated, so they cannot drift.
 
-## Run C result — **PARTIAL**: the reap passes its own endpoint; the lens moved under the run
+## Run C result: **PARTIAL**: the reap passes its own endpoint; the lens moved under the run
 
 Adapter log: [`2026-09-07-hermes-dogfood-25-tools-reap-runC-adapter.log`](2026-09-07-hermes-dogfood-25-tools-reap-runC-adapter.log).
 
@@ -212,7 +212,7 @@ Adapter log: [`2026-09-07-hermes-dogfood-25-tools-reap-runC-adapter.log`](2026-0
 
 - **E1 3/3 PASS. E4 PASS** (every served turn `ok`; run 3's first line is the 409 trigger).
   **E5 PASS** (`InferStarted` 14 == `InferCompleted` 14; `/status` answered).
-- **E7 PASS — exactly one `session_reaped` event, `reason: "residency"`, zero `delete_failed`,
+- **E7 PASS, exactly one `session_reaped` event, `reason: "residency"`, zero `delete_failed`,
   and the journal shows `Refusal a8` → `AgentRemoved a4` → the retried inference completing.**
   The logging fix is confirmed live: the event now reaches the same stream as the request lines.
   The victim was a4, not a1: a1 had already been suspended by a reset (below), so a4 was the
@@ -223,20 +223,20 @@ Adapter log: [`2026-09-07-hermes-dogfood-25-tools-reap-runC-adapter.log`](2026-0
   17,493-token preamble prefilled AGAIN (17,970 on run 1's a4). Net: two full prefills per
   conversation instead of one, and agent churn a1…a10.
 
-**Cause — the lens changed between runs B and C, outside this run's control.** hermes updated
+**Cause: the lens changed between runs B and C, outside this run's control.** hermes updated
 itself on disk at 09:18:12 (every file under `~/.hermes/hermes-agent/agent/` carries that mtime;
 run B started 09:17:10, run C 09:28:19), and the new version issues an **auxiliary
 title-generation LLM call** through the same `base_url` (`agent.log`: "Auxiliary title_generation:
-using custom (qwen36-reap48-ours) at http://127.0.0.1:8011/v1/" at 09:28:22, 09:28:45, 09:29:00 —
+using custom (qwen36-reap48-ours) at http://127.0.0.1:8011/v1/" at 09:28:22, 09:28:45, 09:29:00,
 once per session; `title_generator.py` sends `[system: <title prompt>, user: <first user
 message>]`). The adapter keys sessions by the SHA-256 of the **first user message** when no
 `X-Session-Id` is sent, so the title call and the conversation collide onto one session and take
 turns rewriting each other's history. This is the README's documented "session identity is a
 heuristic" limitation, measured for the first time with a real client. Two consequences worth
 recording: (1) the title call's answer ran to 768 tokens = the adapter's default `max_tokens`,
-although `title_generator.py` passes `max_tokens=64` — the value evidently did not arrive in a
+although `title_generator.py` passes `max_tokens=64`. The value evidently did not arrive in a
 key the adapter reads (unverified: no wire capture in this run); (2) the run-B preamble of
-18,959 tokens became 17,493 under the new hermes — the system prompt changed with the update,
+18,959 tokens became 17,493 under the new hermes: the system prompt changed with the update,
 which is why E3-type numbers are point-in-time and carry their hermes version.
 
 Verdict stands as measured. Not re-rolled: the collision is real, orthogonal to the reap, and
@@ -245,7 +245,7 @@ would recur on every run under this hermes version.
 **Ruling owed (next slice, not this one):** give auxiliary calls their own identity. Options:
 (a) key sessions on the system prompt AND the first user message, so a differently-prompted
 call gets its own agent (then reaped by TTL/residency like any other); (b) treat requests that
-carry no `tools` as ephemeral — create, infer, `DELETE` in one request — the cheapest for a
+carry no `tools` as ephemeral (create, infer, `DELETE` in one request) the cheapest for a
 64-token title; (c) ask hermes to send `X-Session-Id`. (b) also stops a title call from ever
 holding a 30k-token window. Separately, check what `max_tokens` key the auxiliary client sends.
 

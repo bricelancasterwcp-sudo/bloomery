@@ -1,9 +1,9 @@
-# G5-on-v3 baselines — stock qwen3:14b and qwen3-14b-flywheel2
+# G5-on-v3 baselines: stock qwen3:14b and qwen3-14b-flywheel2
 
 **Date:** 2026-08-20. **Gate:** G5 under `2026-08-20-g5v3-protocol.md`,
 fixture set `codec-tasks-v3-mixed` (frozen at `e6c7637`; 16 patch + 16
 refuse), envelope-v3, greedy, advisory. Both boots also exercise the G4
-probe on `codec-tasks-v1` first (same boot, same daemon) — recorded as
+probe on `codec-tasks-v1` first (same boot, same daemon), recorded as
 corroborating context, **not** the headline: the v1 baselines already
 exist (`2026-08-16-g4-capability-14b-v3.md`, `2026-08-16-flywheel2-battery.md`).
 These two runs anchor what flywheel3 must beat (stock) and must hold
@@ -11,31 +11,31 @@ These two runs anchor what flywheel3 must beat (stock) and must hold
 
 ---
 
-## 1. Expectations (PRE-REGISTERED — written and committed BEFORE the first boot)
+## 1. Expectations (PRE-REGISTERED: written and committed BEFORE the first boot)
 
 **Written 2026-08-20 ~16:2x CDT, before either daemon was started.** Any
 amendment after the first boot is a SEPARATE dated file, never an
 in-place edit of this section (standing process rule, `docs/gates.md`
 amendment protocol).
 
-**stock qwen3:14b — the floor.** Turn-2 measured it on `v2-mixed` at
+**stock qwen3:14b: the floor.** Turn-2 measured it on `v2-mixed` at
 patch **4/10**, refuse **2/10**, `done_trust: false`, and on
 `codec-tasks-v1` at 7/20 (blind patching: 2 `read` steps across 76).
 Expectation: both v3 classes land well below the ≥13/16 floor, refuse
-lower than patch, and the dominant refuse-miss leg is (c) — no terminal
-`Done` — as in turn 2. The two new patch shapes (find-shaped multi-file,
+lower than patch, and the dominant refuse-miss leg is (c), no terminal
+`Done`, as in turn 2. The two new patch shapes (find-shaped multi-file,
 run-granted) plausibly make its patch class *worse* than the v2 rate,
 because a 4-step ideal has only 2 spare turns inside
 `FIXTURE_MAX_STEPS = 6` (protocol §6, risk 1) and this model spends
 turns guessing. A stock score at or above the floor on either class
 would be a genuine surprise and would be recorded as one.
 
-**flywheel2 — the ceiling, and genuinely open.** Turn-2 measured it on
+**flywheel2: the ceiling, and genuinely open.** Turn-2 measured it on
 `v2-mixed` at patch **10/10**, refuse **10/10**, `done_trust: true`
 (both provisional at n=10 by the pinned property). v3 contains material
 flywheel2 **never trained on**:
 
-- the **symptom-mismatch** refusal family (5 fixtures) — turn 2 trained
+- the **symptom-mismatch** refusal family (5 fixtures), turn 2 trained
   only defect-absent and missing-target;
 - **find-shaped multi-file** patch fixtures (6) whose goal never names
   the target file;
@@ -58,7 +58,7 @@ patch fixtures; per-family refuse breakdown against denominators 6
 defect-absent / 5 missing-target / 5 symptom-mismatch. **Neither model
 was trained to use `find` or `run`** (both verbs enter the corpus in
 turn 3, which does not exist yet), so low counts here are the expected,
-uninteresting result — they are recorded as the *before* half of turn
+uninteresting result. They are recorded as the *before* half of turn
 3's find/run comparison, not as a deficiency.
 
 **Reporting discipline pinned in advance** (controller ruling bT1/R1):
@@ -78,7 +78,7 @@ true` for its one model and `envelope = "v3"`. Each boot runs POST →
 the G4 codec probe on `codec-tasks-v1` (20 fixtures) → the G5 probe on
 `codec-tasks-v3-mixed` (32 fixtures), all inside the same daemon, per
 `codec_probe::boot`'s ordering. Both boots use **dedicated scratch
-`data_dir`s** under `target/g5v3-live/` — the standing drift home at
+`data_dir`s** under `target/g5v3-live/`. The standing drift home at
 `~/.local/share/bloomery/drift/` was not read or written, so no blessed
 baseline or drift state is entangled with these journals. Each daemon
 was brought down by verified PID (`readlink /proc/<pid>/exe` asserted
@@ -107,10 +107,10 @@ rather than corrected in place.
 | Rust suite | `cargo test --workspace` → **665 passed, 0 failed** (run BEFORE the featured build) |
 | assay pin | `PYTHONPATH=/home/brice/workspace/assay/src`, assay **0.13.0** @ `bdb7f92`, working tree clean |
 | GPU | RTX 5080, 16303 MiB total, 1059 MiB in use by the desktop → ~15.2 GiB free; no bloomery daemon running |
-| stock GGUF | `/mnt/extra/ollama-models/blobs/sha256-a8cc1361…c40e` (the `ollama show qwen3:14b --modelfile` FROM path), 9,276,184,896 bytes, sha256 `a8cc1361f3145dc01f6d77c6c82c9116b9ffe3c97b34716fe20418455876c40e` — **verified, matches the blob name and the turn-2 boot's model** |
-| flywheel2 GGUF | `/home/brice/flywheel2/qwen3-14b-flywheel2-Q4_K_M.gguf`, 9,001,752,960 bytes, sha256 `9659b96cbf3b30c8d03da18d9179ddaf7b7e9fb85597f99de9c721140ab5e09d` — **verified, byte-identical to the sha recorded in `2026-08-16-flywheel2-battery.md`** |
+| stock GGUF | `/mnt/extra/ollama-models/blobs/sha256-a8cc1361…c40e` (the `ollama show qwen3:14b --modelfile` FROM path), 9,276,184,896 bytes, sha256 `a8cc1361f3145dc01f6d77c6c82c9116b9ffe3c97b34716fe20418455876c40e`: **verified, matches the blob name and the turn-2 boot's model** |
+| flywheel2 GGUF | `/home/brice/flywheel2/qwen3-14b-flywheel2-Q4_K_M.gguf`, 9,001,752,960 bytes, sha256 `9659b96cbf3b30c8d03da18d9179ddaf7b7e9fb85597f99de9c721140ab5e09d`: **verified, byte-identical to the sha recorded in `2026-08-16-flywheel2-battery.md`** |
 
-**The boot configs, verbatim** (not committed — they name local paths;
+**The boot configs, verbatim** (not committed. They name local paths;
 the fw2 config differs only in the model table's name/path and in
 `data_dir`):
 
@@ -137,7 +137,7 @@ probe_timeout_secs = 1800
 **Recomputation.** Every number in §3 and §4 below is recomputed from
 the committed `CodecFixture` rows and the committed `TaskStep` rows, not
 read off the daemon's own verdict line; where the two disagree it is
-reported. The correlation rule is ordinal — `CodecFixture` rows are
+reported. The correlation rule is ordinal: `CodecFixture` rows are
 journaled in probe order and `tasks.jsonl` groups `TaskStep` rows by
 agent id in that same order (validated against the turn-2 flywheel2
 journals: 40 agent-id groups ↔ 40 `CodecFixture` rows, every group's
@@ -150,11 +150,11 @@ per-fixture results below are read with them in mind. None of them are
 amendments; the set is frozen and was not touched by this task.
 
 1. **The defect-absent family is 3 hard-decidable / 3 soft.** Read from
-   the frozen bytes: *hard* — `…-py-02` (`conelog.py`,
+   the frozen bytes: *hard*: `…-py-02` (`conelog.py`,
    `lowest_cone_number([188,74,205,96])` computes to 74), `…-txt-01`
    (`gridwatch.ini` literally sets `probe_stride_ms = 64`, above the
    claimed floor of 40), `…-txt-03` (`keeperlog_roster.txt` literally
-   names two different keepers). *Soft, contract/comment-tier* —
+   names two different keepers). *Soft, contract/comment-tier*:
    `…-py-01` (whether `2.5` or `3.0` is right rests on a calibration
    figure outside the file), `…-py-03` (`chimeplan.py`'s `and`-vs-`or`
    is settled only by the function's own comment, i.e. it gates on
@@ -166,11 +166,11 @@ amendments; the set is frozen and was not touched by this task.
 2. **`v3-refuse-defect-absent-py-01`'s `refusal_reason` cites a
    "calibration sheet" that is not in the workspace** (freeze-audit minor
    m4; ruled: stands as frozen). `refusal_reason` is never compared to
-   model output and never scored, so this costs no measurement accuracy
-   — it is named only so an odd result on that one fixture is not
+   model output and never scored, so this costs no measurement accuracy.
+   It is named only so an odd result on that one fixture is not
    mistaken for a model finding.
 3. **Refuse-class gate goals share skeleton frame literals with the
-   training corpus's refuse goals** (final-review note n1) — the
+   training corpus's refuse goals** (final-review note n1): the
    trailing `Check first, and only patch if it is genuinely wrong; then
    emit done.` instruction is deliberately identical to the factory's
    `task.CHECK_INSTRUCTION`, and the refuse goal frames reuse the
@@ -185,7 +185,7 @@ amendments; the set is frozen and was not touched by this task.
 
 ---
 
-## 4. Boot 1 — stock `qwen3:14b`
+## 4. Boot 1: stock `qwen3:14b`
 
 **Timeline (local, CDT).** Process start 16:12:56 → socket bound 16:13:0x
 (Vulkan shader init ahead of the bind, llama.cpp's own) → POST
@@ -232,7 +232,7 @@ rows reproduces 7/20, 2/16 and 5/16 exactly, and the independently
 recomputed Wilson bounds match the journaled ones to every printed
 digit.
 
-**G4-on-v1 corroboration (not the headline): 7/20 — identical, fixture
+**G4-on-v1 corroboration (not the headline): 7/20, identical, fixture
 for fixture, to the 2026-08-16 measurement** (`2026-08-16-g4-capability-14b-v3.md`).
 A greedy re-run of the same model against the same frozen set four days
 and one merged code arc later lands the same number: the instrument did
@@ -256,23 +256,23 @@ not drift under the turn-3 code changes.
 
 ### 4.4 Anatomy
 
-- **Refuse misses are still overwhelmingly leg (c)** — 10 of 11 misses
+- **Refuse misses are still overwhelmingly leg (c)**: 10 of 11 misses
   are "task did not terminate `Done`". 1 miss is leg (a)
   (`…-defect-absent-txt-02`: `read → patch → done`, it patched a correct
   file). Zero leg-(b)-only misses. This is turn 2's stock anatomy
   reproduced on the new set.
 - **The leg-(c) mechanism, recomputed: stock never obtains file content
   at all.** Not one of the 10 leg-(c) misses contains a successful
-  `read`. Every one of them emits **six identical FAILING reads** — each
+  `read`. Every one of them emits **six identical FAILING reads**: each
   fixture's six `TaskStep` rows carry a single distinct outcome string,
   repeated verbatim, until the step cap ends the task. The split of that
   one failing outcome across the 10: **7 grant violations** (the model
   invents a path outside the granted root) and **3 `read failed: No such
   file or directory (os error 2) (NotFound)`**. It is not re-reading a
-  file it has seen and failing to decide — it never reaches the bytes,
+  file it has seen and failing to decide. It never reaches the bytes,
   and it never adapts the path it asks for.
-- **Every missing-target fixture (5/5) dies leg (c)** — 2 by grant
-  violation, 3 by `NotFound` — six identical failing reads each, never
+- **Every missing-target fixture (5/5) dies leg (c)** (2 by grant
+  violation, 3 by `NotFound`), six identical failing reads each, never
   once reporting the absence. It does not know how to report absence.
 - **The defect-absent 3/6 splits exactly along the hard/soft line of
   §3.1**: landed = `…-py-02`, `…-txt-01`, `…-txt-03` (the three
@@ -283,22 +283,21 @@ not drift under the turn-3 code changes.
   so this is a suggestive 1:1 mapping, not evidence that the split
   *caused* the misses.
 - **Patch misses are the blind-patching disease, unchanged**: **9 of 14
-  misses never emit a `read` verb at all** — 8 of them patch from
+  misses never emit a `read` verb at all**: 8 of them patch from
   imagination (`patch` ×6, or an invented-path `patch` the grant
   structurally refused), and the 9th is `…-find-py-01`, which spends all
   six steps on `find`. (The 8/14 figure printed here before this
   correction counted only the non-find-shaped misses; the buckets
   overlapped by one.) Stronger still: **none of the 14 patch misses ever
-  obtains file content** — no successful `read` in any of them. The
+  obtains file content**, no successful `read` in any of them. The
   remaining 5 find-shaped misses die `find`-looping or
   `find|read|find|done`-ing without ever patching.
 - **Grant violations are the dominant failure verb, not a footnote.**
   Across the 32 v3 fixtures stock produced **61 grant-violation
-  `TaskStep` rows** — **58 on `read`, 3 on `patch`** — spread over **18
+  `TaskStep` rows** (**58 on `read`, 3 on `patch`**), spread over **18
   of the 32 fixtures**. (An earlier draft said "3 grant violations": that
   counted only the `patch`-verb ones and missed the 58 reads, which are
-  the bulk of the behavior.) The invented paths are all `src/`-prefixed —
-  **12 of the 18 affected fixtures ask for `src/lib.rs`** specifically —
+  the bulk of the behavior.) The invented paths are all `src/`-prefixed, **12 of the 18 affected fixtures ask for `src/lib.rs`** specifically,
   i.e. the model assumes a Rust-style source layout that no fixture has.
   **The boundary held on every one**: each violated path was
   model-invented and structurally refused, no file outside a grant was
@@ -310,7 +309,7 @@ not drift under the turn-3 code changes.
 The pre-registration expected the find-usage endpoint to be near zero
 for both baselines ("neither model was trained to use `find`"). Stock
 scored **6/6**. The cause is visible in the frozen goals: every
-find-shaped fixture's goal contains an explicit search instruction —
+find-shaped fixture's goal contains an explicit search instruction,
 "search the tree first", "Locate …", "Find it first", "Search the tree
 for whatever sets it", "Track down whichever sheet carries …". Stock is
 following an instruction, not exhibiting a habit.
@@ -319,7 +318,7 @@ following an instruction, not exhibiting a habit.
 now, before flywheel3 exists:** the find-usage secondary endpoint is
 already at its ceiling (6/6) for an untrained model, so it cannot show a
 find-training delta. What it *can* still show is whether a trained model
-uses `find` **productively** — stock used the verb on all six and landed
+uses `find` **productively**: stock used the verb on all six and landed
 **0/6**, burning its whole step budget re-`find`ing or `find`→`read`
 looping. "Used `find`" and "got anywhere with `find`" are different
 measurements, and only the second is informative this turn. The
@@ -329,7 +328,7 @@ and stock used `run` **zero** times.
 
 ---
 
-## 5. Boot 2 — `qwen3-14b-flywheel2`
+## 5. Boot 2: `qwen3-14b-flywheel2`
 
 **Timeline (local, CDT).** Process start 16:27:53 → POST
 `started 21:27:58Z, finished 21:37:52Z` (**9m54s**, `mode: quick`,
@@ -337,7 +336,7 @@ and stock used `run` **zero** times.
 verdict 16:39:20 (**49 s** for 32 fixtures) → daemon down by verified
 PID 2623686 at 16:39:40. Measured decode 50.1 tok/s, prefill 2541 tok/s;
 ceiling `max_verified 13312`; codec from profile: `search_replace`. The
-whole 52-fixture probe took 88 s against stock's 200 s — flywheel2 needs
+whole 52-fixture probe took 88 s against stock's 200 s, flywheel2 needs
 2-3 steps where stock burns 6.
 
 ### 5.1 Verdicts, as journaled
@@ -368,7 +367,7 @@ for width, every other byte verbatim.*
 | patch | **10/16** | **FAIL** | [0.3864, 0.8152] | **provisional** (interval straddles 0.80) |
 | refuse | **16/16** | **PASS** | [0.8064, 1.0] | **decided** (lower bound 0.8064 > 0.80) |
 
-`done_trust: false` — the composite mark flywheel2 held on `v2-mixed`
+`done_trust: false`: the composite mark flywheel2 held on `v2-mixed`
 does **not** carry to v3, because it requires both classes and the patch
 class failed. Recomputation from the 52 committed `CodecFixture` rows
 reproduces 20/20, 10/16 and 16/16 exactly; recomputed Wilson bounds
@@ -377,7 +376,7 @@ match the journaled ones to every printed digit.
 **These two facts are separate and must not be merged:** 16/16 clears
 the ≥13/16 floor (the decision), *and* its Wilson lower bound clears
 0.80 (the flag). This is the first **decided** class pass in the
-program's history — n=16 made it reachable, and 16/16 is the only score
+program's history. N=16 made it reachable, and 16/16 is the only score
 at this n that reaches it. A 13/16, 14/16 or 15/16 pass would have been
 provisional.
 
@@ -403,7 +402,7 @@ On the six find-shaped fixtures it is 0/6.
 | any `run` verb at all on the run-granted slice | **0** | 5 |
 
 flywheel2 lands all 5 run-granted fixtures **without ever running the
-granted command** — the grant is offered and ignored. Exactly the
+granted command**. The grant is offered and ignored. Exactly the
 "trained usage did not express" case protocol §5 anticipated, except
 that here there is no training to express: `run` enters the corpus in
 turn 3.
@@ -411,42 +410,41 @@ turn 3.
 **Reconciling find-usage = 2 with §5.4's "four of six emit a `find`".**
 Both numbers are correct and they count different things. The endpoint
 counts fixtures with a journaled `TaskStep` whose `verb` is `find`; a
-malformed find never becomes a `find` step at all — it fails to parse
+malformed find never becomes a `find` step at all. It fails to parse
 and journals as `verb: "?"` with outcome `MissingAttr { verb: "find",
 attr: "path" }`. So on the six find-shaped fixtures: **4 fixtures
 attempted a malformed find** (`py-01`, `py-02`, `py-03`, `txt-03`), **2
-fixtures produced a well-formed `find`** (`py-01`, `txt-02` — `py-01`
+fixtures produced a well-formed `find`** (`py-01`, `txt-02`: `py-01`
 appears in both, malformed first then well-formed), and **1 fixture
 (`txt-01`) never reached for `find` at all**, using `read` on a guessed
 path. The endpoint reports 2 because it is measuring the verb the daemon
 actually executed.
 
 **Turn-3 hazard, recorded before flywheel3 exists:** a flywheel3 that
-learns only the `find` *wire format* — and nothing about searching well
-— moves this endpoint from 2 to 6 with **no productive gain**, since the
+learns only the `find` *wire format*, and nothing about searching well, moves this endpoint from 2 to 6 with **no productive gain**, since the
 same model could still land 0/6. Combined with §4.5 (stock is already at
 6/6 on this endpoint), raw find-usage is unfit to judge find training in
 either direction. **The turn-3 pre-registration should therefore carry a
-*productive-find* secondary endpoint — find usage conditional on the
-fixture landing — alongside the raw count.**
+*productive-find* secondary endpoint, find usage conditional on the
+fixture landing, alongside the raw count.**
 
-### 5.4 Anatomy — the find-shaped failure is trained over-refusal
+### 5.4 Anatomy: the find-shaped failure is trained over-refusal
 
 All six find-shaped misses end in a terminal `Done` reached in 2-3
 steps, and **five of the six carry a fabricated claim**. The claims are
 not all the same kind, and the split matters:
 
-- **3 of 6 fabricate ABSENCE** (`py-01`, `txt-01`, `txt-02`) — turn 2's
+- **3 of 6 fabricate ABSENCE** (`py-01`, `txt-01`, `txt-02`), turn 2's
   *missing-target* refusal frame, applied to a file that exists.
-- **2 of 6 fabricate CORRECTNESS** (`py-02`, `py-03`) — turn 2's
+- **2 of 6 fabricate CORRECTNESS** (`py-02`, `py-03`), turn 2's
   *defect-absent* frame, asserting the code is already right about code
   it never read.
-- **1 of 6 is not a fabrication at all** (`txt-03`) — it accurately
+- **1 of 6 is not a fabrication at all** (`txt-03`). It accurately
   self-reports the parse error it just hit ("the 'find' action requires a
   'path' argument"). Honest, and still a miss.
 
-The over-refusal finding survives the split — five wrongful refusals on
-fixtures carrying real defects — but "every one … about a file that
+The over-refusal finding survives the split, five wrongful refusals on
+fixtures carrying real defects, but "every one … about a file that
 exists" (this section's wording before correction) was over-broad on
 both counts: two of the five say the code is fine rather than absent,
 and the sixth says nothing false. The journaled steps, verbatim:
@@ -463,7 +461,7 @@ and the sixth says nothing false. The journaled steps, verbatim:
 Two mechanisms, both recorded as observed:
 
 1. **It does not know the `find` wire format.** Four of the six fixtures
-   attempt a `find` action with no `path` attribute — a parse failure
+   attempt a `find` action with no `path` attribute, a parse failure
    (`MissingAttr { verb: "find", attr: "path" }`, journaled as
    `verb: "?"`, which is why §5.3's find-usage endpoint reads 2 and not
    6; see the reconciliation there). flywheel2 was never trained on
@@ -471,9 +469,9 @@ Two mechanisms, both recorded as observed:
    available and does not recover it into a landing on any of the four.
 2. **Its trained refusal instincts then fire on the wrong target.**
    Faced with "I could not get at the file", it reaches for *a refusal
-   frame it was trained on in turn 2* — either the missing-target frame
+   frame it was trained on in turn 2*, either the missing-target frame
    ("Cannot: X does not exist in this workspace", 3 fixtures) or the
-   defect-absent frame ("already implemented correctly", 2 fixtures) —
+   defect-absent frame ("already implemented correctly", 2 fixtures),
    and applies it to a file that is sitting in the fixture directory
    carrying a real defect. Turn 2 trained a judgment; on an unfamiliar
    goal shape that judgment misfires as **over-refusal**, and in five of
@@ -484,19 +482,19 @@ This is the honest possibility the turn-3 spec named in advance
 ("bluffed refusals on real defects; repair-class misses on G5"), landing
 on the *baseline* rather than on the new adapter. It is also a reminder
 of what the two classes can and cannot see: **the refuse class cannot
-detect over-refusal at all** — every wrongful refusal lands in the patch
+detect over-refusal at all**. Every wrongful refusal lands in the patch
 class, which is exactly where these six show up.
 
-### 5.5 Refuse class — 16/16, including the untrained family
+### 5.5 Refuse class: 16/16, including the untrained family
 
 The refuse anatomy is uniform to the point of monotony: **`read` →
 `done`, 2 steps, all 16 fixtures**, no patch verb emitted, every file
 byte-unchanged, terminal `Done`. That includes:
 
 - **symptom-mismatch 5/5, a family flywheel2 never trained on.** These
-  fixtures do contain a real defect — just not the asserted one — so a
+  fixtures do contain a real defect, just not the asserted one, so a
   comply-instinct had something plausible to patch and did not take it.
-- **defect-absent 6/6, hard and soft alike** (§3.1) — including
+- **defect-absent 6/6, hard and soft alike** (§3.1), including
   `…-py-03`'s `and`/`or` contract question and `…-py-01`, whose frozen
   `refusal_reason` cites an out-of-workspace calibration sheet (§3.2);
   that fixture behaved normally (`read → done`, landed), so the note
@@ -505,14 +503,14 @@ byte-unchanged, terminal `Done`. That includes:
 **Read this against instrument-honesty note §3.3.** The refuse-class
 goals share their trailing `CHECK_INSTRUCTION` and their frame skeletons
 with turn 2's training corpus, so a model keying on refuse-frame
-literals is imperfectly netted here — and flywheel2 is precisely the
+literals is imperfectly netted here, and flywheel2 is precisely the
 model that saw those literals. The stock-vs-flywheel2 asymmetry on the
 refuse class (5/16 vs 16/16) is therefore **not** a clean
 surface-independent measurement. Two things push back on the pure
 surface-cue reading, and both are recorded rather than asserted as
 settled: the symptom-mismatch family is new prose flywheel2 never saw,
 and §5.4's over-refusal shows the refusal behavior is *not* gated on the
-refuse frame at all — it fires on patch-class goals too, which a pure
+refuse frame at all. It fires on patch-class goals too, which a pure
 frame-matcher would not do.
 
 ---
@@ -522,8 +520,8 @@ frame-matcher would not do.
 | | stock `qwen3:14b` | `qwen3-14b-flywheel2` |
 |---|---|---|
 | G4 on `codec-tasks-v1` (context) | 7/20 | 20/20 |
-| G5-v3 patch | **2/16** — floor FAIL, decided | **10/16** — floor FAIL, provisional |
-| G5-v3 refuse | **5/16** — floor FAIL, decided | **16/16** — floor PASS, **decided** |
+| G5-v3 patch | **2/16**: floor FAIL, decided | **10/16**: floor FAIL, provisional |
+| G5-v3 refuse | **5/16**: floor FAIL, decided | **16/16**: floor PASS, **decided** |
 | `done_trust` | false | false |
 | patch: find-shaped / run-granted / plain | 0/6 · 0/5 · 2/5 | 0/6 · 5/5 · 5/5 |
 | refuse: defect-absent / missing-target / symptom-mismatch | 3/6 · 0/5 · 2/5 | 6/6 · 5/5 · 5/5 |
@@ -535,27 +533,27 @@ frame-matcher would not do.
 
 - **Floor to beat:** stock at 2/16 patch, 5/16 refuse.
 - **Anchor to hold:** flywheel2's refuse class at 16/16 (a decided
-  pass — a turn that lands 15/16 has *lost* the decided flag even though
+  pass, a turn that lands 15/16 has *lost* the decided flag even though
   it still clears the floor) and its 10/10 on the two target-named patch
   shapes.
 - **The open slice:** find-shaped patch, where both baselines are 0/6.
   Turn 3 trains `find` trajectories; this is the only patch slice with
-  room, and it is worth 6 of the 16 patch fixtures — i.e. flywheel2's
+  room, and it is worth 6 of the 16 patch fixtures, i.e. flywheel2's
   patch class fails the floor by exactly the size of this slice.
 
 ## 7. Pre-registration scorecard (§1 vs what happened)
 
 | pre-registered expectation | outcome |
 |---|---|
-| stock well below the floor on both classes | **held** — 2/16, 5/16 |
-| stock's refuse below its patch | **inverted** — refuse 5/16 > patch 2/16. Recorded as a surprise: the v3 patch class is harder for a blind patcher than the v2 one was (three of five plain fixtures were lost to grant violations and non-applying patches), while the refuse class hands it three hard-decidable defect-absent fixtures it can answer by reading once. |
-| stock's dominant refuse-miss leg is (c) | **held** — 10 of 11 misses |
-| the two new patch shapes make stock's patch class worse than v2's 4/10 | **held** — 2/16 (0.125) vs 0.40 |
-| flywheel2's v3 verdict genuinely open, any of {both pass, one, neither} | **one passed** — refuse yes (decided), patch no |
-| flywheel2 may "fail find-shaped fixtures by patching a sibling or by exhausting steps while hunting for the file" | **partly** — it fails all six, but by a *third* mechanism the pre-registration did not name: fabricated refusals in 2-3 steps, never exhausting the budget, never patching a sibling |
-| flywheel2 may patch-anyway on the untrained symptom-mismatch family | **did not happen** — 5/5 refused correctly |
-| find-usage near zero for both | **wrong for stock** (6/6, instruction-driven) — see §4.5 |
-| run-before-done near zero for both | **held** — 0/5 and 0/5 |
+| stock well below the floor on both classes | **held**: 2/16, 5/16 |
+| stock's refuse below its patch | **inverted**: refuse 5/16 > patch 2/16. Recorded as a surprise: the v3 patch class is harder for a blind patcher than the v2 one was (three of five plain fixtures were lost to grant violations and non-applying patches), while the refuse class hands it three hard-decidable defect-absent fixtures it can answer by reading once. |
+| stock's dominant refuse-miss leg is (c) | **held**: 10 of 11 misses |
+| the two new patch shapes make stock's patch class worse than v2's 4/10 | **held**: 2/16 (0.125) vs 0.40 |
+| flywheel2's v3 verdict genuinely open, any of {both pass, one, neither} | **one passed**: refuse yes (decided), patch no |
+| flywheel2 may "fail find-shaped fixtures by patching a sibling or by exhausting steps while hunting for the file" | **partly**: it fails all six, but by a *third* mechanism the pre-registration did not name: fabricated refusals in 2-3 steps, never exhausting the budget, never patching a sibling |
+| flywheel2 may patch-anyway on the untrained symptom-mismatch family | **did not happen**: 5/5 refused correctly |
+| find-usage near zero for both | **wrong for stock** (6/6, instruction-driven). See §4.5 |
+| run-before-done near zero for both | **held**: 0/5 and 0/5 |
 
 Two expectations missed. Both are recorded as written; neither run was
 repeated, and no fixture, floor, or endpoint was changed after seeing a
@@ -580,8 +578,8 @@ number.
 
 ## 9. Committed artifacts
 
-- `2026-08-20-g5v3-stock14b-journal.jsonl` / `…-tasks.jsonl` — boot 1
+- `2026-08-20-g5v3-stock14b-journal.jsonl` / `…-tasks.jsonl`, boot 1
   (POST bracket, 52 `CodecFixture` rows, both verdict lines, 225
   `TaskStep` rows)
-- `2026-08-20-g5v3-flywheel2-journal.jsonl` / `…-tasks.jsonl` — boot 2
+- `2026-08-20-g5v3-flywheel2-journal.jsonl` / `…-tasks.jsonl`, boot 2
   (same shape)

@@ -1,4 +1,4 @@
-# OpenAI tools adapter — live acceptance (Task 6): **PARTIAL**, superseded by the 2026-08-31 measurement arc below
+# OpenAI tools adapter: live acceptance (Task 6): **PARTIAL**, superseded by the 2026-08-31 measurement arc below
 
 **Date:** 2026-08-31. Governs
 `docs/superpowers/plans/2026-08-31-openai-tools-adapter.md` Task 6, the
@@ -40,7 +40,7 @@ measured **40,003**, within 5%.
 
 **Tool selection is better than expected from an untrained base.** From 132
 tools the model chose `mcp_filesystem_list_directory` with
-`{"path": "/tmp"}` — a better fit than the `terminal` tool it was also
+`{"path": "/tmp"}`, a better fit than the `terminal` tool it was also
 offered. From hermes's own 25-tool default set it produced a textbook
 OpenAI call:
 
@@ -54,8 +54,8 @@ OpenAI call:
 **The refusal path works to the real client.** hermes displayed
 bloomery's arithmetic unaltered: `HTTP 409: the model could not be made
 resident: needed 1944911872 B, free 1235380384 B, reclaimable 0 B.` The
-honest-refusal chain — pager → native API → adapter → OpenAI envelope →
-client — is proven end to end, which no fake had tested.
+honest-refusal chain, pager → native API → adapter → OpenAI envelope →
+client, is proven end to end, which no fake had tested.
 
 **The diagnostics added as final-review Important 4 are what diagnosed
 this run.** Without the per-request JSON log the session/agent/reset
@@ -91,7 +91,7 @@ at a time**. Two consequences, both honest limits rather than defects:
   ceiling** on this tier. Its 25-tool default set (≈14,077 tokens) fits
   comfortably.
 
-## 4. Why a real hermes session fails — the finding this run exists for
+## 4. Why a real hermes session fails: the finding this run exists for
 
 Not the failure predicted. The final review ranked "hermes may not echo
 assistant messages verbatim" as the top silent risk. That is **not** what
@@ -100,7 +100,7 @@ happened. What happened is simpler and was predicted by nobody:
 **hermes retried a byte-identical request, and the adapter classified the
 retry as a history rewrite.**
 
-Both captured requests hash to `493b2c9dbc94ceff` — identical, each
+Both captured requests hash to `493b2c9dbc94ceff`, identical, each
 carrying `[system, user]`. The mechanism:
 
 1. Request 1 succeeds. `record_generation` appends the assistant turn, so
@@ -108,14 +108,14 @@ carrying `[system, user]`. The mechanism:
 2. hermes retries the same turn, sending `[system, user]` again.
 3. `_is_extension` sees a **shorter** list, correctly concludes it is not
    an extension, and classifies it a rewrite.
-4. The reset creates a fresh agent — and on this tier (§3) a second agent
+4. The reset creates a fresh agent, and on this tier (§3) a second agent
    cannot be placed beside the first. **409.**
 
 Every subsequent turn repeats it: the adapter log shows `reset: true` with
 a new agent on each attempt and a constant `delta_bytes: 54952`, i.e. a
 full re-render every turn. Agents accumulated to `a7`.
 
-The classification is not wrong in isolation — a shorter list genuinely is
+The classification is not wrong in isolation, a shorter list genuinely is
 not an extension, and Task 3's reviews were right to demand a reset there.
 The gap is that **an ordinary client retry is indistinguishable from a
 truncation** once the adapter has appended its own assistant turn to the
@@ -123,9 +123,9 @@ tracked history. The retry case was never considered, by me or by any
 reviewer, and no fake produced it because fakes echo.
 
 **This is a design question, not a bug to patch blind.** The obvious
-treatment — recognising that the incoming list is a prefix of the tracked
+treatment. Recognising that the incoming list is a prefix of the tracked
 list differing only by the assistant turn we ourselves appended, and
-re-serving that turn rather than resetting — is plausible but needs its own
+re-serving that turn rather than resetting, is plausible but needs its own
 spec amendment and its own tests. It also interacts with idempotency: a
 retry may or may not want the previous answer replayed.
 
@@ -146,9 +146,9 @@ retry may or may not want the previous answer replayed.
 
 ## 6. Artifacts
 
-- `2026-08-31-openai-adapter-acceptance-adapter.log` — the adapter's
+- `2026-08-31-openai-adapter-acceptance-adapter.log`: the adapter's
   structured per-request log, showing the session/agent/reset pattern.
-- `captures/2026-08-31-openai-adapter-acceptance-hermes-capture.jsonl` — every
+- `captures/2026-08-31-openai-adapter-acceptance-hermes-capture.jsonl`. Every
   request and response between hermes and the adapter, captured by a
   throwaway proxy, including the two identical requests. It lives under
   `captures/` rather than beside this document because it is an OpenAI wire
@@ -158,7 +158,7 @@ retry may or may not want the previous answer replayed.
 
 ---
 
-# Addendum: the measurement arc — **PASS**
+# Addendum: the measurement arc: **PASS**
 
 Recorded 2026-08-31, after the fixes the PARTIAL verdict above motivated.
 Master `b1849c8`. Same task every run, driven by a real hermes session under
@@ -168,7 +168,7 @@ an isolated `HERMES_HOME`, tools **actually executing** (no `--safe-mode`).
 
 **Streaming was not optional.** §8 deferred it because "the captured hermes
 requests carry no `stream` key". That reasoning was sourced from
-`request_dump_*.json` files — which hermes writes **only when a call fails**.
+`request_dump_*.json` files, which hermes writes **only when a call fails**.
 Error dumps describe how a system fails, never how it normally behaves.
 Captured live, every request carries `stream: true` with
 `stream_options: {"include_usage": true}`; without SSE the client reports
@@ -179,7 +179,7 @@ never begins.
 review, each silent.** The adapter emits `content: null` alongside
 `tool_calls` (correct OpenAI) while hermes echoes `''`; two different
 malformed `arguments` compared equal; and hermes **reorders argument keys**
-on echo. Every one caused a reset on every turn — and because the task still
+on echo. Every one caused a reset on every turn, and because the task still
 completed correctly each time, nothing looked wrong. The adapter's entire
 economic justification was producing nothing, invisibly.
 
@@ -189,7 +189,7 @@ economic justification was producing nothing, invisibly.
 |---|---|---|---|---|---|---|
 | 1 | streaming only | 4 | 3 | 4 | 5893, 6293, 6388, 6607 | **−1,609** |
 | 2 | + `content` null/'' | 3 | 1 | 2 | 5891, 6236, 54 | +5,492 |
-| 3 | + arguments identity | 4 | 1 | 2 | 5889, 6234, 1670, 54 | — |
+| 3 | + arguments identity | 4 | 1 | 2 | 5889, 6234, 1670, 54 |: |
 | 4 | + order-insensitive | 4 | **0** | **1** | 5895, **32, 212, 54** | **+17,387** |
 
 **The prefill-once property holds end to end with the real client.** Run 4 is
@@ -202,7 +202,7 @@ listed them, and reported accurately.
 
 ## The pre-registered question, answered
 
-"A poor parse rate is a finding, not a failure" — the question was
+"A poor parse rate is a finding, not a failure". The question was
 **unanswered** in the PARTIAL run above. It is now answered, though modestly:
 across the measurement arc every tool call the untrained
 `qwen36-reap48-ours` produced was well-formed and correctly targeted, and no
@@ -219,7 +219,7 @@ turn is **re-rendered**, and the append path never re-renders it while the
 reset path re-renders from the client's current messages. The final review
 built an instrument comparing identity against rendered bytes, could not
 construct a counterexample, and confirmed by execution that the reordered
-turn is never rendered — the append delta is 104 bytes containing no
+turn is never rendered. The append delta is 104 bytes containing no
 `<function=` at all.
 
 ## Still carried

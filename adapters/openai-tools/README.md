@@ -7,14 +7,14 @@ local model served by the **bloomery** daemon.
 ## What it does
 
 - Renders the model's own chat template (`ChatTemplate`) so the model sees
-  exactly the prompt bytes it was trained on — never a hand-written
+  exactly the prompt bytes it was trained on, never a hand-written
   approximation of ChatML.
 - Sends only the NEW turns on every request after the first (`Session`,
   differential rendering against the daemon's append-only KV cache), so the
   `<tools>` schema preamble and prior history are prefilled once per
   session, not resent every turn.
 - Parses the model's trained `<tool_call>` XML format back into OpenAI
-  `tool_calls` (`toolcall.py`'s strict left-to-right scanner) — anything
+  `tool_calls` (`toolcall.py`'s strict left-to-right scanner). Anything
   that does not parse cleanly is returned as plain `content`, never
   fabricated into a fake call.
 - Maps bloomery's own typed refusals (oversized prompt, residency refused,
@@ -37,7 +37,7 @@ local model served by the **bloomery** daemon.
   `<tools>` re-render on their next turn.
 - **No fabrication, ever.** If the model's output does not parse as a
   complete, well-formed tool call, it comes back as `content` with
-  `finish_reason: "stop"` — never as a synthesized `tool_calls` entry.
+  `finish_reason: "stop"`, never as a synthesized `tool_calls` entry.
   Guessing here would reproduce the exact silent-failure class the rest of
   this project (and bloomery itself) exists to refuse.
 
@@ -51,14 +51,14 @@ python3 -m openai_tools.server adapters/openai-tools/config.json
 
 This starts a `ThreadingHTTPServer` exposing:
 
-- `GET /v1/models` — lists the one configured model.
-- `POST /v1/chat/completions` — the main entry point.
+- `GET /v1/models`, lists the one configured model.
+- `POST /v1/chat/completions`: the main entry point.
 
 The bloomery client is constructed from `config["base_url"]` inside
 `main()`, but `server.build_server(config, client)` takes the client as a
 **parameter**, not something it constructs internally. That is what lets
-the entire request/response loop — template rendering, KV-append
-bookkeeping, tool-call parsing, error mapping — be exercised in
+the entire request/response loop (template rendering, KV-append
+bookkeeping, tool-call parsing, error mapping) be exercised in
 `tests/test_server.py` against a scripted stub with no daemon and no GPU.
 
 ## Config keys (`config.json`)
@@ -77,7 +77,7 @@ bookkeeping, tool-call parsing, error mapping — be exercised in
 
 ## Re-extracting the template, and why it is committed
 
-The adapter never imports the `gguf` package at runtime — it reads a
+The adapter never imports the `gguf` package at runtime. It reads a
 plain committed file, `templates/qwen36-reap48-ours.jinja`, pinned by its
 own SHA-256 (`ChatTemplate.sha256`). This is deliberate: the template *is*
 the contract for what bytes the model was trained to see, and pinning it
@@ -103,7 +103,7 @@ commit the new `.jinja` file alongside the config change.
 
 `Session(..., keep_reasoning=True)` (the default) reuses the resident KV
 cache across turns by sending only the new tail on every request after the
-first — the entire point of this adapter's session bookkeeping. Setting it
+first: the entire point of this adapter's session bookkeeping. Setting it
 `false` makes every turn a full re-render (system + tools + entire history
 resent every time), which foregoes that KV-reuse benefit entirely but never
 diverges from a byte-exact re-render of history.
@@ -114,8 +114,7 @@ prior reasoning stays in context verbatim, appended rather than
 re-derived) relative to `keep_reasoning=False`'s from-scratch re-render.
 Whether that helps, hurts, or is neutral for answer quality on any given
 task has not been benchmarked as part of this adapter; only the mechanical
-claim — that the two modes send byte-consistent, template-derived prompts
-— is covered by tests. Treat `keep_reasoning_in_history` as a performance
+claim (that the two modes send byte-consistent, template-derived prompts) is covered by tests. Treat `keep_reasoning_in_history` as a performance
 knob with an open quality question (spec's §6 amendment), not a
 tuned default.
 
@@ -126,7 +125,7 @@ explicit `X-Session-Id` request header, the adapter keys sessions by a
 SHA-256 hash of the first user message (`_first_user_message_key` in
 `server.py`). This means: two genuinely different clients that happen to
 open a conversation with the *identical* first user message will collide
-onto the same bloomery agent and share its session state — clients that
+onto the same bloomery agent and share its session state, clients that
 care about isolation (multi-tenant use, automated test suites issuing the
 same canned first prompt, etc.) **must** send their own `X-Session-Id`
 header. There is no cryptographic or client-identity component to the
@@ -139,7 +138,7 @@ the idle reap every conversation left its agent resident for the adapter
 process's lifetime. The 25-tool hermes dogfood
 ([evidence](../../docs/superpowers/evidence/2026-09-07-hermes-dogfood-25-tools.md))
 turned that into a user-facing failure: this tier holds two 30k-token
-windows, so the third conversation was refused with 409 — bloomery's
+windows, so the third conversation was refused with 409, bloomery's
 `plan_residency` evicts only agents of strictly lower priority (every adapter
 agent shares `default_priority`), and its equal-priority time-share admits a
 requester only after *it* has waited a full quantum, which a one-shot client
@@ -150,7 +149,7 @@ still fill the tier, and the daemon's 409 then reaches it unchanged.
 ## Idle reaping
 
 Two paths, both `openai_tools/reap.py`, both `DELETE /agents/{id}` (which
-frees the agent's window — `suspend` only parks an agent and keeps its
+frees the agent's window: `suspend` only parks an agent and keeps its
 budget, which is why suspend never fixed the leak):
 
 - **Idle TTL.** A daemon thread started by `main()` sweeps every
@@ -170,7 +169,7 @@ session that comes back simply gets a fresh agent and a full re-render of
 its history (the ordinary first-turn path), at the cost of one preamble
 prefill. A failed `DELETE` is logged (`delete_failed`) and the session kept
 for the next sweep; a 404 means the agent is already gone and the session
-is dropped. `build_server` never starts the sweeper — only `main()` does —
+is dropped. `build_server` never starts the sweeper (only `main()` does),
 so tests drive `reap.reap_idle` with an injected clock and no thread.
 
 ## Diagnostics
@@ -186,7 +185,7 @@ delete that failed writes `{"event": "delete_failed", ...}`; a residency
 reap is therefore visible as a `bloomery_error_409` line, a `session_reaped`
 line, then the retried turn's `ok`. An unexpected (non-`BloomeryError`) exception
 also logs its full traceback to stderr before the client gets the generic
-500 — the response body never carries internal detail, but the process's
+500: the response body never carries internal detail, but the process's
 own stderr always does. `log_message` (raw per-connection HTTP access
 logging) stays quiet by design; this is a separate, purpose-built request
 log.

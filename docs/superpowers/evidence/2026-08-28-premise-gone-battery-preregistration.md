@@ -1,12 +1,12 @@
-# `premise-gone-battery-v1` — pre-registration (committed BEFORE any real run)
+# `premise-gone-battery-v1`: pre-registration (committed BEFORE any real run)
 
 **Date:** 2026-08-28. **Branch:** `premise-gone-battery` in the main
-checkout, base `master` at `e3cad71` (the refalsify default-flip commit —
+checkout, base `master` at `e3cad71` (the refalsify default-flip commit,
 inert here, both arms set the flag explicitly). **Spec:**
-`docs/superpowers/specs/2026-08-28-premise-gone-battery-v1-design.md` —
-binding; §5's formulas are cited below, never restated with different
+`docs/superpowers/specs/2026-08-28-premise-gone-battery-v1-design.md`.
+Binding; §5's formulas are cited below, never restated with different
 words. **Amendment protocol:** identical to `docs/gates.md`'s house rule
-and the battery-v2 prereg's — all values below are frozen; changes
+and the battery-v2 prereg's, all values below are frozen; changes
 require a recorded protocol amendment executed before re-running, never
 tune-and-rerun (§"Amendment rule" below).
 
@@ -20,9 +20,9 @@ after-the-fact review; none is tunable after this lock.
 ## 1. Claim discipline (spec §1, quoted verbatim)
 
 > If the gates pass, the licensed sentence is: *"On exact repeats whose
-> stored verification already passes at task start — cited bytes unchanged,
+> stored verification already passes at task start, cited bytes unchanged,
 > the verification contract moved on (this corpus's moved-on-test
-> construction) — refalsify-on takes the premise_gone lane totally: every
+> construction), refalsify-on takes the premise_gone lane totally: every
 > matched retrieval stamps `premise_gone` and stays silent, and no episode
 > is contradicted or store-mutated, while refalsify-off injects the moot
 > lesson on every matched retrieval (lens: this battery)."* Nothing else.
@@ -31,17 +31,17 @@ Named absences (spec §1): the staleness-benefit story (A1 tokens is an
 advisory observation, never a claim); the design-§5 passive-poisoning
 weight (A2 aftermath is observed feed-forward for that future
 registration, never gated, never quoted as capability); any probe-cost
-number; the already-fixed-start flavor (spec §0 — unreachable under
+number; the already-fixed-start flavor (spec §0, unreachable under
 exact retrieval); novel tasks/models/shapes/accuracy; every
-cross-battery comparison (memory-battery-v1 AND refalsify-battery-v2 —
+cross-battery comparison (memory-battery-v1 AND refalsify-battery-v2,
 different corpus, different night; incomparable, not wrong).
 
 ## 2. Lens
 
 | pin | value | source |
 |---|---|---|
-| **daemon commit** (crates/ tip) | `e3cad71` — verified at lock: `git diff e3cad71 HEAD -- crates/` is EMPTY on this branch (all 6 branch commits are tools/+docs). Living-document note: re-verify immediately before each boot; non-empty → STOP and record the successor. | ledger R1; verified this session |
-| **binary served** | `/home/brice/workspace/bloomery/target/debug/bloomery-daemon` — the main checkout's featured vulkan debug build, rebuilt this session after `e3cad71` (mtime 2026-08-28 22:00), i.e. a build of exactly the pinned crates tip. `readlink /proc/<pid>/exe` re-confirmed after each boot and before each kill; pid via `ps`, never `$!`. | box rule + battery-v2 prereg §2 precedent |
+| **daemon commit** (crates/ tip) | `e3cad71`: verified at lock: `git diff e3cad71 HEAD -- crates/` is EMPTY on this branch (all 6 branch commits are tools/+docs). Living-document note: re-verify immediately before each boot; non-empty → STOP and record the successor. | ledger R1; verified this session |
+| **binary served** | `/home/brice/workspace/bloomery/target/debug/bloomery-daemon`: the main checkout's featured vulkan debug build, rebuilt this session after `e3cad71` (mtime 2026-08-28 22:00), i.e. a build of exactly the pinned crates tip. `readlink /proc/<pid>/exe` re-confirmed after each boot and before each kill; pid via `ps`, never `$!`. | box rule + battery-v2 prereg §2 precedent |
 | **served-model digest** | `7020b925c07c5a3808e1155700ca707598cb4f6d6089bb6daff4147b4d6b00bd` | battery-v1/v2 preregs; asserted per phase by the driver (`--expected-digest`) and FATAL-checked again inside `recompute_pg`'s CLI |
 | model identity (API name) | `qwen36-reap48-flywheel5` (boot-config stanza key; exact-key lookup) | `driver.py` `MODEL` |
 | envelope | `v4` | boot configs below |
@@ -88,7 +88,7 @@ probe_timeout_secs = 1800
 `arm-r/data`.
 
 Note the explicit `refalsify = false` in M′ is now an OPT-OUT (the
-default flipped at `e3cad71`) — explicitly written in both configs
+default flipped at `e3cad71`), explicitly written in both configs
 precisely so the flip cannot silently change an arm's semantics.
 
 ## 3. Corpus (bytes; re-asserted at this lock)
@@ -96,26 +96,26 @@ precisely so the flip cannot silently change an arm's semantics.
 The corpus is bytes (§2's freeze row); nothing in
 `tools/memory_battery/corpus-pg-v1/` is ever edited in place. The real
 run consumes a scratch-copy manifest (`dry_manifest.py --real`) whose
-grants point INTO the scratch tree — a live daemon's write grant never
+grants point INTO the scratch tree, a live daemon's write grant never
 points at the tracked tree (battery-v2's hard-won rule; the p2 trees are
 scratch-copied by the same mechanism, Task 5).
 
 ## 4. Endpoints, computed exactly as spec §5 states them
 
 By reference (spec §5, binding): gates **PG1** (premise_gone totality,
-R — with the diagnosed spellings: `skipped_ungranted` → INVALID,
+R, with the diagnosed spellings: `skipped_ungranted` → INVALID,
 `premise_held` → ALARM, `inconclusive` → infra-dropped into H3),
-**PG2** (store preservation, R — zero `MemoryContradicted` + every
-episode `verified`), **PG3** (moot-lesson injection, M′ — ≥ floor, zero
+**PG2** (store preservation, R, zero `MemoryContradicted` + every
+episode `verified`), **PG3** (moot-lesson injection, M′, ≥ floor, zero
 oversize Degraded), the **floor** (both arms ≥ 25 else UNMEASURABLE,
 never FAIL), the **stamp audit** (retired spellings nowhere; M′ and
 R-p1 all `None`); hygiene **H2** (p1 token equivalence, 2×SE_boot,
 gating: violation → run INVALID), **H3** (infra ≤ 5%/arm incl.
 inconclusive-dropped tasks), **H4** (advisory rates + cross-arm matched
-gap); advisory **A1** (p2 token medians + band — the
+gap); advisory **A1** (p2 token medians + band: the
 staleness-benefit story's territory, no sentence), **A2** (M′
 aftermath: §5 poisonings, p2 re-mints, terminal statuses, final store
-statuses — §5-registration feed-forward, no sentence), **A3** (wall,
+statuses: §5-registration feed-forward, no sentence), **A3** (wall,
 battery-v2's honesty rule verbatim: a p1 control gap of the same order
 as p2's means box noise and the honest report says so).
 
@@ -172,7 +172,7 @@ killed; suite 151 OK).
 ## 7. DRY-numbers prohibition
 
 The Task-7 shakedown's numbers (3 tasks/arm, labels `M_PRIME_DRY`/
-`R_DRY`) are instrument shakedown only — none may be quoted in the
+`R_DRY`) are instrument shakedown only, none may be quoted in the
 findings; the capture-once rule does not attach to them.
 
 ## Amendment rule
@@ -180,6 +180,6 @@ findings; the capture-once rule does not attach to them.
 All values in this document are frozen at commit time. Any change
 requires a recorded protocol amendment (a dated section added here
 naming what changed and why) executed BEFORE re-running any affected
-step — never tune-and-rerun. The corpus is bytes (§3 above, re-asserted
+step, never tune-and-rerun. The corpus is bytes (§3 above, re-asserted
 at this lock); nothing in `tools/memory_battery/corpus-pg-v1/` is ever
 edited in place.

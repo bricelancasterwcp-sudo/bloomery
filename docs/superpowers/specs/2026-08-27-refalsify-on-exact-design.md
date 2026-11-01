@@ -1,57 +1,57 @@
-# Refalsify-on-exact — a task-scoped verification probe before injection
+# Refalsify-on-exact: a task-scoped verification probe before injection
 
 **Date:** 2026-08-27
 **Status:** Approved in conversation (rulings: execution locus = in-task,
 under the incoming task's grant, at the worker's retrieval moment, through
-the task loop's own `exec_run` — never daemon-spontaneous, no operator
-sweep in this slice; ungranted = inject anyway, stamped `skipped_ungranted`
-— refalsification upgrades where possible, never shrinks reach below the
+the task loop's own `exec_run`, never daemon-spontaneous, no operator
+sweep in this slice; ungranted = inject anyway, stamped `skipped_ungranted`,
+refalsification upgrades where possible, never shrinks reach below the
 battery-passing behavior; outcomes = clean nonzero exit → `mark_contradicted`
 citing the incoming task + silence, exit 0 → inject, no record-schema
 change; activation = `[memory] refalsify`, default `false`. Judgment calls
-presented and accepted with the design: an inconclusive probe — timeout or
-spawn failure — injects and stamps `inconclusive`, never contradicts; a
+presented and accepted with the design: an inconclusive probe, timeout or
+spawn failure, injects and stamps `inconclusive`, never contradicts; a
 demoted/read-only task never probes and takes the ungranted-class skip.)
 **Lineage:** the memory organ
 (`docs/superpowers/specs/2026-08-26-memory-organ-design.md`), whose §5
 declared falsification passive-only, named crucible's active
 re-falsification "a possible later, operator-triggered slice," and banned
-spontaneous daemon-initiated execution — this slice IS that later slice,
+spontaneous daemon-initiated execution. This slice IS that later slice,
 with the execution boundary drawn at a task's granted capability instead of
 an operator trigger. Crucible S3's falsification scheduler
 (`crucible/docs/superpowers/specs/2026-08-24-crucible-s3-memory-design.md`
 §4): `refalsify(item)` re-runs the lesson's cited verification; pass keeps
-the item, fail removes it from retrieval permanently — the shape ported
+the item, fail removes it from retrieval permanently: the shape ported
 here, minus the sleep cadence bloomery does not have. Crucible GATE-B
 (verdict **GO_B**: store-only exact-class retrieval lifts second exposures
 0.780 → 0.905 on a 14B; the exact-only probe carries Δ_second +15.0 pp)
 and GATE-C (verdict **NO-GO**: symptom-conditioned non-exact transfer fails
-for want of material) — together the standing prohibition this slice
+for want of material), together the standing prohibition this slice
 honors: THE MATCH IS NEVER LOOSENED; refalsification layers trust on the
 exact path, never reach beyond it. The memory battery
 (`docs/superpowers/evidence/2026-08-27-memory-battery-findings.md`): GATE
 PASS under inject-without-refalsify (both arms 100/100, repeat cost
-121.5 → 111.5 tokens); its §5 — the two contradictions fired honestly, but
-only AFTER a receiving task had already failed — is the wasted run this
-slice moves detection ahead of; its §4 advisory — injected repeats ~7%
-SLOWER by wall (prefill > decode at this size) — is the cost story §6
+121.5 → 111.5 tokens); its §5 (the two contradictions fired honestly, but
+only AFTER a receiving task had already failed) is the wasted run this
+slice moves detection ahead of; its §4 advisory, injected repeats ~7%
+SLOWER by wall (prefill > decode at this size), is the cost story §6
 below must extend honestly.
 
 ## 1. What this builds and why
 
 Today the organ trusts an exact match completely: goal hash and cited-file
 fingerprints line up, the episode injects. The fingerprint gate catches
-workspace drift on cited bytes — but nothing catches an episode whose
+workspace drift on cited bytes, but nothing catches an episode whose
 verification no longer holds for reasons the citation set cannot see:
 uncited dependencies, environment drift, an external service, a moved
 interpreter. Those episodes today inject stale guidance, and the organ
-learns the truth only passively — after the receiving task fails, which is
+learns the truth only passively, after the receiving task fails, which is
 exactly one wasted task per stale episode (battery findings §5 measured
 this path firing live).
 
 This slice adds crucible's missing half: at retrieval, before injection,
 the worker re-runs the episode's own stored verification command
-(`EpisodeRecord::run_evidence.argv` — already in every record, no schema
+(`EpisodeRecord::run_evidence.argv`, already in every record, no schema
 change) under the incoming task's granted capability. An episode that
 still proves itself injects; one that cleanly fails is contradicted on the
 spot and the task proceeds memory-silent, exactly as a stranger would.
@@ -60,7 +60,7 @@ spot and the task proceeds memory-silent, exactly as a stranger would.
 where and when specified, the four outcomes stamp and act as specified,
 and flag-off behavior is indistinguishable from today's. It claims nothing
 about task success rates, wall-clock economics, or whether earlier
-contradiction detection pays for its execution cost — that is a future
+contradiction detection pays for its execution cost. That is a future
 battery slice with its own pre-registration. No number from this slice's
 tests may appear in a capability sentence. GATE-C's standing prohibition
 is untouched: no non-exact retrieval mode exists, before or after this
@@ -73,19 +73,19 @@ inject → run → mint-or-contradict), after the two-stage exact gate passes
 and before rendering or stamping, with `[memory] refalsify = true`:
 
 1. **Coverage pre-check.** The episode's `run_evidence.argv` is checked
-   against the incoming task's `Grant` command prefixes — the same
-   coverage rule `exec_run` enforces — BEFORE any execution attempt. The
+   against the incoming task's `Grant` command prefixes: the same
+   coverage rule `exec_run` enforces, BEFORE any execution attempt. The
    pre-check exists because an `exec_run` grant refusal is an
    `Observation` shaped like a failed run, and a refusal must never be
-   mistakable for evidence. A task whose grant does not cover the argv —
+   mistakable for evidence. A task whose grant does not cover the argv,
    and every demoted/read-only task (`mutating_verbs == false`), which
    may not have commands executed at its moment regardless of what its
-   grant says — skips the probe entirely: the episode injects as today,
+   grant says, skips the probe entirely: the episode injects as today,
    and the stamp says `skipped_ungranted`. The demotion boundary outranks
    refalsification.
 2. **Execution.** A covered probe runs through the task loop's own
-   `exec_run`, with the incoming task's `Grant`, `cwd`, and `ExecBounds`
-   — the identical executor, capability check, output cap, and
+   `exec_run`, with the incoming task's `Grant`, `cwd`, and `ExecBounds`:
+   the identical executor, capability check, output cap, and
    `run_timeout_secs` a task's own `run` verb gets. One command, bounded;
    the worst wall cost is one capped execution.
 3. **Verdicts.**
@@ -94,14 +94,14 @@ and before rendering or stamping, with `[memory] refalsify = true`:
      and the stamp is the durable evidence (YAGNI ruled against a
      crucible-style `last_verified_at`).
    - **Clean nonzero exit** → `MemoryStore::mark_contradicted(episode_id,
-     incoming_task_id)` — the same method, status transition, and
-     `Event::MemoryContradicted` row passive contradiction already uses —
+     incoming_task_id)` (the same method, status transition, and
+     `Event::MemoryContradicted` row passive contradiction already uses),
      and NO injection: the task runs memory-silent, byte-identical to a
      stranger's prompt. Stamp `failed`. A command that fails on a
      workspace whose cited bytes are fingerprint-identical to the mint is
      real evidence, and the store's honesty story keeps it.
      **(Amended 2026-08-28: true only for a verification that also
-     passes on the PRE-state — see the domain-of-validity erratum
+     passes on the PRE-state. See the domain-of-validity erratum
      appended to §6. For a patch-class episode this failure is entailed
      by the exact match itself and refutes a true lesson.)**
      **Superseded 2026-08-28 by refalsify v2**
@@ -109,7 +109,7 @@ and before rendering or stamping, with `[memory] refalsify = true`:
      commit `7a930d4`): the clean-outcome verdicts invert to
      premise_held/premise_gone and no probe contradicts.
    - **Timeout or spawn failure** → inject, stamp `inconclusive`. Not
-     clean evidence the lesson is wrong — environmental, not semantic —
+     clean evidence the lesson is wrong (environmental, not semantic),
      and the organ's own law ("total failure must be indistinguishable
      from memory-off; never a failed task") forbids the probe's
      infrastructure from costing a task its injection. Only a genuine
@@ -124,15 +124,15 @@ and before rendering or stamping, with `[memory] refalsify = true`:
 The match semantics, single-injection cap, retrieval ordering, mint bar,
 passive-contradiction path, and rendered memory block are all untouched.
 A probe never appears in the transcript, never renders into any prompt,
-and never journals a `TaskStep` — it is not a model action.
+and never journals a `TaskStep`. It is not a model action.
 
 **Amended 2026-08-27 (post-review):** the implemented order is retrieve →
 render → oversize gate → probe → stamp, which supersedes this section's
 literal "before rendering or stamping": the probe runs AFTER the rendered
 block has cleared `MEMORY_BLOCK_MAX_BYTES`, so an episode the oversize rule
 has already turned silent is never executed. The rationale is the oversize
-rule's own — a block this task was never going to carry must not cost a
-subprocess to learn what the cheap check already knew — and the oversize
+rule's own (a block this task was never going to carry must not cost a
+subprocess to learn what the cheap check already knew), and the oversize
 skip keeps stamping `refalsify: None`, which is the truth of it: nothing
 was probed. What the four verdicts actually depend on is unchanged and
 still holds: the probe precedes the stamp and precedes every injection.
@@ -151,9 +151,9 @@ read-outcomes-only.
 ## 4. The ledger
 
 `Event::MemoryStamp` gains one additive field:
-`refalsify: Option<String>` — `None` when the flag is off, when memory is
+`refalsify: Option<String>`: `None` when the flag is off, when memory is
 off, or when nothing was retrieved (absent-key serde default, so every
-existing journal row replays unchanged — the house additive pattern);
+existing journal row replays unchanged: the house additive pattern);
 `Some("passed" | "failed" | "skipped_ungranted" | "inconclusive")` when a
 retrieval hit was probed or skipped. A `failed` stamp is always
 accompanied by the ordinary `Event::MemoryContradicted` row citing the
@@ -167,7 +167,7 @@ exactly one exception. An operator's `DELETE /memory/{id}` can land
 between this task's retrieval and the mark, leaving `mark_contradicted`
 nothing to mark (`Ok(false)`): the stamp still says `failed` and the task
 still runs memory-silent, but no `Event::MemoryContradicted` row is
-journaled — there is no episode left to accuse, and a row for a status
+journaled. There is no episode left to accuse, and a row for a status
 transition that never happened would fabricate store history. The
 silence stands regardless (§7); the probe's evidence is not undone by the
 episode's disappearance.
@@ -175,7 +175,7 @@ episode's disappearance.
 ## 5. Activation
 
 `[memory]` gains `refalsify` (bool, default `false`), read only when
-`enabled` is true. Flag-off behavior is bit-identical to today — the
+`enabled` is true. Flag-off behavior is bit-identical to today. The
 battery's GATE PASS was measured under inject-without-refalsify, and an
 enabled organ keeps that exact behavior until the operator opts in. Every
 frozen instrument runs memory-off and is doubly untouched. A future
@@ -186,9 +186,9 @@ lens; this spec deliberately leaves that instrument undesigned.
 now `true`. The refalsify-battery-v2 findings
 (`docs/superpowers/evidence/2026-08-28-refalsify-battery-v2-findings.md`)
 measured refalsify-on (v2 premise-verdict semantics) preserving the
-repeat benefit exactly — G1 injected-token diff median 0.0 against a
+repeat benefit exactly: G1 injected-token diff median 0.0 against a
 derived band of 5.325, G2 injection 50=50, stamp audit 100%
-`premise_held` — with probe cost unresolvable from box noise, and Brice
+`premise_held`, with probe cost unresolvable from box noise, and Brice
 ruled the flip on those findings. `refalsify = false` remains the
 explicit opt-out; the flag is still read only under an enabled organ, so
 every frozen instrument (memory-off) is untouched by the flip. The
@@ -200,39 +200,39 @@ Battery findings §4: injected repeats are already ~7% slower by wall
 (prefill > decode at this size); the token saving, not a wall saving, is
 the measured benefit. Refalsify-on adds one bounded command execution to
 every probed retrieval on top of that. This spec makes no argument that
-the trade is favorable — it makes the trade available, gated off, and
+the trade is favorable. It makes the trade available, gated off, and
 measurable later. The one cost asymmetry worth naming: passive
 contradiction spends a full failed task to learn what a probe learns in
 one command.
 
-**Amended 2026-08-27 (post-review):** the cost is not only wall-clock —
-the probe also has a **side-effect surface**, and it must be named. A
+**Amended 2026-08-27 (post-review):** the cost is not only wall-clock.
+The probe also has a **side-effect surface**, and it must be named. A
 probe executes the episode's stored command in the INCOMING task's `cwd`
 with that task's write grants, BEFORE the task takes its first step, so a
-stored verification like `make clean && make` — or any test run that
-writes artifacts, migrates a database, or touches the tree — materially
+stored verification like `make clean && make` (or any test run that
+writes artifacts, migrates a database, or touches the tree), materially
 alters the world the receiving task then starts in. This is inherent to
 task-scoped probing rather than a defect of this implementation: §2.2
 authorizes exactly the executor, grant, cwd and bounds the task's own
 `run` verb would get, and a stored verification is only evidence if it is
 the real command, run for real. The arc's canary test demonstrates it
-directly — the pass-path fixture detects its own probe by the file the
+directly: the pass-path fixture detects its own probe by the file the
 stored command writes into the sandbox, and the flag-off and skip tests
 prove the absence of that file when nothing ran. The honest statement for
 a future battery to weigh alongside tokens and wall time: refalsify-on
 exercises the task's own grants one command early, and is not
 side-effect-free.
 
-**Amended 2026-08-28 — DOMAIN-OF-VALIDITY ERRATUM (probe refutes
+**Amended 2026-08-28: DOMAIN-OF-VALIDITY ERRATUM (probe refutes
 patch-class episodes by construction).** Three shipped clauses entail,
 together, that an exact-repeat retrieval of a patch-class episode is
 contradicted with zero drift anywhere: (1) the exact gate matches cited
-fingerprints taken **pre-first-touch** (organ spec — the defective start
+fingerprints taken **pre-first-touch** (organ spec. The defective start
 state); (2) `run_evidence` is the **verifying run**, which the mint bar
 requires to pass only after the landed patches (a post-condition); (3)
 §2.3 turns any clean nonzero exit into `mark_contradicted` + silence.
 Re-running a post-condition on the matched pre-state fails whenever the
-episode's own premise holds — the probe's failure carries no information
+episode's own premise holds: the probe's failure carries no information
 and poisons a true lesson permanently. §2.3's "real evidence" sentence is
 true only for the invariant class: verifications that also passed (or
 would pass) on the pre-state, where a failure genuinely signals uncited
@@ -243,14 +243,14 @@ never surfaced it.
 Demonstrated live 2026-08-28 through the real seam (throwaway test,
 reverted; run recorded in the session ledger): minting task patches
 `a.py` to `x = 2`, verifying run `sh -c "grep -q 'x = 2' a.py"` passes,
-fixture resets `a.py` to its cited BEFORE bytes, **nothing else changes**
-— probe exits nonzero, stamp `failed`, store row `contradicted`, zero
+fixture resets `a.py` to its cited BEFORE bytes, **nothing else changes**,
+probe exits nonzero, stamp `failed`, store row `contradicted`, zero
 injections. `test result: ok` on the entailment's three asserts, 0.08s.
 
 Consequences: `[memory] refalsify = true` must not be enabled for
 patch-class workloads (it ships default-off; no fleet exposure existed).
 The queued "refalsify-on battery slice" over the memory-battery-v1 corpus
-is CANCELLED as designed — its corpus is 100% patch-class with byte-reset
+is CANCELLED as designed. Its corpus is 100% patch-class with byte-reset
 repeats, so every number was decided by this entailment before any boot
 (the battery would have measured injection 50/50 → 0/50 and a poisoned
 store at one subprocess per retrieval). §6's open question ("whether
@@ -260,7 +260,7 @@ episode classes; the v2 design is a separate spec.
 
 **Closed 2026-08-28 by refalsify v2**
 (`docs/superpowers/specs/2026-08-28-refalsify-v2-class-aware-design.md` §3,
-commit `7a930d4`): this erratum is v2's own stated justification — not
+commit `7a930d4`): this erratum is v2's own stated justification, not
 superseded, since the diagnosis above (a drift-free exact repeat poisons
 its own true lesson) remains true. What closes it is that no probe
 contradicts under v2: the clean-outcome verdicts invert to
@@ -273,10 +273,10 @@ describes can no longer happen.
   them today (the organ's failure is never the task's failure).
 - A store append failure while marking contradicted follows the store's
   existing failure handling; the injection decision (silence) stands
-  regardless — the task must not receive guidance the probe just refuted,
+  regardless: the task must not receive guidance the probe just refuted,
   even if recording that refutation failed.
 - The probe honors `ExecBounds` verbatim; there is no refalsify-specific
-  timeout knob (YAGNI — the task's own bounds are the task's tolerance).
+  timeout knob (YAGNI. The task's own bounds are the task's tolerance).
 
 ## 8. Testing
 
@@ -284,27 +284,27 @@ All GPU-free: real store, real journal, real subprocess probes via
 trivially-true/false argv (`["true"]` / `["false"]` or equivalent), the
 existing memory task-test fixtures:
 
-1. **Flag-off identity** — `refalsify = false` (and absent): behavior and
+1. **Flag-off identity**: `refalsify = false` (and absent): behavior and
    stamps byte-identical to today; existing memory suites pass untouched.
-2. **Pass path** — granted `["true"]` probe: injected, stamp `passed`,
+2. **Pass path**: granted `["true"]` probe: injected, stamp `passed`,
    store untouched.
-3. **Fail path** — granted `["false"]` probe: NOT injected (prompt
+3. **Fail path**: granted `["false"]` probe: NOT injected (prompt
    byte-identical to memory-silent), episode `contradicted` with
    `contradicted_by` = the incoming task's id, `Event::MemoryContradicted`
    journaled, stamp `failed`; a subsequent identical task retrieves
    silence.
-4. **Ungranted skip** — argv outside the task's grant: injected, stamp
+4. **Ungranted skip**: argv outside the task's grant: injected, stamp
    `skipped_ungranted`, no execution attempted (asserted via the probe
    seam, not inference).
-5. **Demoted skip** — `mutating_verbs == false` with a covering grant:
+5. **Demoted skip**: `mutating_verbs == false` with a covering grant:
    same as 4.
-6. **Inconclusive** — a probe that exceeds `run_timeout_secs` (e.g.
+6. **Inconclusive**: a probe that exceeds `run_timeout_secs` (e.g.
    `["sleep", "..."]` with a 1s bound): injected, stamp `inconclusive`,
    episode stays `verified`.
-7. **Stamp compat** — journal rows without the field replay unchanged;
+7. **Stamp compat**: journal rows without the field replay unchanged;
    a stamped row round-trips.
-8. **Config parse** — `[memory] refalsify` parses; absent → false.
-9. **Mutation spot-checks** — the skip-vs-fail boundary (a swapped
+8. **Config parse**: `[memory] refalsify` parses; absent → false.
+9. **Mutation spot-checks**: the skip-vs-fail boundary (a swapped
    pre-check must fail test 4), the flag gate (ignoring the flag must
    fail test 1), and the contradiction citation (wrong task id must fail
    test 3).

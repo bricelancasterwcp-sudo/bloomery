@@ -1,8 +1,8 @@
-# Flywheel turn 2 — the battery: qwen3-14b-flywheel2 PASSES both legs
+# Flywheel turn 2: the battery: qwen3-14b-flywheel2 PASSES both legs
 
 **Date:** 2026-08-16 (G4 verdict ~20:50, G5 verdict ~21:15 local)
-**Status:** measured; the pre-registered decision applied — **SUCCESS on
-both legs. `mutating_verbs: true`, `done_trust: true`** — the first
+**Status:** measured; the pre-registered decision applied (**SUCCESS on
+both legs. `mutating_verbs: true`, `done_trust: true`**) the first
 model to earn the done-trust mark, and the first flywheel turn to train
 a *judgment* (when NOT to patch) rather than a mechanical habit.
 **Pre-registration:** `2026-08-16-flywheel2-preregistration.md`
@@ -11,7 +11,7 @@ rules on both gates.
 
 ## Verdicts
 
-**Leg 1 — G4 on `codec-tasks-v1`: 20/20. Wilson 95 [0.839, 1.0] —
+**Leg 1: G4 on `codec-tasks-v1`: 20/20. Wilson 95 [0.839, 1.0],
 non-provisional PASS.** The pre-registered over-refusal check: refusal
 training cost zero repair (flywheel1's 20/20 held exactly).
 
@@ -23,9 +23,9 @@ training cost zero repair (flywheel1's 20/20 held exactly).
  "detail":"applies_and_parses under bloomery-task-envelope-v3; codec from profile"}
 ```
 
-**Leg 2 — G5 on `codec-tasks-v2-mixed`: patch 10/10, refuse 10/10 —
+**Leg 2 (G5 on `codec-tasks-v2-mixed`: patch 10/10, refuse 10/10),
 both classes clear the ≥8/10 floor. `done_trust: true`.** Both Wilson
-[0.722, 1.0], both provisional — the pinned n=10 property (every
+[0.722, 1.0], both provisional: the pinned n=10 property (every
 possible pass at this n straddles 0.80; a decided pass needs n≥16 per
 class, a later gate-growth decision).
 
@@ -38,7 +38,7 @@ class, a later gate-growth decision).
 ```
 
 Recomputation from committed `CodecFixture` rows matches both verdicts
-(the G5 boot also re-ran the v1 probe: 20/20 again — 40/40 fixtures
+(the G5 boot also re-ran the v1 probe: 20/20 again: 40/40 fixtures
 landed across the whole boot).
 
 ## The trained judgment, visible in the anatomy
@@ -49,19 +49,19 @@ landed across the whole boot).
 | dominant failure | thrash, no `Done` (leg c) | patched-a-correct-file (leg a) ×3 | **none** |
 
 flywheel2's refusal anatomy is minimal and uniform: **read → honest
-`done`, 2 steps, every refuse fixture** — no patch verb emitted, every
+`done`, 2 steps, every refuse fixture**, no patch verb emitted, every
 file byte-unchanged (leg b), terminal `Done` (leg c). The exact
 behavior flywheel1 lacked (its 3 misses were all leg-(a) patches of
 correct files) is the behavior the turn-2 corpus trained, and it
 arrived without disturbing anything else:
 
-- G4 repair: 20/20 → 20/20 (no over-refusal — the kill risk this turn
+- G4 repair: 20/20 → 20/20 (no over-refusal: the kill risk this turn
   most plausibly carried).
 - G5 patch class: 10/10 (real defects on the differently-authored
-  mixed set still get patched — refusal did not become the cheap
+  mixed set still get patched. Refusal did not become the cheap
   answer).
 - Chat profile intact: the tuned model's own assay POST completed `ok`
-  and `/v1` chat (with thinking) is coherent — the catastrophic-
+  and `/v1` chat (with thinking) is coherent: the catastrophic-
   forgetting check.
 
 ## What produced it (full identity chain)
@@ -73,12 +73,12 @@ arrived without disturbing anything else:
   contamination guard **clean vs all 40 fixtures across BOTH gate
   sets**; corpus sha `d72fdb1c…` (fingerprint + report committed with
   the pre-registration at `832cc76`).
-- **Training:** QLoRA per the pre-registration, unamended — 854 steps /
+- **Training:** QLoRA per the pre-registration, unamended: 854 steps /
   70.3 min on the RTX 5080, train loss 0.01731, eval loss 0.000615.
   Env freeze at `~/flywheel2/pip-freeze.txt`.
 - **Artifacts:** adapter sha `a37724c16c5cfae6d088c2e68eb9ce3f0b1…`;
   merged via unsloth layerwise-dequant 16-bit path; converted and
-  quantized **Q4_K_M, 8.4 GB — full offload**; GGUF sha
+  quantized **Q4_K_M, 8.4 GB, full offload**; GGUF sha
   `9659b96cbf3b30c8d03da18d9179ddaf7b7e9fb85597f99de9c721140ab5e09d`
   (matches the daemon-reported digest in both gate journals).
 - **bloomery:** daemon at branch code (G5 instrument merged this
@@ -91,13 +91,13 @@ class, not just a skill gap: **measure dishonesty (G5 baselines) →
 derive the corrective corpus mechanically (refusal families) → train →
 the held-out mixed gate confirms honesty without capability loss.**
 A consumer-hardware 14B now both repairs real defects (G4) and
-truthfully declines fabricated ones (G5) — `done` claims from this
+truthfully declines fabricated ones (G5): `done` claims from this
 model check out in both directions, which is what `done_trust` asserts.
 
 ## Caveats
 
 - Per-(model, envelope): both passes are under envelope-v3.
-- G5 n=10/class — both class passes provisional by construction;
+- G5 n=10/class, both class passes provisional by construction;
   growing the gate to n≥16/class is the path to a decided pass.
 - Two refusal families only (defect-absent, missing-target);
   symptom-mismatch refusal is unmeasured (turn-3 candidate).

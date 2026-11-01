@@ -1,16 +1,16 @@
-# The OpenAI tools adapter — a sidecar that gives bloomery its first real consumer
+# The OpenAI tools adapter: a sidecar that gives bloomery its first real consumer
 
 **Date:** 2026-08-31
 **Status:** Approved in conversation (rulings: success criterion = *hermes
 actually usable locally*, not a measurement rig and not a minimum viable
 demo; model = `qwen36-reap48-ours` **untrained**, after Hermes-4 36B was
-killed by the arithmetic in §2 — Brice's pivot once the numbers were on the
+killed by the arithmetic in §2. Brice's pivot once the numbers were on the
 table; shape = a **Python sidecar process**, not daemon-side parsing and not
 a Rust workspace crate, so the uncertain half iterates fast and the AGPL
 daemon grows no model-specific heuristics; downstream API = bloomery's
 **native** `/agents/{id}/infer`, not `/v1`, because the adapter must own the
 prompt bytes; a tool call that does not parse is returned as text, never
-fabricated; and — **amended 2026-08-31 during planning, see §6** —
+fabricated; and (**amended 2026-08-31 during planning, see §6**),
 conversation state is **incremental append**, not full-render diffing,
 after the template was measured rewriting historical assistant turns).
 **Lineage:** the hermes-consumer spike of 2026-08-30 (same session). Three
@@ -19,8 +19,8 @@ decides something: hermes always sends `tools` (n=37, observed in captured
 request dumps); `/v1` silently drops that array and answers **HTTP 200 with
 empty content and `finish_reason: "stop"`** (observed, not inferred); and
 `InferReq` carries no stop sequence. The spike also produced the finding
-this spec does *not* address — the pager lock held across `infer`, so any
-stuck inference wedges the whole daemon — recorded in CARRIED-DEBT and left
+this spec does *not* address: the pager lock held across `infer`, so any
+stuck inference wedges the whole daemon, recorded in CARRIED-DEBT and left
 to its own slice.
 
 ## 1. What this builds and why
@@ -28,7 +28,7 @@ to its own slice.
 bloomery has no consumer but its own batteries. Every feature since
 2026-08-20 ships default-off and is exercised only by the harness written to
 measure it. This adapter is the smallest honest path to a real one: it lets
-**hermes** — a live, daily-driven agent harness already running on this box —
+**hermes** (a live, daily-driven agent harness already running on this box),
 drive a local model through bloomery, which puts the pager, the window law,
 the refusal paths and the journal under load that no battery generates.
 
@@ -60,12 +60,12 @@ kv_per_token = 64 × 8 × (128 + 128) × 2 = 262,144 B = 256 KiB/token
 
 Against `qwen36-reap48-ours` at **20,480 B/token** (read from `/status`,
 hybrid geometry, `recurrent_state_bytes = 65,863,680`), that is a **12.8×
-span** — the README's opening thesis, that context length is geometry rather
+span**: the README's opening thesis, that context length is geometry rather
 than configuration, deciding a real integration for the first time.
 
 The demand side comes from a captured hermes request
 (`~/.hermes/sessions/request_dump_*.json`). **These are character counts
-divided by four, not tokenizer output** — an estimate, and labelled as one
+divided by four, not tokenizer output**, an estimate, and labelled as one
 everywhere it is used:
 
 | component | chars | ≈ tokens (chars/4) |
@@ -76,7 +76,7 @@ everywhere it is used:
 | observed session messages | 441,678 | ~110,419 |
 
 > **Corrected 2026-08-31, after the final whole-branch review.** The row above
-> was taken from a single captured request and is **not representative** — it
+> was taken from a single captured request and is **not representative**: it
 > is near the low end. Measured across all **58** captured hermes requests
 > that carry a tool set: the tool count ranges **2 to 132** (median 45), the
 > serialised schemas run 6,673 to **145,650** chars (median 75,962 ≈ 18,990
@@ -89,7 +89,7 @@ everywhere it is used:
 > 262,144 B/token that floor costs **≈11.0 GiB of KV alone**, against the same
 > ≈14.9 GiB budget, so the model is out by a wider margin than the original
 > arithmetic showed. On `qwen36-reap48-ours` at 20,480 B/token the same floor
-> costs ≈0.80 GiB — still comfortable. Second, the prefill-once benefit that
+> costs ≈0.80 GiB, still comfortable. Second, the prefill-once benefit that
 > justifies §6 is **larger** than claimed, since it is a median ≈24k and
 > worst-case ≈42k tokens saved per turn rather than ~22k.
 >
@@ -104,12 +104,12 @@ usable budget of ≈14.9 GiB (15.92 GiB card less ~1.0 GiB desktop):
 
 | quant | weights (GiB) | + floor KV | fits |
 |---|---|---|---|
-| Q3_K_M (on box, measured) | 16.41 | — | no; weights alone exceed budget |
+| Q3_K_M (on box, measured) | 16.41 |: | no; weights alone exceed budget |
 | Q2_K (estimated ~13) | 13 | 18.5 | no |
 | IQ2_XS (estimated ~11) | 11 | 16.5 | no |
 
 Only the first row is measured; the two smaller quants are size estimates,
-and they are included to show the conclusion does not turn on them — the
+and they are included to show the conclusion does not turn on them: the
 floor KV term alone (5.5 GiB) leaves under 9.4 GiB for a 36B's weights.
 
 **No quantization of Hermes-4 36B fits hermes's own tool-calling floor on
@@ -120,7 +120,7 @@ the model on CPU, which fails the "usable" criterion by construction.
 The same floor on `qwen36-reap48-ours` costs **0.42 GiB**. Its observed
 window is 98,106–103,124 tokens (`bound_by: vram`; three values observed
 across boots on 2026-08-30, and 107,681 in the committed turn-7 boot-1
-journal of 2026-08-29 — it varies with VRAM free at boot), so the
+journal of 2026-08-29. It varies with VRAM free at boot), so the
 ~110k-token observed session overflows it, which §7 treats as designed
 behaviour rather than a defect.
 
@@ -152,7 +152,7 @@ approximate.
 
 ## 4. Components
 
-Python, at `adapters/openai-tools/` — a new top-level directory. `tools/` is
+Python, at `adapters/openai-tools/`: a new top-level directory. `tools/` is
 measurement and factory tooling; this is a runtime component and does not
 belong beside it.
 
@@ -180,7 +180,7 @@ listen address. No secrets.
    to the type its tool schema declares.
 6. The response carries `finish_reason` = `tool_calls`, `stop`, or `length`.
 
-## 6. Session lifecycle — the load-bearing section
+## 6. Session lifecycle: the load-bearing section
 
 **bloomery appends.** `generate_from` sets
 `entry_pos = kv_cache_seq_pos_max(SEQ_ID) + 1` and tokenizes with
@@ -193,7 +193,7 @@ One hermes session maps to one persistent bloomery agent. The adapter
 records the exact rendered prefix that agent's KV holds, and each turn sends
 only the suffix beyond it.
 
-> **Amended 2026-08-31, during planning — the full-render diff below is
+> **Amended 2026-08-31, during planning. The full-render diff below is
 > WITHDRAWN and replaced by incremental append (Brice's ruling: option A).**
 > Measured while writing the implementation plan: this model's chat template
 > **rewrites historical assistant turns**, splitting on `</think>` and
@@ -201,7 +201,7 @@ only the suffix beyond it.
 > (`content.split('</think>')[-1].lstrip('\n')`). So a re-render of the
 > conversation is *not* a byte-prefix extension of what the KV holds.
 > Demonstrated: with a one-tool conversation, `rerender.startswith(resident)`
-> is **False**, diverging at index 1161 — KV holds
+> is **False**, diverging at index 1161: KV holds
 > `…assistant\n<think>\n\nI should call terminal.\n</think>\n\n<tool_call>…`
 > while the re-render holds `…assistant\n<tool_call>…`. Under the original
 > design the divergence check would fire **every turn**, resetting the agent
@@ -215,15 +215,14 @@ only the suffix beyond it.
 > into the KV; each later turn sends `<|im_end|>\n` (closing the assistant
 > turn the model left open) + the per-turn rendering of the new user/tool
 > messages + the generation prompt. Divergence detection moves from a byte
-> diff of renders to a **semantic prefix check on hermes's `messages` list** —
-> did it append, or did it edit/compress? — which is both simpler and
+> diff of renders to a **semantic prefix check on hermes's `messages` list** (> did it append, or did it edit/compress?) which is both simpler and
 > strictly more robust.
 >
 > **The deviation this accepts, stated plainly:** history retains `<think>`
 > blocks that the template's own convention drops. Its effect on quality is
 > **unmeasured**. It is therefore a config flag (`keep_reasoning_in_history`,
-> default true) so the alternative — full re-render with a fresh agent per
-> turn, correct by construction and with no reuse — stays testable against
+> default true) so the alternative (full re-render with a fresh agent per
+> turn, correct by construction and with no reuse), stays testable against
 > it rather than merely arguable. The per-turn wrapper must be *derived from
 > the template by differential rendering*, never hand-written ChatML, and
 > pinned by a test that catches template drift.
@@ -237,8 +236,8 @@ suffix independently (`str_to_token(prompt, AddBos::Never)`). Tokenization
 does not distribute over concatenation: `tok(A) ++ tok(B)` is not in general
 `tok(A ++ B)`, so an arbitrary character-offset split silently produces a
 token sequence the model never saw during training. The rule is therefore:
-**split only at rendered turn boundaries** — the `<|im_start|>` / `<|im_end|>`
-special-token delimiters the template emits — never at an arbitrary offset.
+**split only at rendered turn boundaries**, the `<|im_start|>` / `<|im_end|>`
+special-token delimiters the template emits, never at an arbitrary offset.
 A diff that does not land on such a boundary is treated as divergence and
 takes the reset path below rather than being sent. This is a correctness
 constraint, not a heuristic, and it gets its own test.
@@ -251,8 +250,8 @@ concrete benefit, and it is measurable as prefill tokens per turn after the
 first.
 
 **Divergence.** If the new render is not an extension of the recorded
-prefix — hermes edited history, or its `trajectory_compressor` rewrote the
-transcript — the KV is stale. The adapter then abandons that agent and
+prefix (hermes edited history, or its `trajectory_compressor` rewrote the
+transcript) the KV is stale. The adapter then abandons that agent and
 starts a fresh one. Exact-prefix or reset; never approximate reuse. This is
 the memory organ's two-stage exact-match discipline applied to a different
 store, and for the same reason: an approximate match here would silently
@@ -264,7 +263,7 @@ Agents accumulate across a long-lived adapter process. Recorded in
 CARRIED-DEBT on arrival; a delete endpoint is a daemon slice, not this one.
 
 > **Amended 2026-08-31 after the live acceptance run (Brice's ruling).**
-> The two-state classification above — *append* or *rewrite* — is
+> The two-state classification above, *append* or *rewrite*, is
 > incomplete, and the gap stopped a real hermes session dead. Evidence:
 > `docs/superpowers/evidence/2026-08-31-openai-adapter-acceptance.md`.
 >
@@ -272,7 +271,7 @@ CARRIED-DEBT on arrival; a delete endpoint is a daemon slice, not this one.
 > twice (both hashing `493b2c9dbc94ceff`). After the first, this adapter's
 > own `record_generation` had appended the assistant turn, so the tracked
 > history was `[system, user, assistant]` while the retry carried
-> `[system, user]` — *shorter*. `_is_extension` correctly reported "not an
+> `[system, user]`, *shorter*. `_is_extension` correctly reported "not an
 > extension", the turn was classified a rewrite, and the reset created a
 > fresh agent that the tier could not place. **The classification was right;
 > the vocabulary was too small.** An ordinary client retry is
@@ -282,9 +281,9 @@ CARRIED-DEBT on arrival; a delete endpoint is a daemon slice, not this one.
 > **The cause is that one list was being asked to mean two things.** The
 > adapter must track them separately:
 >
-> - the **KV view** — every turn whose bytes reached the cache, including
+> - the **KV view**: every turn whose bytes reached the cache, including
 >   the assistant turn the adapter appended after generating it;
-> - the **client view** — the message list as the client last actually sent
+> - the **client view**: the message list as the client last actually sent
 >   it, before any adapter-side append.
 >
 > Classification then falls out with no heuristics, and in this order:
@@ -304,7 +303,7 @@ CARRIED-DEBT on arrival; a delete endpoint is a daemon slice, not this one.
 > **Replay is bounded at one.** A client may be retrying because it could
 > not use the previous answer, and replaying forever would loop. After a
 > single replay, a further identical request falls through to the ordinary
-> path — where rule 3 classifies it a rewrite and it is re-inferred against
+> path, where rule 3 classifies it a rewrite and it is re-inferred against
 > a fresh agent. Every replay is logged, so the behaviour is visible rather
 > than silent.
 
@@ -316,13 +315,13 @@ CARRIED-DEBT on arrival; a delete endpoint is a daemon slice, not this one.
 | `Refused` | 409 | `server_error`, retryable, carrying bytes needed / free / reclaimable |
 | `Budget` | 402 | `insufficient_quota` |
 | `DriftBlocked` | 409 | `server_error`, naming the blocked model |
-| `Contract` | 502 | `server_error` — the substrate broke its own protocol |
+| `Contract` | 502 | `server_error`: the substrate broke its own protocol |
 
 The 413 path is designed behaviour, not a failure mode. The observed session
 (~110k tokens) exceeds the ~98–103k window, and hermes ships its own
 `trajectory_compressor` and `compression:` configuration. bloomery's honest
 oversize refusal, with arithmetic, becomes a signal a real client can act
-on — the first time that path is exercised by anything but a test.
+on. The first time that path is exercised by anything but a test.
 
 ## 8. Non-goals for v1
 
@@ -330,12 +329,12 @@ Streaming (the captured hermes requests carry no `stream` key), multimodal
 content parts, `tool_choice` forcing beyond `auto`, retry-on-malformed-output
 loops, and any daemon change.
 
-> **Amended 2026-08-31 — the streaming non-goal is WITHDRAWN. The reasoning
+> **Amended 2026-08-31. The streaming non-goal is WITHDRAWN. The reasoning
 > above was wrong, and the live run proved it.**
 >
 > "The captured hermes requests carry no `stream` key" was true of the
 > artifacts I inspected and false of the client. Those artifacts are
-> `request_dump_*.json` files, which hermes writes only when a call FAILS —
+> `request_dump_*.json` files, which hermes writes only when a call FAILS.
 > they are error dumps, not a sample of normal traffic, and I generalised
 > from them without noticing. Captured live through a proxy, every hermes
 > chat request carries:
@@ -352,12 +351,12 @@ loops, and any daemon change.
 > **What to build: buffered SSE, exactly the shape bloomery's own `/v1`
 > already ships** (`api_v1.rs`, "Streaming (D3)"). The adapter holds the
 > whole reply before it emits anything, because inference completes before
-> parsing can classify the turn — so this is buffered, not token-incremental,
+> parsing can classify the turn, so this is buffered, not token-incremental,
 > and that limitation is stated rather than hidden. On `stream: true`:
 >
 > 1. `Content-Type: text/event-stream`.
 > 2. One `chat.completion.chunk` carrying the whole reply in
->    `choices[0].delta` — `{"role": "assistant", "content": …}` for a text
+>    `choices[0].delta`: `{"role": "assistant", "content": …}` for a text
 >    reply, or `delta.tool_calls` for a tool call. **Streamed tool calls
 >    require an `index` on each entry** alongside `id`, `type` and
 >    `function.{name,arguments}`; omitting `index` is the usual reason a
@@ -368,7 +367,7 @@ loops, and any daemon change.
 > 5. The terminal `data: [DONE]`.
 >
 > A refusal that occurs BEFORE any chunk is emitted stays an ordinary JSON
-> error response with its HTTP status — the honest-refusal path in §7 is
+> error response with its HTTP status. The honest-refusal path in §7 is
 > unchanged and must not be converted into a 200 that streams an error.
 > Non-streaming requests keep exactly their current behaviour.
 >
@@ -434,7 +433,7 @@ is correct-looking and destroys the KV benefit).
 - **A KV snapshot/restore (or truncate-to-position) endpoint on the daemon.**
   Added by the 2026-08-31 amendment in §6: it is the change that would let
   the adapter have both the template's exact history convention *and* the
-  preamble saving — snapshot immediately after the invariant preamble,
+  preamble saving, snapshot immediately after the invariant preamble,
   restore it each turn, re-render only the conversation. bloomery already
   owns the machinery (`save_state` / `load_state` and the KV image store);
   what is missing is a surface. That is a daemon slice with its own spec and

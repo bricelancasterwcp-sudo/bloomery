@@ -1,4 +1,4 @@
-# refalsify-battery-v2 — gate findings: **PASS** (probe-cost advisory: **not resolved from box noise**)
+# refalsify-battery-v2: gate findings: **PASS** (probe-cost advisory: **not resolved from box noise**)
 
 **Date:** 2026-08-28 (both arms run back-to-back the same evening; Brice's
 launch ruling recorded in `progress.md`). **Lock:**
@@ -12,26 +12,26 @@ output committed verbatim at
 
 ## 1. The licensed sentence
 
-All gating conditions passed (G1, G2, the stamp audit, H2, H3 — §§3–6
+All gating conditions passed (G1, G2, the stamp audit, H2, H3: §§3–6
 below), so spec §1's sentence is licensed. Its `X ms` clause cannot be
 filled honestly with the raw p2 number, per the prereg's own A1 honesty
 rule (spec §4: "a p1 wall gap of the same order as the p2 gap means the
 p2 number is box noise, and the honest report says so instead of quoting
-a probe cost") — see §5 below for the check. The licensed sentence,
+a probe cost"). See §5 below for the check. The licensed sentence,
 X-clause resolved honestly:
 
 > **With refalsify on, the memory organ's repeat-exposure benefit is
-> preserved — injection and token cost equivalent to refalsify-off
-> within the pre-registered bands — at a probe cost not resolved from
+> preserved, injection and token cost equivalent to refalsify-off
+> within the pre-registered bands, at a probe cost not resolved from
 > box noise (this battery cannot distinguish it from zero): the p2
 > median wall delta was +4.5 ms/task (0.09 ms per probed retrieval), but
-> the no-probe p1 control — where neither arm's phase 1 can fire a probe
-> at all — shows a same-order gap of −3.5 ms, so the p2 number does not
+> the no-probe p1 control, where neither arm's phase 1 can fire a probe
+> at all, shows a same-order gap of −3.5 ms, so the p2 number does not
 > clear the box's own noise floor (lens: this battery).**
 
 Nothing here speaks to novel tasks, other models, other task shapes,
 accuracy, the `premise_gone` lane, staleness, or the design-§5
-passive-poisoning weight — see the named absences, §9 below, restated
+passive-poisoning weight. See the named absences, §9 below, restated
 verbatim.
 
 ## 2. Runs
@@ -65,7 +65,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m tools.memory_battery.recompute_v2 \
 `exit=0`. `--expected-arm-labels` omitted (defaults to `("m_prime",
 "r")`, exactly this run's labels, per prereg §7).
 
-## 3. Gate G1 — token preservation (equivalence), verbatim from recompute
+## 3. Gate G1: token preservation (equivalence), verbatim from recompute
 
 ```json
 "g1": {
@@ -84,13 +84,13 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m tools.memory_battery.recompute_v2 \
 
 `|109.5 − 109.5| = 0.0 ≤ 2 × 2.6625830296912807 = 5.325166059382561`
 holds with wide headroom (median is 80.5 tokens off the observed floor in
-both arms — resolution is not floor-saturated; the recompute's own
+both arms. Resolution is not floor-saturated; the recompute's own
 declared-conservative branch did not fire, and the printed verdict is
 `PASS`, never `UNMEASURABLE`). Bootstrap: seed `20260828`, B `10,000`,
 resampling unit = tasks, each arm's phase-2 tasks resampled
 independently, per prereg §4/spec §4 formula, cited not restated.
 
-## 4. Gate G2 — injection preservation (exact), verbatim from recompute
+## 4. Gate G2: injection preservation (exact), verbatim from recompute
 
 ```json
 "g2": {
@@ -127,16 +127,16 @@ Every R-p2 non-`dropped` `mode:"injected"` stamp (50/50) carries
 `refalsify:"premise_held"` (`premise_held_complete: true`, matching G2's
 `injected_count_r: 50` one-to-one). The forbidden spellings `passed`/
 `failed` appear nowhere in either arm (`forbidden_spelling_hits: []`).
-`premise_gone` count is 0 (`premise_gone_zero: true`) — no workspace
+`premise_gone` count is 0 (`premise_gone_zero: true`), no workspace
 reset failed. `inconclusive_count` and `skipped_ungranted_count` are both
-0 (not merely within H3's tolerance — zero occurrences). **Clean, all
+0 (not merely within H3's tolerance, zero occurrences). **Clean, all
 gating conditions satisfied.** M′'s counts read `none` in both phases
 (expected: M′ never refalsifies, so the stamp's `refalsify` field is not
 applicable there).
 
 ## 6. Hygiene (computed before any gate is read, H2 first per prereg §4)
 
-**H2 — first-exposure equivalence (gating):**
+**H2, first-exposure equivalence (gating):**
 
 ```json
 "h2_p1_equivalence": {
@@ -152,11 +152,11 @@ applicable there).
 ```
 
 `|121.5 − 121.5| = 0.0` within `2 × SE_boot = 4.198194563142589` →
-`violated: false` — **run VALID**, no instrument error. (No probe can
+`violated: false`, **run VALID**, no instrument error. (No probe can
 fire in either arm's phase 1; both stores are empty; this is the
 cross-arm instrument check.)
 
-**H3 — infra rate (gating, ≤ 5% per arm):**
+**H3, infra rate (gating, ≤ 5% per arm):**
 
 ```json
 "h3_infra": {
@@ -171,7 +171,7 @@ cross-arm instrument check.)
 }
 ```
 
-0/100 both arms, `violated: false` — **no infrastructure kill.**
+0/100 both arms, `violated: false`, **no infrastructure kill.**
 
 **H4 (advisory):**
 
@@ -182,16 +182,16 @@ cross-arm instrument check.)
 }
 ```
 
-50/50 mint in phase 1, 50/50 retrieval in phase 2, both arms — the
+50/50 mint in phase 1, 50/50 retrieval in phase 2, both arms: the
 deterministic byte-reset corpus hit every episode in both arms, matching
 G2's exact counts.
 
-(v1's H1 — control-arm phase stability — has no analogue here, per spec
+(v1's H1, control-arm phase stability, has no analogue here, per spec
 §4's final paragraph: both arms carry the treatment-relevant store, so
 cross-phase within-arm deltas are the organ's intended effect, not a
 contamination check.)
 
-## 7. A1 — wall cost (advisory, never gates) — the box-noise check
+## 7. A1, wall cost (advisory, never gates), the box-noise check
 
 ```json
 "a1_wall": {
@@ -204,22 +204,22 @@ contamination check.)
 ```
 
 **The honesty check (spec §4/prereg §4, applied):** the no-probe p1
-control — where zero probes can fire in either arm, both stores being
-empty — shows a **−3.5 ms** median wall gap (R minus M′). The probed p2
+control, where zero probes can fire in either arm, both stores being
+empty, shows a **−3.5 ms** median wall gap (R minus M′). The probed p2
 delta is **+4.5 ms**. `|−3.5|` and `|4.5|` are the same order of
 magnitude (ratio ≈1.3×, both single-digit milliseconds against ~450–490
-ms task medians) — **the p2 gap does not clear the box's own no-probe
+ms task medians). **The p2 gap does not clear the box's own no-probe
 noise floor.** Per the prereg's own rule, the honest report says the
 probe cost is not resolved from box noise rather than quoting `0.09 ms`
 per probed retrieval as a measured cost. The per-task p2 delta
 distribution underscores this: median +2.0 ms but ranging from −219 ms to
 +126 ms across 50 tasks (one large negative outlier,
-`py_wrong_comparison_operator_run_verified-0011`, at −219 ms) — noise of
+`py_wrong_comparison_operator_run_verified-0011`, at −219 ms), noise of
 that scale swamps a nominal 4.5 ms median difference. **This battery
 cannot license a probe-cost number; it can only report that if a probe
 cost exists, this instrument's resolution does not reach it.**
 
-## 8. Completeness, identity, dropped — verbatim from recompute
+## 8. Completeness, identity, dropped: verbatim from recompute
 
 ```json
 "completeness": {
@@ -245,7 +245,7 @@ Identity, from `lens.identity`:
 
 Served digest matches the pinned expected digest
 (`7020b925c07c5a3808e1155700ca707598cb4f6d6089bb6daff4147b4d6b00bd`) in
-both phases, both arms — the CLI's own FATAL identity+completeness
+both phases, both arms: the CLI's own FATAL identity+completeness
 enforcement is why the recompute invocation above exited `0` rather than
 nonzero.
 
@@ -256,16 +256,16 @@ nonzero.
 > staleness-benefit story (no staleness treatment exists here), or the
 > design-§5 passive-poisoning weight (the corpus's happy path
 > re-verifies, so §5 does not fire on it). Those are **named absences**
-> — each needs its own corpus treatment and its own registration.
+>, each needs its own corpus treatment and its own registration.
 > Battery-v1's claim (memory-on beats memory-off on repeats) is settled
 > evidence and is not re-litigated; no number from this battery may be
 > compared against v1's run (different night, materially different
-> daemon — window ladder, R9, refalsify itself all landed since;
+> daemon, window ladder, R9, refalsify itself all landed since;
 > incomparable, not wrong).
 
 This run's own stamp audit corroborates the `premise_gone` absence
 empirically, not just by corpus design: `premise_gone_hits: []`,
-`premise_gone_zero: true` — zero occurrences observed, consistent with
+`premise_gone_zero: true`, zero occurrences observed, consistent with
 "no corpus task starts goal-satisfied."
 
 ## 10. Parked prereg nit (recorded, not amended)
@@ -278,11 +278,11 @@ byte-for-byte. v1's prereg reads *"The corpus is bytes after this commit
 (§3.2 above); nothing in `tools/memory_battery/corpus-v1/` is ever
 edited in place."* This prereg's own text reads *"The corpus is bytes
 (§3 above, re-asserted at this lock); nothing in
-`tools/memory_battery/corpus-v1/` is ever edited in place."* — the
+`tools/memory_battery/corpus-v1/` is ever edited in place."*. The
 self-reference was reworded to match this document's own section
 numbering and its own "re-asserted at lock" framing (§3, not §3.2; "at
 this lock" added). The binding **force** of the clause is unchanged
-(same prohibition, same scope) — this is a precision-of-claims blemish
+(same prohibition, same scope). This is a precision-of-claims blemish
 in the prereg's own self-description, not a substantive deviation, and
 per the Task 3 ruling it is **not grounds to amend the lock**: the lock
 stands as committed, and this note is the record.
@@ -302,15 +302,15 @@ per prereg §9.
 
 PASS licenses the §1 sentence, X-clause resolved honestly (§1 above):
 refalsify preserves the organ's token-cost and injection behavior on
-this corpus, this model, this box — and this battery could not resolve
+this corpus, this model, this box, and this battery could not resolve
 whether refalsify has any wall-clock cost at all, because its own
 no-probe control shows equal-sized noise. It does **not** license:
 anything about the `premise_gone` lane, staleness, or the design-§5
-passive-poisoning weight (§9 above — each needs its own registration);
+passive-poisoning weight (§9 above, each needs its own registration);
 any cross-battery comparison against `memory-battery-v1` (different
 night, materially different daemon); a default-flip of `[memory]
 refalsify` (this battery informs that ruling, per spec §7 out-of-scope;
-it does not make it); or a resolved probe-cost number (§7 above — a
+it does not make it); or a resolved probe-cost number (§7 above, a
 future battery with more probed retrievals or repeated boots, aimed
 specifically at shrinking box noise below a few ms, would be needed to
 resolve it, and that is a new registration, not a re-read of this one).

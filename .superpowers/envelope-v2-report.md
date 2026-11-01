@@ -1,4 +1,4 @@
-# Envelope-v2 (think-preseeded lens) — implementation report
+# Envelope-v2 (think-preseeded lens): implementation report
 
 Branch: `feat/envelope-v2-think-preseed`
 Governing docs: `.superpowers/envelope-v2-brief.md`, `docs/superpowers/evidence/2026-08-15-g4-protocol.md` §10 (Amendment 2)
@@ -15,10 +15,10 @@ with evidence (and restoration to the correct implementation).
 ### 1. Config (`crates/bloomery-daemon/src/config.rs`)
 
 - `ModelSpec::Tuned` gained `#[serde(default)] think_preseed: bool`.
-- New accessor `pub fn think_preseed(&self) -> bool` — `Path` variant
+- New accessor `pub fn think_preseed(&self) -> bool`: `Path` variant
   returns `false`.
 - Tests added/extended in `tests/config_test.rs`:
-  - `think_preseed_true_parses` (new) — table entry with
+  - `think_preseed_true_parses` (new), table entry with
     `think_preseed = true` parses and the accessor reflects it.
   - `tuned_model_entry_with_only_path_parses` extended with
     `assert!(!model.think_preseed())` (absent = false).
@@ -31,7 +31,7 @@ with evidence (and restoration to the correct implementation).
   defaulted `false` in `register_model`.
 - Chose a **sibling setter** over growing `set_model_tuning`'s signature:
   `set_model_tuning` already has 8 call sites in
-  `tests/pager_weights_test.rs` passing exactly two tuning args — a third
+  `tests/pager_weights_test.rs` passing exactly two tuning args, a third
   positional bool there would be the larger diff for a conceptually
   independent flag (task-loop presentation, not VRAM accounting).
   Added in `crates/bloomery-daemon/src/pager/tuning.rs`:
@@ -40,15 +40,14 @@ with evidence (and restoration to the correct implementation).
     to `false` for an unknown model, matching `model_patch_codec` /
     `model_mutating_verbs`'s collapse style).
 - `agent_task_policy` (`pager/codec_gate.rs`) grew from
-  `Option<(PatchCodec, bool)>` to `Option<(PatchCodec, bool, bool)>` —
-  `(patch_codec, mutating_verbs, think_preseed)` — one source read through
+  `Option<(PatchCodec, bool)>` to `Option<(PatchCodec, bool, bool)>`, `(patch_codec, mutating_verbs, think_preseed)`, one source read through
   `agent_id`'s model, same one-source-of-truth rule as
   `effective_weights_bytes`.
 - Callers updated:
   - `api_task.rs::create_task` destructures the 3-tuple and threads
     `think_preseed` into `TaskSpec`.
   - `codec_probe/mod.rs` reads `Pager::model_think_preseed` directly (it has
-    no agent yet at probe time — same pattern as its existing
+    no agent yet at probe time, same pattern as its existing
     `model_patch_codec`/`model_codec_from_profile` reads).
 - `main.rs` wires `pager.set_think_preseed(name, spec.think_preseed())`
   alongside the existing `set_model_tuning` call, per model.
@@ -72,15 +71,15 @@ with evidence (and restoration to the correct implementation).
   `spec.think_preseed` is set; unchanged (byte-for-byte v1) otherwise.
 - All other `TaskSpec` construction sites updated for the new field:
   `api_task.rs`, `codec_probe/mod.rs`, `task/registry.rs` (3 sites, all
-  `think_preseed: false` — unrelated to preseed behavior),
+  `think_preseed: false`, unrelated to preseed behavior),
   `tests/task_loop_test.rs`'s `demoted_spec` helper (`false`) plus new
   `preseeded_spec` helper (`true`).
 - Tests added in `tests/task_loop_test.rs` (FakeSubstrate harness):
-  - `a_preseeded_spec_ends_the_rendered_prompt_with_the_think_preseed_literal`
-    — asserts `FakeSubstrate::ctx_history(1).ends_with("<think>\n\n</think>\n\n")`
+  - `a_preseeded_spec_ends_the_rendered_prompt_with_the_think_preseed_literal`,
+    asserts `FakeSubstrate::ctx_history(1).ends_with("<think>\n\n</think>\n\n")`
     (`ends_with`, not `contains`, per the brief).
-  - `a_non_preseeded_spec_never_carries_the_think_preseed_literal` —
-    asserts the literal is absent anywhere in the prompt.
+  - `a_non_preseeded_spec_never_carries_the_think_preseed_literal`.
+    Asserts the literal is absent anywhere in the prompt.
   - Both use a single-turn `[done]` task so `ctx_history` holds exactly the
     one rendered prompt (no `\n`-joined prior turns ambiguity).
 
@@ -107,7 +106,7 @@ with evidence (and restoration to the correct implementation).
     (the existing v1 scripted-pair test) extended with the minimal second
     assertion `!detail.contains(ENVELOPE_LENS_V2)`.
   - New companion test
-    `a_preseeded_model_probe_journals_the_v2_lens_in_the_verdict_detail` —
+    `a_preseeded_model_probe_journals_the_v2_lens_in_the_verdict_detail`,
     same fixture set / scripted replies / happy-path landing as the v1
     test, differing only by `p.set_think_preseed(MODEL, true)` before the
     probe runs; asserts the verdict's `detail` contains
@@ -119,12 +118,12 @@ with evidence (and restoration to the correct implementation).
   `agent_task_policy` tuple) into the built `TaskSpec`, resolved through
   the same one-source lookup as `patch_codec`/`mutating_verbs`.
 - Tests added in `tests/api_task_test.rs` (HTTP-level, via
-  `serve_codec_gate_fixture` — the same harness test (a)/(b)/(c) use):
-  - `a_think_preseed_model_renders_its_task_prompt_with_the_preseed_literal`
-    — `p.set_think_preseed("qwen", true)` before `create_agent`; the HTTP
+  `serve_codec_gate_fixture`: the same harness test (a)/(b)/(c) use):
+  - `a_think_preseed_model_renders_its_task_prompt_with_the_preseed_literal`:
+    `p.set_think_preseed("qwen", true)` before `create_agent`; the HTTP
     `POST /agents/{id}/task` task's rendered prompt (observed via
     `FakeSubstrate::ctx_history`) ends with the literal.
-  - `a_non_preseeded_model_never_renders_the_preseed_literal_over_http` —
+  - `a_non_preseeded_model_never_renders_the_preseed_literal_over_http`,
     counterpart with no `set_think_preseed` call (default `false`).
 
 ## Mutation checks (evidence)
@@ -134,7 +133,7 @@ targeted test, confirming failure, then restoring the file from a
 pre-edit copy and re-running the full relevant test file to confirm green
 again.
 
-### Mutation 1 — remove the `ends_with` append (task_loop.rs)
+### Mutation 1: remove the `ends_with` append (task_loop.rs)
 
 Edited `render_prompt` to always return the un-preseeded `prompt` (dropped
 the `if spec.think_preseed { ... }` branch entirely):
@@ -161,7 +160,7 @@ running 12 tests
 test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 
-### Mutation 2 — hardcode `envelope_lens` to v1 (codec_probe/mod.rs)
+### Mutation 2: hardcode `envelope_lens` to v1 (codec_probe/mod.rs)
 
 Edited `envelope_lens` to ignore its argument and always return
 `ENVELOPE_LENS`:
@@ -202,12 +201,11 @@ test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 `tuning.rs` can `impl` methods on `Pager`/read `ModelEntry` fields but
 cannot add fields to a type from outside the module that defines it), the
 new `think_preseed: bool` field and its `register_model` initializer line
-were structurally unavoidable additions to `pager.rs` itself (all *logic* —
-the setter/getter — went into `pager/tuning.rs` per the brief). To stay at
+were structurally unavoidable additions to `pager.rs` itself (all *logic*, the setter/getter, went into `pager/tuning.rs` per the brief). To stay at
 the 800-line cap, three pre-existing blank `///` paragraph-separator lines
 in nearby, low-stakes doc comments (`DEFAULT_OVERHEAD_BYTES`,
 `DEFAULT_CTX_OVERHEAD_BYTES`, `FreeVramFn`) were merged into their
-following paragraph — no content/wording removed, just the blank-line
+following paragraph, no content/wording removed, just the blank-line
 paragraph break. Final line count: exactly 800.
 
 ## Commands run (final verification pass, in order)
@@ -245,7 +243,7 @@ No `timeout` binary was used to wrap any command.
 `7d012d1` on branch `feat/envelope-v2-think-preseed`:
 `feat: envelope-v2 think-preseeded lens (G4 protocol amendment 2, §10)`
 (no attribution footer; this report file and the brief file were left
-untracked / excluded from the commit — only the 14 source/test files
+untracked / excluded from the commit, only the 14 source/test files
 listed above were staged and committed).
 
 ## Concerns

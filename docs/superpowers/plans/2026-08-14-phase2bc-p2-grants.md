@@ -1,25 +1,25 @@
-# bloomery Phase 2b/2c — P2: Capability Grants Implementation Plan
+# bloomery Phase 2b/2c: P2: Capability Grants Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the capability-grant security boundary in `bloomery-core` — an explicit, task-scoped `Grant` (read/write roots, command allowlist, no network) whose check functions decide, structurally and unpersuadably, whether an action's path or command is permitted, with the real-canonicalization escape defenses and a red-team fixture suite that proves the check cannot be talked out of scope.
+**Goal:** Build the capability-grant security boundary in `bloomery-core`, an explicit, task-scoped `Grant` (read/write roots, command allowlist, no network) whose check functions decide, structurally and unpersuadably, whether an action's path or command is permitted, with the real-canonicalization escape defenses and a red-team fixture suite that proves the check cannot be talked out of scope.
 
-**Architecture:** One new module tree `crates/bloomery-core/src/grant/`: `mod.rs` (the `Grant` type + `GrantError` construction validation + `GrantViolation`), `path.rs` (the read/write path checks using real `std::fs::canonicalize`, with parent-canonicalization for not-yet-existing files), `command.rs` (the argv-prefix allowlist check). The path checks are the security core and are the one place `bloomery-core` touches the filesystem — deliberately, because the real symlink/`..` resolution IS the defense (a mock canonicalizer would diverge from the attack surface). Everything else is pure. Tests build real tempdirs with real symlinks and call the real check — no mocks on the security path.
+**Architecture:** One new module tree `crates/bloomery-core/src/grant/`: `mod.rs` (the `Grant` type + `GrantError` construction validation + `GrantViolation`), `path.rs` (the read/write path checks using real `std::fs::canonicalize`, with parent-canonicalization for not-yet-existing files), `command.rs` (the argv-prefix allowlist check). The path checks are the security core and are the one place `bloomery-core` touches the filesystem, deliberately, because the real symlink/`..` resolution IS the defense (a mock canonicalizer would diverge from the attack surface). Everything else is pure. Tests build real tempdirs with real symlinks and call the real check, no mocks on the security path.
 
-**Tech Stack:** Existing workspace (Rust stable, edition 2021). **No new dependencies** — `std::fs::canonicalize`, `std::os::unix::fs::symlink` (tests only), `serde`/`serde_json` (already present). Tempdirs via `std::env::temp_dir()` + manual create/cleanup, following the existing test pattern in `crates/bloomery-daemon/tests/`.
+**Tech Stack:** Existing workspace (Rust stable, edition 2021). **No new dependencies**: `std::fs::canonicalize`, `std::os::unix::fs::symlink` (tests only), `serde`/`serde_json` (already present). Tempdirs via `std::env::temp_dir()` + manual create/cleanup, following the existing test pattern in `crates/bloomery-daemon/tests/`.
 
 **Spec:** `docs/superpowers/specs/2026-08-14-phase2bc-task-abi-grants-design.md` §4 (approved 2026-08-14). Umbrella laws §3 bind everything; the headline property (spec §4) is: *worst-case successful prompt injection spends the task's own budget inside its own grants.*
 
 ## Global Constraints
 
 - **The check is structural, never persuadable:** a grant check takes a path or an argv and a `Grant`; no file content, model text, or instruction can widen scope. The red-team suite (Task 4) exists to prove exactly this.
-- **Real canonicalization is the escape defense** (spec §4, §8): path checks canonicalize the target (and its roots) with `std::fs::canonicalize`, which follows symlinks and collapses `..`, then compare component-wise with `Path::starts_with` — **never string prefix** (`/rootfoo` must not pass for root `/root`; component-wise `starts_with` gives that for free, string comparison does not).
-- **Not-yet-existing files** (a `patch` creating a new file): canonicalize the immediate **parent** and require it to be within a write root; the target is `parent_canon.join(file_name)` (spec §8). One level only — creating deep new trees is out of scope for v1.
+- **Real canonicalization is the escape defense** (spec §4, §8): path checks canonicalize the target (and its roots) with `std::fs::canonicalize`, which follows symlinks and collapses `..`, then compare component-wise with `Path::starts_with`, **never string prefix** (`/rootfoo` must not pass for root `/root`; component-wise `starts_with` gives that for free, string comparison does not).
+- **Not-yet-existing files** (a `patch` creating a new file): canonicalize the immediate **parent** and require it to be within a write root; the target is `parent_canon.join(file_name)` (spec §8). One level only. Creating deep new trees is out of scope for v1.
 - **`network: false` is the only accepted value in v1** (spec §4): a grant with `network: true` is rejected at construction.
 - **A write root is not implicitly a read root** (spec §4): `check_read` consults `read_roots` only; `check_write` consults `write_roots` only.
 - **Command allowlist is argv-prefix, element-wise, no shell** (spec §4): `run`'s argv must start with a listed prefix exactly; it may append but never change/reorder the prefix. An empty prefix `[]` is rejected at construction (it would match everything).
 - **Grants are immutable for the task's life** (spec §4): fields are private, accepted only via `Grant::from_json`; there is no setter and no verb can mutate a grant.
-- **Honest boundary, not overclaimed** (spec §8): the grant is the security boundary; v1 does **not** claim OS-level sandboxing (no namespaces/seccomp) — the docs say so.
+- **Honest boundary, not overclaimed** (spec §8): the grant is the security boundary; v1 does **not** claim OS-level sandboxing (no namespaces/seccomp): the docs say so.
 - Dependency allowlist unchanged. TDD with RED/GREEN evidence per task; `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings` (default AND `--features llama`), `cargo test --workspace` green before every commit. Files ≤800 lines; conventional commits. Branch `feat/phase2bc-p2-grants` from master.
 
 ---
@@ -69,7 +69,7 @@ pub enum GrantViolation {                   // produced by Tasks 2–3
 pub enum PathKind { Read, Write }
 ```
 
-Validation rules (binding): `from_json` deserializes then checks, in order: `network == true` → `NetworkNotSupported`; any `read_roots`/`write_roots` entry where `!p.is_absolute()` → `NonAbsoluteRoot{root}`; any `commands` entry that is empty → `EmptyCommandPrefix`. serde failure → `Parse(e.to_string())`. `commands` may be an empty *list* (no commands granted — every `run` is then refused, which is fine); only an empty *prefix within* the list is rejected.
+Validation rules (binding): `from_json` deserializes then checks, in order: `network == true` → `NetworkNotSupported`; any `read_roots`/`write_roots` entry where `!p.is_absolute()` → `NonAbsoluteRoot{root}`; any `commands` entry that is empty → `EmptyCommandPrefix`. serde failure → `Parse(e.to_string())`. `commands` may be an empty *list* (no commands granted. Every `run` is then refused, which is fine); only an empty *prefix within* the list is rejected.
 
 - [ ] **Step 1: Write the failing tests.**
 
@@ -138,7 +138,7 @@ fn malformed_json_is_a_named_parse_error() {
 
 ---
 
-### Task 2: Path checks — the canonicalization escape defense
+### Task 2: Path checks: the canonicalization escape defense
 
 **Files:**
 - Create: `crates/bloomery-core/src/grant/path.rs`
@@ -171,12 +171,12 @@ pub(crate) fn resolve_within(
 ```
 
 Algorithm (binding, security-critical):
-1. If `target` is not absolute → `PathOutsideRoots{path, kind}` (relative paths are ambiguous; P3 absolutizes model paths against the task cwd before calling — document this).
-2. Canonicalize each root with `std::fs::canonicalize`; skip roots that fail to canonicalize (a granted root that doesn't exist grants nothing — it cannot match).
+1. If `target` is not absolute → `PathOutsideRoots{path, kind}` (relative paths are ambiguous; P3 absolutizes model paths against the task cwd before calling, document this).
+2. Canonicalize each root with `std::fs::canonicalize`; skip roots that fail to canonicalize (a granted root that doesn't exist grants nothing. It cannot match).
 3. Try `std::fs::canonicalize(target)`:
    - `Ok(canon)` → if `canon` component-wise `starts_with` any canonical root → `Ok(canon)`; else `PathOutsideRoots`.
    - `Err(_)` and `allow_missing_target` → canonicalize `target.parent()`: if that succeeds and is within a canonical root → `Ok(parent_canon.join(target.file_name()))`; if the parent canonicalizes but is outside → `PathOutsideRoots`; if the parent itself does not canonicalize (missing) → `PathParentMissing{path}`.
-   - `Err(_)` and `!allow_missing_target` (read of a non-existent file) → **fall back to the parent check exactly like write** (a read of a not-yet-existing path under a read root is in-bounds; the executor returns NotFound later — the grant's job is bounds, not existence). So `allow_missing_target` is effectively always true for the resolution logic; keep the parameter for call-site clarity but both paths use parent-fallback. *(Simplify: drop the parameter if the reviewer prefers; the behavior is identical for read and write.)*
+   - `Err(_)` and `!allow_missing_target` (read of a non-existent file) → **fall back to the parent check exactly like write** (a read of a not-yet-existing path under a read root is in-bounds; the executor returns NotFound later. The grant's job is bounds, not existence). So `allow_missing_target` is effectively always true for the resolution logic; keep the parameter for call-site clarity but both paths use parent-fallback. *(Simplify: drop the parameter if the reviewer prefers; the behavior is identical for read and write.)*
 4. `check_read` = `resolve_within(target, self.read_roots(), Read, true)`; `check_write` = `resolve_within(target, self.write_roots(), Write, true)`.
 
 - [ ] **Step 1: Write the failing tests** (real tempdirs + real symlinks; helper builds a sandbox):
@@ -294,7 +294,7 @@ fn write_whose_parent_dir_is_missing_is_named() {
 
 - [ ] **Step 3: Implement** `path.rs` per the algorithm and the two `Grant` methods. Use `Path::starts_with` (component-wise). Canonicalize roots per call (v1 simplicity; document). Note in a comment that `resolve_within` is the security boundary and why real canonicalize (not a mock) is used.
 
-- [ ] **Step 4: GREEN + gates.** All 8 tests, fmt, clippy both configs. (Note: these tests do real FS I/O in the OS temp dir — that's the spec-sanctioned exception for the canonicalization security core; clean up the tempdir at test end best-effort.)
+- [ ] **Step 4: GREEN + gates.** All 8 tests, fmt, clippy both configs. (Note: these tests do real FS I/O in the OS temp dir, that's the spec-sanctioned exception for the canonicalization security core; clean up the tempdir at test end best-effort.)
 
 - [ ] **Step 5: Commit.** `git commit -m "feat: grant - canonicalization-based read/write path checks"`
 
@@ -385,13 +385,13 @@ fn a_grant_with_no_commands_refuses_everything() {
 
 **Files:**
 - Create: `crates/bloomery-core/tests/grant_redteam_test.rs`
-- Modify: `crates/bloomery-core/src/grant/mod.rs` (module doc — the honest boundary), `README.md` ("Capability grants (Phase 2c)" subsection)
+- Modify: `crates/bloomery-core/src/grant/mod.rs` (module doc: the honest boundary), `README.md` ("Capability grants (Phase 2c)" subsection)
 - Test: (the red-team suite above)
 
 **Interfaces:**
-- Consumes: `Grant`, `check_read`/`check_write`/`check_command`, `GrantViolation` (Tasks 1–3). No new production surface — this task's deliverable is the adversarial proof + the honest docs.
+- Consumes: `Grant`, `check_read`/`check_write`/`check_command`, `GrantViolation` (Tasks 1–3). No new production surface. This task's deliverable is the adversarial proof + the honest docs.
 
-The red-team thesis (spec §4): the check is **structural** — it takes a path/argv and a `Grant`, so no file *content*, model *instruction*, or persuasive *text* can widen scope. These tests encode the attack the model would attempt after reading an injection-laced file, and prove the check refuses regardless.
+The red-team thesis (spec §4): the check is **structural**: it takes a path/argv and a `Grant`, so no file *content*, model *instruction*, or persuasive *text* can widen scope. These tests encode the attack the model would attempt after reading an injection-laced file, and prove the check refuses regardless.
 
 - [ ] **Step 1: Write the red-team suite.**
 
@@ -455,9 +455,9 @@ fn the_only_things_allowed_are_exactly_what_was_granted() {
 }
 ```
 
-- [ ] **Step 2: RED/GREEN.** These pass immediately against Tasks 1–3's implementation (they're the acceptance proof, not new behavior) — state in the report that RED here is "the suite compiles and the structural property holds"; if any assertion fails, it's a real Task 2/3 defect to fix in this task's loop.
+- [ ] **Step 2: RED/GREEN.** These pass immediately against Tasks 1–3's implementation (they're the acceptance proof, not new behavior), state in the report that RED here is "the suite compiles and the structural property holds"; if any assertion fails, it's a real Task 2/3 defect to fix in this task's loop.
 
-- [ ] **Step 3: Docs.** `mod.rs` module doc: the headline property verbatim ("worst-case successful injection spends the task's own budget inside its own grants") and the honest-boundary paragraph (v1 is grant-scoping, NOT OS-level sandboxing — no namespaces/seccomp; a granted `run` command is trusted to be non-networking; the boundary is the grant, and that is stated, not overclaimed). README: a ~10-line "Capability grants (Phase 2c)" subsection — the four grant fields, canonical-path escape defense, argv-prefix allowlist, network-refused, the structural/red-team property, and a pointer that P3 wires these checks into the task-loop executors and `tasks_enabled` gates the whole surface.
+- [ ] **Step 3: Docs.** `mod.rs` module doc: the headline property verbatim ("worst-case successful injection spends the task's own budget inside its own grants") and the honest-boundary paragraph (v1 is grant-scoping, NOT OS-level sandboxing, no namespaces/seccomp; a granted `run` command is trusted to be non-networking; the boundary is the grant, and that is stated, not overclaimed). README: a ~10-line "Capability grants (Phase 2c)" subsection: the four grant fields, canonical-path escape defense, argv-prefix allowlist, network-refused, the structural/red-team property, and a pointer that P3 wires these checks into the task-loop executors and `tasks_enabled` gates the whole surface.
 
 - [ ] **Step 4: Gates + whole suite.** `cargo test --workspace`, fmt, clippy both configs.
 
@@ -468,5 +468,5 @@ fn the_only_things_allowed_are_exactly_what_was_granted() {
 ## Self-review (performed at plan-writing time)
 
 - **Spec §4 coverage:** the `Grant` wire shape → Task 1; canonical-path-prefix read/write checks with symlink/`..` defense → Task 2; write-root-≠-read-root → Task 2 (`write_outside_the_write_root_is_refused_even_if_in_a_read_root`); new-file-via-parent-canonicalization → Task 2 (`write_to_a_new_file_in_a_granted_dir`) + the spec §8 parent-missing case; argv-prefix element-wise allowlist, no shell → Task 3; network-false-only → Task 1; grants immutable (private fields, from_json only, no setter) → Task 1; the structural/unpersuadable property + red-team fixtures → Task 4; honest boundary (no OS sandbox claim) → Task 4 docs. The spec §8 canonicalization-edge (new file in granted dir vs `..` escape) is split across Task 2's `write_to_a_new_file`/`write_whose_parent_dir_is_missing`/`dotdot_traversal` tests.
-- **Placeholder scan:** no TBDs. Task 2's `allow_missing_target` parameter carries an explicit simplification note (both read and write use parent-fallback; the parameter is call-site clarity and the reviewer may drop it) — a named decision, not a gap.
+- **Placeholder scan:** no TBDs. Task 2's `allow_missing_target` parameter carries an explicit simplification note (both read and write use parent-fallback; the parameter is call-site clarity and the reviewer may drop it), a named decision, not a gap.
 - **Type consistency:** `GrantViolation`/`PathKind` declared in Task 1, produced in Tasks 2–3; `Grant::from_json`/accessors (Task 1) consumed by every later task and test; `check_read`/`check_write` (Task 2) and `check_command` (Task 3) are the exact methods Task 4's red-team suite and P3 call; `resolve_within`'s signature (Task 2) matches its two call sites.

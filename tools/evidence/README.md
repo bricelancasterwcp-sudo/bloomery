@@ -5,7 +5,7 @@ journals (`CodecFixture`/`CodecVerdict`/`CodecVerdictMixed` rows) and
 `TaskStep` rows, joined against the frozen fixture TOML. Stdlib only.
 
 It **reports; it never decides.** The daemon's own gate is the sole
-authority on pass/fail — this tool exists to catch drift between the
+authority on pass/fail. This tool exists to catch drift between the
 committed evidence prose and what the journals actually contain, not to
 gate anything itself.
 
@@ -21,7 +21,7 @@ python3 -m tools.evidence.recompute \
 Prints the JSON report to stdout; exits 2 if the CodecFixture<->TaskStep
 join reports any violations, else 0. In keyed mode, `join.ordinal_violations`
 carries the ordinal join's own violations (computed for the keyed/ordinal
-agreement check) — reported for a reader only, never folded into
+agreement check), reported for a reader only, never folded into
 `join.violations` and never affecting the exit code. `endpoints.reason_grounding`
 carries a `missing_fixtures` list: journaled fixture names absent from the
 frozen TOML, counted as unmeasured rather than raising.

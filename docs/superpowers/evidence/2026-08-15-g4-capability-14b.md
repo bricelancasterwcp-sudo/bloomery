@@ -1,10 +1,10 @@
-# G4 capability window, rung 1 — qwen3:14b
+# G4 capability window, rung 1: qwen3:14b
 
 **Date:** 2026-08-15 (verdict ~17:20 local; probe wall ~95 min incl. POST)
 **Status:** measured; the pre-registered decision applied
 **Protocol:** `2026-08-15-g4-protocol.md` including **Amendment 1 (§9)**,
 recorded and committed BEFORE this run (see attempt history below).
-**Gate:** `docs/gates.md` G4 — unamended.
+**Gate:** `docs/gates.md` G4, unamended.
 
 ## Verdict
 
@@ -25,15 +25,15 @@ read-only verbs.**
 
 ## Attempt history (all three attempts are part of this rung's record)
 
-1. **Attempt 1 (pre-branch, master @ 64d5b95):** refused at placement —
+1. **Attempt 1 (pre-branch, master @ 64d5b95):** refused at placement:
    the carried-debt **item 7** asymmetry, live (window VRAM-bound at
    27,913 tokens; placement needed exactly `ctx_overhead` more than the
    budget the window was sized against). Motivated the item-7 fix
    (spec §3b); the `Refusal` line is quoted in `docs/CARRIED-DEBT.md`.
 2. **Attempt 2 (post item-7 fix):** POST succeeded (the fix live-verified),
-   fixture 1 scored, fixture 2 **window-exhausted** — verbatim substrate
+   fixture 1 scored, fixture 2 **window-exhausted**: verbatim substrate
    refusal: `refusing: 24533 cached + 593 prompt + 1024 requested tokens
-   exceed the window of 25600 tokens` — and §3-as-written classified the
+   exceed the window of 25600 tokens`, and §3-as-written classified the
    resulting `TaskStatus::Error` as an infrastructure abort. Motivated
    **protocol Amendment 1** (§9, Brice-approved, committed before any
    re-run): mid-task window exhaustion is a *scored* outcome
@@ -45,7 +45,7 @@ read-only verbs.**
 
 - **Model:** `qwen3:14b` (ollama blob `sha256-a8cc1361…`, 9.3 GB), full
   offload (`n_gpu_layers` default), fits the card.
-- **Box/tier:** `enthusiast-16gb`, `emulated = false` — RTX 5080 16 GB,
+- **Box/tier:** `enthusiast-16gb`, `emulated = false`: RTX 5080 16 GB,
   Vulkan. Free-VRAM preflight 14,874 MiB; no competing GPU compute.
 - **bloomery:** branch `feat/partial-offload-capwindow` @ `80e719a`
   (item-7 fix + per-model tuning + Amendment-1 terminal; whole-branch
@@ -53,18 +53,18 @@ read-only verbs.**
 - **assay (boot POST):** pinned at `74c5b71` via git-archive + PYTHONPATH,
   as rung 0.
 - **Sampler:** greedy (substrate-pinned). Prompt path: raw completion, no
-  chat template — the lens every model gets; qwen3's thinking behavior is
+  chat template: the lens every model gets; qwen3's thinking behavior is
   measured as-is.
 - **Lens note (boot-time window):** the agent window depends on the static
   boot-time free-VRAM read (~25.6k tokens this boot). Attempt 2's
-  window-exhaustion did not recur in attempt 3 — a slightly larger boot
+  window-exhaustion did not recur in attempt 3, a slightly larger boot
   budget let the step budget bind first (13 StepsExhausted). The
   boot-time budget is part of the lens and is recorded here.
 
 ## Per-fixture record
 
 Recomputed from the committed journal's `CodecFixture` events: **20 rows,
-1 landed — equals the verdict's `landed/n`; the recomputability obligation
+1 landed, equals the verdict's `landed/n`; the recomputability obligation
 holds.** Tally: 13 `StepsExhausted`, 5 `SearchNotFound` (patch emitted but
 its search block didn't byte-match the file), 1 grant violation, 1 landed.
 
@@ -75,7 +75,7 @@ its search block didn't byte-match the file), 1 grant violation, 1 landed.
 | `py-countdown-range-off-by-one` | not landed | 16 | SearchNotFound (python lens) |
 | `py-discount-wrong-operator` | not landed | 18 | StepsExhausted |
 | `py-firstlast-wrong-index` | not landed | 14 | SearchNotFound (python lens) |
-| `py-shipping-wrong-boolean` | not landed | 4 | SearchNotFound — search block missing leading indentation |
+| `py-shipping-wrong-boolean` | not landed | 4 | SearchNotFound: search block missing leading indentation |
 | `py-greeting-wrong-fstring-var` | **landed** | 16 | patched (lens: python) |
 | `py-cart-total-missing-tax` | not landed | 18 | StepsExhausted |
 | `py-inventory-restock-threshold` | not landed | 18 | StepsExhausted |
@@ -96,11 +96,11 @@ its search block didn't byte-match the file), 1 grant violation, 1 landed.
 | model | landed | Wilson 95% | dominant failure mode |
 |---|---|---|---|
 | qwen2.5-coder 7B Q8 | 0/20 | [0.000, 0.161] | never emitted a valid action (`NoAction` ×142, `MultipleActions` ×82) |
-| qwen3:14b | 1/20 | [0.009, 0.236] | engages the envelope; patches fail byte-exact search matching (indentation drops — robigo's measured 7B failure mode, one size up) |
+| qwen3:14b | 1/20 | [0.009, 0.236] | engages the envelope; patches fail byte-exact search matching (indentation drops: robigo's measured 7B failure mode, one size up) |
 
 The step from 7B to 14B is real but small under this envelope: the 14B
 emits genuine `<action>` patches where the 7B produced none, and one
-landed — but `search_replace`'s byte-exactness (indentation included)
+landed, but `search_replace`'s byte-exactness (indentation included)
 defeats it. Both verdicts are non-provisional demotions; the recorded
 escalations remain the 27B rung (next) and the fine-tune flywheel.
 
@@ -112,7 +112,7 @@ model, per boot, until a run clears the floor.
 ## Caveats
 
 - Boots-only; greedy decoding; N=20 granularity; raw-completion prompt
-  path (no chat template) — all as rung 0.
+  path (no chat template), all as rung 0.
 - The window's boot-time VRAM dependence (lens note above) means attempt-2
   style window exhaustion can reappear on a tighter boot; Amendment 1 now
   scores it instead of aborting.

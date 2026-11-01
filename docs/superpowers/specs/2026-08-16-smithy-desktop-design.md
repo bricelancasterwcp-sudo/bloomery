@@ -1,15 +1,15 @@
-# smithy — the bloomery desktop (agent-first shell)
+# smithy: the bloomery desktop (agent-first shell)
 
 Brainstormed and approved section-by-section in conversation, 2026-08-15/16.
 Amends the umbrella spec (`2026-08-14-bloomery-design.md`): the "no
-userland" doctrine becomes **per-role** — the headless appliance role keeps
+userland" doctrine becomes **per-role**: the headless appliance role keeps
 it absolute; an optional desktop role may carry a display stack. The core
 role, the daemon, and Phases 2d–4 are untouched by this spec.
 
 ## 1. What smithy is (decision record)
 
 smithy is bloomery's human-side userland: an **agent-first Wayland shell**
-where the shell itself is the agent surface — you state intent to the
+where the shell itself is the agent surface, you state intent to the
 compositor, agents act through verbs and grants, the journal is your
 history, and KV suspend/resume becomes "save my whole working state."
 Conventional apps (Chrome included) run as guest windows from the host
@@ -17,13 +17,13 @@ distro.
 
 Three directions were considered and this one chosen:
 
-- (i) *Normal DE + agent HUD* — rejected: needs nothing from the bloomery
+- (i) *Normal DE + agent HUD*, rejected: needs nothing from the bloomery
   kernel; could be an app on any distro; the industry default already.
-- **(ii) Agent-first shell — chosen: the smallest surface that genuinely
+- **(ii) Agent-first shell, chosen: the smallest surface that genuinely
   requires the kernel; every kernel primitive maps to a visible desktop
   feature (KV image → workspace resume, grants → permission prompts,
   journal → history, verbs → what the shell can do).**
-- (iii) *Semantic desktop* — deferred, not foreclosed: depends on the
+- (iii) *Semantic desktop*, deferred, not foreclosed: depends on the
   semantic layer that does not exist yet; a semantic view can later grow
   inside (ii) as another way to navigate (the intent bar is where it
   would live).
@@ -31,7 +31,7 @@ Three directions were considered and this one chosen:
 Role model (the Linux analogy): same kernel, different sessions. `core` =
 today's headless appliance, unchanged, remains the default. `desktop` =
 an optional role. Near-term the desktop role needs no appliance image at
-all — smithy runs on stock Linux as the user's Wayland session, exactly
+all, smithy runs on stock Linux as the user's Wayland session, exactly
 as Phase 1 ran the daemon on stock Linux. Folding smithy into the
 appliance image as a boot role is deferred (out of scope here).
 
@@ -44,7 +44,7 @@ independently.
 1. **Manual-first, AI-optional.** smithy with the LLM off is a complete,
    good scrollable-tiling DE. Every agent capability is strictly
    additive; the shell never blocks on inference. (Fail-closed doctrine;
-   G4 demoted the 7B live — the desktop must be worth using the day that
+   G4 demoted the 7B live: the desktop must be worth using the day that
    happens again.)
 2. **The daemon stays the kernel.** The desktop is a client of the
    daemon's HTTP API. No desktop code links into the daemon; API
@@ -71,9 +71,9 @@ independently.
 
 | Component | What it is | Where it lives |
 |---|---|---|
-| `bloomery-daemon` | unchanged — the kernel | bloomery repo |
+| `bloomery-daemon` | unchanged: the kernel | bloomery repo |
 | `smithy-comp` | niri fork; thin delta | own repo, upstream remote, rebase cadence |
-| `smithy-shell` | new Rust process — the brain | new crate in bloomery repo (shares journal/API types) |
+| `smithy-shell` | new Rust process: the brain | new crate in bloomery repo (shares journal/API types) |
 
 `smithy-comp` delta (exhaustive by intent): intent-bar overlay surface;
 grant-prompt chrome (shell-owned, unspoofable by guest apps); window
@@ -105,19 +105,19 @@ It sits between the daemon's native agent API and the compositor IPC.
 
 ## 5. Desktop verb card (v1)
 
-Rides the existing task loop, codec ABI, and envelope-v3 unchanged —
-the desktop is one new verb card plus a grants profile.
+Rides the existing task loop, codec ABI, and envelope-v3 unchanged.
+The desktop is one new verb card plus a grants profile.
 
 - **Read-only** (survive demotion, no grants): `desktop.describe`,
   `journal.search`, `workspace.list`.
 - **Mutating, low blast radius** (grant `desktop.arrange`):
   `window.focus`, `window.move`, `window.resize`, `workspace.switch`.
 - **Mutating, real blast radius** (each its own grant):
-  - `app.launch` — grant `desktop.launch` **with an allowlist**
+  - `app.launch`, grant `desktop.launch` **with an allowlist**
     (launching arbitrary binaries is the scariest verb on the card);
-  - `workspace.snapshot` / `workspace.resume` — grant `desktop.session`
+  - `workspace.snapshot` / `workspace.resume`, grant `desktop.session`
     (resume loads a KV image = spends VRAM);
-  - `workspace.close` — always-confirm regardless of grant
+  - `workspace.close`, always-confirm regardless of grant
     (destructive).
 - **Absent by design:** file verbs, shell-execution verbs,
   browser-content verbs. v1 orchestrates windows, not app internals; a
@@ -127,12 +127,12 @@ the desktop is one new verb card plus a grants profile.
 
 A workspace snapshot is a manifest binding three things:
 
-1. **Agent core image** — the daemon's existing KV suspend/resume,
+1. **Agent core image**: the daemon's existing KV suspend/resume,
    verbatim (semantic-restore proven in Phase 1).
-2. **Window layout** — from the compositor snapshot hook: app identity
+2. **Window layout**: from the compositor snapshot hook: app identity
    (app-id + launch command), column/position geometry, focus state,
    metadata tags.
-3. **Grants state** — active grants at snapshot; on resume a grant
+3. **Grants state**: active grants at snapshot; on resume a grant
    re-attaches only if it still exists in the daemon's grant store,
    otherwise the next use re-prompts (no stale authority).
 
@@ -147,11 +147,11 @@ own tabs, unsaved buffers are gone. Requested-vs-actual lands in the
 journal as `WorkspaceResumed { matched, missing, substituted }`.
 
 Storage: manifests are content-addressed files beside the KV images in
-the daemon's data dir, **daemon-owned** — they reference its images, so
+the daemon's data dir, **daemon-owned**: they reference its images, so
 manifest lifecycle must be atomic with image GC. Snapshot and resume
 are journal events like everything else.
 
-## 7. Gate D1 — `desktop-tasks-v1`
+## 7. Gate D1: `desktop-tasks-v1`
 
 Same instrument discipline as G4, new fixture set:
 
@@ -166,26 +166,26 @@ Same instrument discipline as G4, new fixture set:
 
 Candidate model: **qwen3.8-27b Q3**, which earned mutating verbs on
 `codec-tasks-v1` (20/20, Wilson lower 0.839, envelope-v3; commit
-`206e183`). That result does **not** auto-clear D1 — it retires the
+`206e183`). That result does **not** auto-clear D1. It retires the
 "no capable model exists" risk, nothing more.
 
 ## 8. Slices (each independently useful)
 
-- **S1 — the fork lives.** smithy-comp boots as the daily Wayland
+- **S1: the fork lives.** smithy-comp boots as the daily Wayland
   session with zero agent features; upstream-tracking discipline
   established (thin delta, rebase cadence). Pure infrastructure,
   immediately usable.
-- **S2 — read-only smithy.** Intent bar + `desktop.describe` /
+- **S2, read-only smithy.** Intent bar + `desktop.describe` /
   `journal.search` / `workspace.list` + journal history view, wired to
   the daemon. Useful even with a demoted model. Includes the latency
   measurement (§4).
-- **S3 — mutation behind the gate.** Full verb card, grants flow,
+- **S3, mutation behind the gate.** Full verb card, grants flow,
   workspace snapshot/resume, D1 pre-registered and run. Mutating verbs
   default-off until D1 passes.
 
 ## 9. Non-goals (v1)
 
-DRM/Widevine (Netflix playback — later errand, not architecture);
+DRM/Widevine (Netflix playback, later errand, not architecture);
 Flatpak plumbing (matters only when the desktop role folds into the
 appliance image, itself deferred); appliance-image integration; file /
 shell / browser-content verbs; the semantic desktop (horizon, not
@@ -193,13 +193,13 @@ foreclosed); voice input (intent bar is keyboard-first).
 
 ## 10. Testing
 
-- **`smithy-shell`:** GPU-free unit tests for all logic — verb
+- **`smithy-shell`:** GPU-free unit tests for all logic, verb
   dispatch, grant flow, manifest match/restore including `missing` /
-  `substituted` paths, journal rendering — against mocked compositor
+  `substituted` paths, journal rendering, against mocked compositor
   IPC and daemon API. 80% bar, fmt/clippy `-D warnings`, same as the
   rest of the repo.
 - **`smithy-comp`:** upstream CI covers the compositor; our delta gets
-  integration tests in a nested session (niri runs nested in a window —
+  integration tests in a nested session (niri runs nested in a window,
   also the dev loop). E2E: scripted intent → verb → grant prompt →
   window-state assertion; deterministic waits only.
 - **Manual-first as a CI config, not a promise:** one path boots the

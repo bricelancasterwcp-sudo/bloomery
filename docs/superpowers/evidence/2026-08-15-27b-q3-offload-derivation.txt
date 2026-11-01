@@ -1,4 +1,4 @@
-# qwen3.8-27b Q3 (batiai/qwen3.8-27b:q3) partial-offload derivation — 2026-08-15 eve
+# qwen3.8-27b Q3 (batiai/qwen3.8-27b:q3) partial-offload derivation (2026-08-15) eve
 #
 # Subject identity: model × quant. This is a DIFFERENT subject from the
 # Q4 blob derived earlier today (2026-08-15-27b-offload-derivation.txt);
@@ -22,10 +22,10 @@
 #
 # ── Measured facts ──
 # * 55/65 units → 10,360.42 MiB VRAM ≈ 188.4 MiB per GPU unit.
-# * Compute buffer 505.00 MiB — fits the 640 MiB ctx_overhead reservation
+# * Compute buffer 505.00 MiB: fits the 640 MiB ctx_overhead reservation
 #   chosen for the 27B family (same as the Q4 derivation).
 # * Generation: 128 tokens in 8.26 s ≈ 15.5 tok/s at 55/65 (vs 5.3 tok/s
-#   for the Q4 blob at 30/66) — ~3× faster.
+#   for the Q4 blob at 30/66): ~3× faster.
 # * Thinks under the raw lens (first reply began "<think>"), as Q4.
 # * Full offload does NOT clear the accounting budget on this box
 #   (12,685 weights + 640 ctx vs ~13,000 avail after the 1 GiB margin);
@@ -33,7 +33,7 @@
 #   so physical fit is borderline; partial is the honest configuration.
 #
 # ── Candidate run configs (window arithmetic at a ~14,529 MiB-free boot,
-#    budget = free − 1024; pager kv charge 0.254 MiB/token — its known
+#    budget = free − 1024; pager kv charge 0.254 MiB/token: its known
 #    ~4× overcount for this hybrid arch is what makes windows this small) ──
 # n_gpu_layers=55: declared 10880 → window ≈  7.8k tokens, ~15.5 tok/s
 # n_gpu_layers=50: declared  9890 → window ≈ 11.7k tokens, est ~12-13 tok/s

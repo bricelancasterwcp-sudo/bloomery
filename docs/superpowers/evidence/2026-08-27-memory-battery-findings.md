@@ -1,4 +1,4 @@
-# memory-battery-v1 — gate findings: **PASS**
+# memory-battery-v1: gate findings: **PASS**
 
 **Date:** 2026-08-27 (both arms run back-to-back the same night; Brice's go:
 "go, gpu is free"). **Lock:** `docs/superpowers/evidence/2026-08-26-memory-battery-preregistration.md`
@@ -29,7 +29,7 @@ Archives (journals, ledgers, store file, daemon logs) under
 `.superpowers/sdd/2026-08-26-memory-battery/runs/arm-{c,m}/archive/`;
 the single gate output at `runs/gate-output.json`. The frozen corpus
 workspaces were `git restore`d to their locked bytes after arm M
-(48 of 50 carried landed patches — see §5).
+(48 of 50 carried landed patches. See §5).
 
 ## 3. The gate, verbatim from recompute
 
@@ -57,14 +57,14 @@ exact); H1 control stability diff 0.0; H2 first-exposure equivalence diff
 ## 4. Advisory endpoints (reported, never gating)
 
 - **Mechanism saturation in the good direction:** mint rate M-p1 **50/50**,
-  injection rate M-p2 **50/50** — the two-stage exact match (goal hash +
+  injection rate M-p2 **50/50**: the two-stage exact match (goal hash +
   pre-first-touch fingerprints) hit every byte-reset repeat.
-- **Steps median:** M-p2 **3.0** vs 4.0 in every other cell — the injected
+- **Steps median:** M-p2 **3.0** vs 4.0 in every other cell: the injected
   repeat typically skips one step of its trajectory.
-- **Within-M paired deltas:** median −16.0 tokens (n=50 pairs) — the paired
+- **Within-M paired deltas:** median −16.0 tokens (n=50 pairs): the paired
   form of the same effect E1 measures cross-arm.
-- **Wall medians (ms):** c_p1 453.0, c_p2 445.5, m_p1 442.5, **m_p2 476.5**
-  — injected repeats are ~7% *slower* by wall despite fewer tokens: the
+- **Wall medians (ms):** c_p1 453.0, c_p2 445.5, m_p1 442.5, **m_p2 476.5**.
+  Injected repeats are ~7% *slower* by wall despite fewer tokens: the
   injected block lengthens the prompt, and prefill outweighs the decode
   saving at this task size. An honest echo of crucible's B4 (retrieval
   slowed its 14B +10% wall); the token saving, not a wall saving, is what
@@ -72,13 +72,13 @@ exact); H1 control stability diff 0.0; H2 first-exposure equivalence diff
 - **Success rates:** 1.0 in all four cells, under the lock's pre-declared
   saturation note (ceiling models; success was never this battery's gate).
 
-## 5. The two contradictions — the organ's honesty path, live at scale
+## 5. The two contradictions: the organ's honesty path, live at scale
 
 `row_counts`: M minted 50 (phase 1) + 48 refreshes (phase 2) and journaled
 **2 `MemoryContradicted`** rows; the store ended `episodes: 50, verified:
 48, contradicted: 2`. The two contradicted tasks' phase-2 runs ended `Done`
 WITHOUT a landed patch (their workspace files stayed byte-identical to the
-frozen corpus — the post-run `git restore` touched 48 files, not 50), so
+frozen corpus: the post-run `git restore` touched 48 files, not 50), so
 the scored-outcome contradiction rule retired the episode each had been
 shown. Both tasks still count in E1's median at their full cost (ITT).
 That is slice 1's §5 semantics doing exactly what it was specified to do
@@ -90,7 +90,7 @@ Bootstrap B=10,000 seed 20260826; corpus seed 20260826, corpus sha
 `778b1491…` (manifest), freeze sha `d9df82e2…` (prereg §3.2); digests
 `7020b925…` on all four phase asserts; envelope v4; window_cap 16384;
 model name `qwen36-reap48-flywheel5`; driver constants 5.0 s poll /
-600 s deadline. Deviations from the lock: **none** — no amendment was
+600 s deadline. Deviations from the lock: **none**: no amendment was
 needed after the pre-lock §5.1 correction wave.
 
 ## 7. What this does and does not license
@@ -100,6 +100,6 @@ corpus, this model, this box. It does not license: token savings at other
 task sizes (the ~8% here is one corpus's number), wall-clock savings (the
 advisory says the opposite at this size), accuracy claims (ceiling), or
 anything about non-exact retrieval (the Phase-C prohibition stands). The
-natural next questions — larger/harder tasks where the prefill-vs-decode
-balance shifts, and the hardened-accuracy battery — are new
+natural next questions, larger/harder tasks where the prefill-vs-decode
+balance shifts, and the hardened-accuracy battery, are new
 pre-registrations per the sequencing ruling.

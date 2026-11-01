@@ -1,4 +1,4 @@
-# Flywheel turn 5 — training record (rental run, S3 upload, sha chain, costs)
+# Flywheel turn 5: training record (rental run, S3 upload, sha chain, costs)
 
 Governs: `docs/superpowers/evidence/2026-08-22-flywheel5-preregistration.md`
 (commit `84e5a57`). This document records what actually happened when the
@@ -10,7 +10,7 @@ verbatim, per the prereg's own amendment rule. A separate, second dated file
 assumptions that changed; this file is the factual run record.
 
 Turn cap: **$10**. Total spend this turn: **$0.4605308916 (pod 1, terminated)
-+ $5.8584331859 (pod 2, this run) = $6.3189640775 (≈$6.32)** — well within
++ $5.8584331859 (pod 2, this run) = $6.3189640775 (≈$6.32)**, well within
 cap. Balance: prereg-time $12.9647986767 → final $6.5490071799.
 
 ---
@@ -32,13 +32,13 @@ cap. Balance: prereg-time $12.9647986767 → final $6.5490071799.
 | balance before | $12.9453542323 | $12.4074403658 |
 | balance after | $12.4848233407 | $6.5490071799 |
 | spend | **$0.4605308916** | **$5.8584331859** |
-| outcome | **BLOCKED**: base-model upload over the pod's own SSH path measured ≈2.665 MB/s aggregate (≈21.3 Mbps) — the local box's outbound uplink ceiling, root-caused via `/proc/net/dev`, not a competing process or fixable transfer-method choice. Projected full upload ≈4h/≈$6.36 — would have consumed the whole cap before training started. Stop rule invoked; pod terminated at discovery. | **Full success**: base+corpus already on the volume via the out-of-band S3 upload (§2 below); smoke, full training, post-train chain, download, and teardown all completed. |
+| outcome | **BLOCKED**: base-model upload over the pod's own SSH path measured ≈2.665 MB/s aggregate (≈21.3 Mbps): the local box's outbound uplink ceiling, root-caused via `/proc/net/dev`, not a competing process or fixable transfer-method choice. Projected full upload ≈4h/≈$6.36: would have consumed the whole cap before training started. Stop rule invoked; pod terminated at discovery. | **Full success**: base+corpus already on the volume via the out-of-band S3 upload (§2 below); smoke, full training, post-train chain, download, and teardown all completed. |
 
 Both `costPerHr` figures deviate from the pre-registration's assumed
 $1.39/h COMMUNITY rate (COMMUNITY had zero A100-SXM4-80GB availability at
 both cut attempts, ≈9 hours apart, in the only two volume-capable datacenters
 that ever showed any stock). This is a datacenter-availability fact, not a
-recipe change — recorded formally in the amendment file.
+recipe change, recorded formally in the amendment file.
 
 Pod 2's `machineId`: `2kbys5tpjs02`. `memoryInGb: 250` (host RAM, ample for
 the CPU merge step later). 32 vCPU. SSH access appeared on the 7th poll of
@@ -50,28 +50,28 @@ a 25s cadence (≈3 min), within the 5-min budget.
 
 Pod 1's own SSH-path upload was infeasible at the local box's measured
 uplink (≈21 Mbps). Rather than accept a much larger cost cap, the base model
-was uploaded directly to RunPod's S3-compatible object API — **no pod
+was uploaded directly to RunPod's S3-compatible object API, **no pod
 running during the upload**, so it cost **$0 POD cost** regardless of how
-long it took — but, per the balance re-hash below, **not $0 account cost**.
+long it took, but, per the balance re-hash below, **not $0 account cost**.
 
 - **Tool**: `~/flywheel5/s3_upload.py` (local, not committed to the repo;
-  credentials via `~/.aws` profile `runpods3`, never CLI args, never logged
-  — matches the security rule against embedding secrets). Resumable
+  credentials via `~/.aws` profile `runpods3`, never CLI args, never logged,
+  matches the security rule against embedding secrets). Resumable
   multipart upload via `boto3`, state persisted to
   `~/flywheel5/s3-upload.state.json` after every part so a crash can resume
   without re-uploading completed parts.
 - **Endpoint**: `https://s3api-us-wa-1.runpod.io/`, region `us-wa-1`.
 - **Method**: 4,572 parts × 8 MiB each (`--part-mb 8`), **2 concurrent
-  threads** (`--concurrency 2`) — well below pod 1's 6-way parallelism,
+  threads** (`--concurrency 2`), well below pod 1's 6-way parallelism,
   because this transfer ran unattended for hours and didn't need to race a
   billed clock; the constraint was total wall time tolerance, not peak
   throughput.
 - **Measured rate**: **≈2.3 MB/s average** (from the upload's own per-part
-  log, `~/flywheel5/s3-upload.log`) — essentially the same uplink ceiling
+  log, `~/flywheel5/s3-upload.log`), essentially the same uplink ceiling
   pod 1's SSH-path measurement found (≈2.665 MB/s), confirming this is a
   genuine local-box uplink limit, not a pod-path-specific bottleneck.
 - **Timeline**: started ≈2026-08-22T19:36 CDT, last part (4572/4572)
-  completed 2026-08-22T23:57:40 CDT — **≈4h22m wall time**, entirely
+  completed 2026-08-22T23:57:40 CDT, **≈4h22m wall time**, entirely
   off the RunPod billing clock.
 - **Client-side crash on the last part, root-caused**: the uploader's
   `save_state()` (`~/flywheel5/s3_upload.py:58-61`) writes one shared
@@ -82,7 +82,7 @@ long it took — but, per the balance re-hash below, **not $0 account cost**.
   out from under the other, throwing
   `FileNotFoundError: [Errno 2] No such file or directory:
   '/home/brice/flywheel5/s3-upload.state.json.tmp' ->
-  '/home/brice/flywheel5/s3-upload.state.json'` — the two threads raced
+  '/home/brice/flywheel5/s3-upload.state.json'`: the two threads raced
   each other on `os.replace`, not a conflict with something else in the
   directory. A real bug in the uploader's state-file handling under
   concurrent access (fix: a lock around `save_state`, or per-thread tmp
@@ -90,7 +90,7 @@ long it took — but, per the balance re-hash below, **not $0 account cost**.
 - **The multipart upload itself completed successfully server-side** despite
   the client crash: `~/flywheel5/s3-upload.DONE` records
   `38349435696 (HEAD OK 2026-08-23T00:05:14 CDT; completed server-side
-  after the client-side timeout; upload session closed)` — a subsequent
+  after the client-side timeout; upload session closed)`, a subsequent
   `head_object` call confirmed the object existed at exactly the expected
   size before this task began.
 - **Verified independently on the pod** (§3): `ls -la` size and `sha256sum`
@@ -98,21 +98,20 @@ long it took — but, per the balance re-hash below, **not $0 account cost**.
   correct, not merely claimed.
 - **Observed account-balance drawdown during the "free" upload window, not
   fully explained**: re-hashing the ledger's own balance readings during the
-  two quiet windows (no pod running) gives a **baseline** storage trickle —
-  prereg-time balance → pod-1 cut, ≈3.99 h of quiet — of $0.019444 (≈
-  $0.00487/h, consistent with ≈$3.50/mo at 50 GB) — against the **S3-upload
-  window**'s drawdown — pod-1 teardown $12.4848233407 (~00:02Z) → pod-2
+  two quiet windows (no pod running) gives a **baseline** storage trickle (prereg-time balance → pod-1 cut, ≈3.99 h of quiet) of $0.019444 (≈
+  $0.00487/h, consistent with ≈$3.50/mo at 50 GB), against the **S3-upload
+  window**'s drawdown, pod-1 teardown $12.4848233407 (~00:02Z) → pod-2
   pre-cut $12.4074403658 (~05:06Z), a window almost entirely coincident
-  with the upload's active span (00:36→04:58Z) — of $0.077383 over ≈5.06 h
+  with the upload's active span (00:36→04:58Z), of $0.077383 over ≈5.06 h
   (≈$0.0153/h), **≈3.1× the baseline rate**. This is a real, measured
-  drawdown that is **not** the "$0 pod cost" the framing above describes —
-  it is unattributed account cost, not pod-billing cost. **Hypothesis, not
+  drawdown that is **not** the "$0 pod cost" the framing above describes.
+  It is unattributed account cost, not pod-billing cost. **Hypothesis, not
   verified**: a multipart upload's already-uploaded parts may occupy volume
   storage (up to ≈38 GB extra, on top of the 50 GB nominal volume) until the
   multipart upload completes, roughly doubling the billed storage footprint
   for the window; S3 API operation charges (per-part `PutObject` calls, ~4,572
   of them) may also contribute. Neither explanation is confirmed against
-  RunPod's actual billing model — flagged here as an open question, not
+  RunPod's actual billing model, flagged here as an open question, not
   closed.
 
 ---
@@ -127,22 +126,22 @@ polled via the output file, never `pgrep -f`).
   files present (`config.json generation_config.json
   tokenizer.json tokenizer_config.json vocab.json merges.txt
   chat_template.jinja reap_pruning.json summary.json`) plus
-  `model.safetensors` at exactly **38,349,435,696 bytes** — matches the
+  `model.safetensors` at exactly **38,349,435,696 bytes**: matches the
   S3 `head_object` size and the pre-registered expectation exactly.
-- `sha256sum model.safetensors` → **`8027ca0a8277b540cd4c62eb7a5bdf6028875e84b33ddcf4f9cd4b0e9d63423b`**
-  — **exact match** to the pre-registered value. Ran ≈3 min (uninterruptible-sleep-bound on the mfs read).
-- `sha256sum corpus.jsonl` → **`9c51a8668b4ce861dbe3c8528f59655a9a78eee12523f397b33e28d5d7928a7d`**
-  — **exact match**.
+- `sha256sum model.safetensors` → **`8027ca0a8277b540cd4c62eb7a5bdf6028875e84b33ddcf4f9cd4b0e9d63423b`**,
+  **exact match** to the pre-registered value. Ran ≈3 min (uninterruptible-sleep-bound on the mfs read).
+- `sha256sum corpus.jsonl` → **`9c51a8668b4ce861dbe3c8528f59655a9a78eee12523f397b33e28d5d7928a7d`**,
+  **exact match**.
 - Both matched exactly; training proceeded per the binding rule ("if it does
-  NOT match: STOP, terminate the pod, report BLOCKED" — not triggered).
+  NOT match: STOP, terminate the pod, report BLOCKED", not triggered).
 - `df -h /workspace /`: `/workspace` (mfs network volume backend) 615T/415T
-  used/200T avail (shared cluster backend, not the 50GB volume's own quota
-  — see §6 for why this distinction mattered); `/` (container disk, overlay)
+  used/200T avail (shared cluster backend, not the 50GB volume's own quota.
+  See §6 for why this distinction mattered); `/` (container disk, overlay)
   150G/3.9G used/147G avail. `free -g`: 2003 GB total host RAM.
 
 ---
 
-## 4. Environment — a deviation found and corrected before any job ran
+## 4. Environment: a deviation found and corrected before any job ran
 
 Followed the brief's Step 3 pip/clone/build chain verbatim: `pip install
 transformers==5.5.0 peft==0.20.0 accelerate==1.14.0 safetensors==0.8.0
@@ -180,18 +179,18 @@ Attempting uninstall: transformers
 Successfully installed ... transformers-4.57.6
 ```
 
-First version-check printed `2.11.0+cpu 4.57.6 0.20.0 False` — a smoke test
+First version-check printed `2.11.0+cpu 4.57.6 0.20.0 False`, a smoke test
 or training run in this state would have burned billed A100 time on
 CPU-only torch, a total waste of the rental.
 
-**Caught before the smoke test or any job started** — pure environment
+**Caught before the smoke test or any job started**: pure environment
 setup, no training number seen yet, not a mid-run recipe change.
 **Corrective action**: `pip install --break-system-packages "torch==2.9.1"
 --index-url https://download.pytorch.org/whl/cu129` then `pip install
 --break-system-packages "transformers==5.5.0"`. `pip freeze` re-captured
 (overwriting the polluted one), versions re-printed:
 
-**`2.9.1+cu129 5.5.0 0.20.0 True`** — exact match to the brief's expected
+**`2.9.1+cu129 5.5.0 0.20.0 True`**: exact match to the brief's expected
 string. `torchaudio 2.9.1+cu129` (already present, untouched by either pip
 call) confirms this is the same torch build the image originally shipped,
 not a different/incompatible one.
@@ -201,22 +200,22 @@ further `pip install` after this point.
 
 ---
 
-## 5. Smoke test (`--max-steps 5`) — PASS
+## 5. Smoke test (`--max-steps 5`): PASS
 
 Ran 2026-08-23T05:21:47Z → 05:25:35Z (≈3m48s wall; includes weight load + 1
 full eval pass over 221 val rows + 5 train micro-steps).
 
-- `model class Qwen3_5MoeForCausalLM; num_experts=133; layers=40` — matches.
+- `model class Qwen3_5MoeForCausalLM; num_experts=133; layers=40`, matches.
 - `trainable 21166080 / total 19194718848 (0.1103%) — experts+router
   frozen: asserted`. Trainable count (21,166,080 ≈ 21.17M) matches the
   spike's quoted figure almost exactly. The **percentage** (0.1103%) differs
   from the brief's quoted spike figure (0.0611%) because the total parameter
   count differs by base (REAP-48-pruned total 19.19B vs whatever the spike's
-  figure was computed against) — the brief explicitly names 0.0611% "the
+  figure was computed against): the brief explicitly names 0.0611% "the
   pre-registered expectation, not this run's measured value," so this is the
   real measurement superseding a placeholder, not a discrepancy.
-- `pairs: train=4340 val=221` — exact match to the prereg's stated split.
-- `label-check ok: 341 prompt tokens masked, tail='\n</action>'` — matches.
+- `pairs: train=4340 val=221`, exact match to the prereg's stated split.
+- `label-check ok: 341 prompt tokens masked, tail='\n</action>'`, matches.
 - 5 steps completed, `rc=0`. `eval_loss 0.4175` (56.85s, 3.887 it/s over 221
   rows), `train_loss 0.7223` (5-step summary only, not interpreted).
 - **Peak VRAM: 51,715 MiB** (~50.5 GB of 80 GB), from `nvidia-smi
@@ -224,21 +223,21 @@ full eval pass over 221 val rows + 5 train micro-steps).
   the run. **Provenance note**: this number comes from readings taken live
   during the run and recorded in this document; it was **not** written to
   any log file on the pod or brought home as an artifact, so there is no
-  independently-checkable file backing it — a runbook gap (the smoke step
+  independently-checkable file backing it, a runbook gap (the smoke step
   should redirect `nvidia-smi` polling to a log file, as the training and
   post-train phases do for their own progress markers). Reported as observed,
   not as artifact-verified.
 
 ---
 
-## 6. Training run — COMPLETE
+## 6. Training run: COMPLETE
 
 `train.DONE` + `train.EXIT` = **0**, launched via `setsid nohup
 train-wrapper.sh` (byte-identical to the brief's Step 5 script) at
 `≈2026-08-23T05:26Z`, done `08:17:13Z`.
 
 **`train_moe.py`'s live tqdm stream did not print intermediate `{'loss':
-...}` dicts during the full run** — a property of this HF Trainer /
+...}` dicts during the full run**, a property of this HF Trainer /
 `report_to=[]` combination observed live (the smoke run's *final* summary
 dict did print, since that fires unconditionally at `state.global_step ==
 max_steps` regardless of the periodic schedule). Not investigated further:
@@ -254,8 +253,8 @@ total_flos 4.473e17
 ```
 
 Total optimizer steps: **1086** (4340 train pairs × 2 epochs / grad-accum 8
-≈ 1085, +1 rounding) — matches the prereg's `PINNED_ARGS`. Measured pace
-over the first 10 steps: ≈9.2 s/optimizer-step (≈1.15 s/micro-step) —
+≈ 1085, +1 rounding), matches the prereg's `PINNED_ARGS`. Measured pace
+over the first 10 steps: ≈9.2 s/optimizer-step (≈1.15 s/micro-step),
 **faster than the brief's ≤1.52 s/micro-step upper bound**, holding roughly
 steady (7-10 s/optimizer-step) for the whole run.
 
@@ -290,9 +289,9 @@ steady (7-10 s/optimizer-step) for the whole run.
 | **1086 (final)** | **0.000985** | 2.000 |
 
 Monotonic-ish decline with a step-300 bump; converges to ≈0.001 by step
-≈600 and stays flat — consistent with a completion-only-loss objective on a
+≈600 and stays flat, consistent with a completion-only-loss objective on a
 structured, low-entropy action-grammar corpus. **Per the prereg's honesty
-line, eval loss is monitored, never a gate signal** — reported here for the
+line, eval loss is monitored, never a gate signal**, reported here for the
 record only; the battery (G4/G5, human-gated) is the sole decision
 instrument.
 
@@ -301,7 +300,7 @@ instrument.
 `/workspace/flywheel5/adapter/`: `adapter_model.safetensors`
 (**84,751,528 bytes**), `adapter_config.json`, `tokenizer.json`,
 `tokenizer_config.json`, `chat_template.jinja`, `README.md`,
-`trainer_state.json`. Adapter size ≈84.75 MB bf16 — roughly double the
+`trainer_state.json`. Adapter size ≈84.75 MB bf16, roughly double the
 brief's "~40MB" pre-registered estimate (peft saves both LoRA A/B matrices
 at full bf16 without additional compression); a size note, not a recipe
 deviation.
@@ -310,14 +309,14 @@ deviation.
 
 ## 7. Post-train chain
 
-### Merge — succeeded
+### Merge: succeeded
 
-`peft.PeftModel.merge_and_unload()` on CPU (per `free -g` ≥80GB check —
-host has 2003GB), bf16. `=== merge === 2026-08-23T08:17:59Z` → `merged ok`.
-Saved to `/root/flywheel5-scratch/merged/` — see the storage-location
+`peft.PeftModel.merge_and_unload()` on CPU (per `free -g` ≥80GB check.
+Host has 2003GB), bf16. `=== merge === 2026-08-23T08:17:59Z` → `merged ok`.
+Saved to `/root/flywheel5-scratch/merged/`. See the storage-location
 deviation below for why not `/workspace`.
 
-### First `convert_hf_to_gguf.py --outtype bf16` attempt — FAILED
+### First `convert_hf_to_gguf.py --outtype bf16` attempt: FAILED
 
 At `2026-08-23T08:28:30Z`, `rc=1`:
 
@@ -335,7 +334,7 @@ MTP-inclusion path is active by default, it asserts `opt_num_mtp_layers !=
 actual `mtp.*` tensors during indexing, which runs *after* `__init__`. On a
 checkpoint that truly has no MTP tensors, this assertion fails immediately,
 before indexing ever has a chance to prove there's nothing to count. A
-genuine tooling gap for MTP-free checkpoints in this converter revision —
+genuine tooling gap for MTP-free checkpoints in this converter revision,
 not a bug in the training recipe or corpus.
 
 **Fix**: `convert_hf_to_gguf.py` defines `--no-nextn` / `--no-mtp` (`dest
@@ -345,38 +344,38 @@ True`, which skips the MTP-layer-counting branch in `_QwenMtpMixin.__init__`
 entirely, leaving `block_count = hparams["num_hidden_layers"]` (40) exactly
 as expected, no assertion touched. **This is the conversion tool's own
 supported mechanism for a checkpoint property (`mtp_num_hidden_layers: 0`)
-that was already known and pre-registered before training started — not a
+that was already known and pre-registered before training started, not a
 metadata patch, not a recipe change.** The merge output was preserved (not
 re-run); the chain resumed from the convert step via a new
 `posttrain2.log`/`.EXIT`/`.DONE` sequence with `--no-mtp` added (the failed
 `posttrain.log` kept as evidence, not deleted).
 
-### Second convert attempt (`--no-mtp`) — succeeded
+### Second convert attempt (`--no-mtp`): succeeded
 
 `2026-08-23T08:31:15Z` → wrote `/root/flywheel5-scratch/fw5-bf16.gguf`,
 **36,626,527,552 bytes**, exporting all tensors normally (`output.weight`,
 `token_embd.weight`, `blk.0.*` including `ssm_a`, `ssm_alpha`, `ssm_beta`,
-`attn_qkv` — consistent with the hybrid attention/Gated-DeltaNet
+`attn_qkv`, consistent with the hybrid attention/Gated-DeltaNet
 architecture). `llama_model_quantize_impl: model size = 36593.80 MiB (16.01
 BPW)` at the quantize step confirms this bf16 GGUF is the expected size.
 
-### Quantize Q4_K_M — succeeded
+### Quantize Q4_K_M: succeeded
 
 `/workspace/llama.cpp/build/bin/llama-quantize ... Q4_K_M`:
 `quant size = 11200.56 MiB (4.90 BPW)`, `quantize time = 128831.85 ms`
 (≈2.15 min). Output `qwen36-reap48-flywheel5-Q4_K_M.gguf`, exactly
 **11,755,624,192 bytes**.
 
-### `block_count` check — PASS, no STOP
+### `block_count` check: PASS, no STOP
 
-**`block_count 40`** — exact match to the prereg's expectation. The
-brief's binding rule ("a 41 here is a STOP — do not metadata-patch, report")
+**`block_count 40`**: exact match to the prereg's expectation. The
+brief's binding rule ("a 41 here is a STOP. Do not metadata-patch, report")
 was not triggered.
 
-### `nextn`/`mtp` metadata — confirmed absent
+### `nextn`/`mtp` metadata: confirmed absent
 
 Explicitly checked via `gguf.GGUFReader` over all 42 kv fields in the final
-Q4_K_M GGUF: **no key matched `nextn` or `mtp`** — confirming `--no-mtp`
+Q4_K_M GGUF: **no key matched `nextn` or `mtp`**: confirming `--no-mtp`
 produced a clean, architecturally correct MTP-free GGUF, not merely an
 omitted-but-implied field.
 
@@ -393,22 +392,22 @@ abfcf6596db2c072d840e33b6e86907c51f2f062a2e8e233890079c173c5a6b6  adapter_model.
 The network volume `s8qomynzbd` (`/workspace`) is nominally **50 GB**; the
 base model alone already occupies 38.35 GB of it, leaving only ≈11.6 GB of
 headroom. The brief's post-train wrapper writes the merged bf16 checkpoint
-(~38 GB) and the bf16 GGUF (~38 GB) — both explicitly scratch, "die with the
-pod" per the brief's own text — which would not fit in that headroom. The
+(~38 GB) and the bf16 GGUF (~38 GB) (both explicitly scratch, "die with the
+pod" per the brief's own text) which would not fit in that headroom. The
 container disk (`/`, overlay) has 150 GB total / 147 GB free and is not
 subject to the volume's quota. **Deviation**: `merged/`, `fw5-bf16.gguf`,
 and the final Q4_K_M GGUF were written to `/root/flywheel5-scratch/`
 instead of `/workspace/flywheel5/...`. The adapter (already written by the
 training run to `/workspace/flywheel5/adapter/`, ~85 MB, fits the volume's
 headroom fine) was left where the training job put it. Storage-location fix
-only — no training hyperparameter, seed, corpus, or recipe value changed;
+only, no training hyperparameter, seed, corpus, or recipe value changed;
 decided before the post-train step ran, not after seeing any number from
 it.
 
 ### CARRIED-DEBT candidate (recorded per controller ruling)
 
 "the prune tool zeroes `mtp_num_hidden_layers` for absent MTP weights;
-llama.cpp `8672290`'s converter asserts on 0 unless `--no-mtp` is passed —
+llama.cpp `8672290`'s converter asserts on 0 unless `--no-mtp` is passed:
 the tool should delete the key (or the runbook must pass `--no-mtp`), and
 the prune GGUF test must cover this converter path."
 
@@ -419,22 +418,22 @@ the prune GGUF test must cover this converter path."
 - Small artifacts (adapter files, `trainer_state.json`, `train.log`,
   `pip-freeze.txt`, `smoke.log`, `posttrain2.log`, the failed
   `posttrain.log` [kept], `train-wrapper.out`, `base.sha`, `corpus.sha`,
-  `env-setup.log`, `env-fix.log`) — plain `scp`.
+  `env-setup.log`, `env-fix.log`), plain `scp`.
 - **Q4_K_M GGUF** (11,755,624,192 bytes): **6 parallel byte-range `dd`
   streams** (`bs=1M skip=$((i*1869)) count=1869`, `i=0..5`) over ssh,
-  redirected to local part files, `cat`'d together in order — adapted from
+  redirected to local part files, `cat`'d together in order, adapted from
   the brief's split+scp method to ssh+dd since the source now lives on the
   container disk (`/root/flywheel5-scratch/`) rather than a directory scp's
   split-file convention addresses directly. **Local size exactly matches**
   (11,755,624,192 bytes). **sha256 of the reassembled local file:
-  `7020b925c07c5a3808e1155700ca707598cb4f6d6089bb6daff4147b4d6b00bd` —
+  `7020b925c07c5a3808e1155700ca707598cb4f6d6089bb6daff4147b4d6b00bd`:
   MATCHES the pod's value exactly.**
-- Adapter sha256 at home: `abfcf6596db2c072d840e33b6e86907c51f2f062a2e8e233890079c173c5a6b6` — matches.
-- Corpus sha256 at home: `9c51a8668b4ce861dbe3c8528f59655a9a78eee12523f397b33e28d5d7928a7d` — matches.
+- Adapter sha256 at home: `abfcf6596db2c072d840e33b6e86907c51f2f062a2e8e233890079c173c5a6b6`, matches.
+- Corpus sha256 at home: `9c51a8668b4ce861dbe3c8528f59655a9a78eee12523f397b33e28d5d7928a7d`, matches.
 - `~/flywheel5/SHAS.txt` updated with the full chain (base / corpus
   before+after / adapter / Q4_K_M pod+home) plus the `block_count`/`nextn`
   facts.
-- **No local boot attempted** — Task 11's job, per instructions.
+- **No local boot attempted**: Task 11's job, per instructions.
 
 ---
 
@@ -473,7 +472,7 @@ Balance: prereg-time $12.9647986767 → final $6.5490071799.
 3. **Environment**: `pip install -r requirements-convert_hf_to_gguf.txt`
    clobbered the pinned `torch 2.9.1+cu129`/`transformers 5.5.0` with
    `torch 2.11.0+cpu`/`transformers 4.57.6` (exact pins in that
-   requirements file) — caught and corrected before the smoke test (§4).
+   requirements file), caught and corrected before the smoke test (§4).
 4. **Storage**: merge/bf16-GGUF/Q4_K_M scratch redirected from the 50GB
    network volume (headroom exhausted by the base model) to the 150GB
    container disk (§7).

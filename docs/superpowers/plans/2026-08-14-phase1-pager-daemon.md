@@ -1,10 +1,10 @@
-# bloomery Phase 1 — Pager Daemon Implementation Plan
+# bloomery Phase 1: Pager Daemon Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the Phase 1 pager daemon — "the serving daemon that doesn't lie": multi-agent priority paging of weights + KV images on one consumer GPU, embedded assay POST, replayable journal, and an honest OpenAI-compatible `/v1` shim — passing gate G2.
+**Goal:** Build the Phase 1 pager daemon ("the serving daemon that doesn't lie": multi-agent priority paging of weights + KV images on one consumer GPU, embedded assay POST, replayable journal, and an honest OpenAI-compatible `/v1` shim), passing gate G2.
 
-**Architecture:** A Rust workspace with three library crates and two binaries. `bloomery-core` is pure logic (GGUF metadata, the window law, budgets, journal types, assay-profile ingestion, the residency planner). `bloomery-substrate` defines the `Substrate` trait with a scripted `FakeSubstrate` (all unit tests run GPU-free) and a feature-gated llama.cpp implementation (Vulkan kernels — own the daemon, rent the kernels). `bloomery-daemon` wires them into the pager, agent table, KV image store, native HTTP API, `/v1` shim, and assay-as-POST boot. `bloomery-bench` is the G2 instrument, computing its numbers from the journal alone.
+**Architecture:** A Rust workspace with three library crates and two binaries. `bloomery-core` is pure logic (GGUF metadata, the window law, budgets, journal types, assay-profile ingestion, the residency planner). `bloomery-substrate` defines the `Substrate` trait with a scripted `FakeSubstrate` (all unit tests run GPU-free) and a feature-gated llama.cpp implementation (Vulkan kernels, own the daemon, rent the kernels). `bloomery-daemon` wires them into the pager, agent table, KV image store, native HTTP API, `/v1` shim, and assay-as-POST boot. `bloomery-bench` is the G2 instrument, computing its numbers from the journal alone.
 
 **Tech Stack:** Rust (stable, edition 2021). Dependency allowlist (pinned in workspace `Cargo.toml`, nothing else without a plan amendment): `llama-cpp-2` (+ `llama-cpp-sys-2`, feature `vulkan`), `tiny_http`, `serde` + `serde_json`, `toml`, `sha2`. Python 3.12+ with `assay` installed is a runtime dependency of the POST only.
 
@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - **Law 1:** the window is computed, never read: `usable = min(training_ctx, (free_vram − weights − overhead)/kv_per_token, user_cap)`, always reporting which term bound it.
-- **Law 2:** never send/accept a prompt that does not fit — refuse with the arithmetic, never truncate.
+- **Law 2:** never send/accept a prompt that does not fit, refuse with the arithmetic, never truncate.
 - **Law 4:** every inference reply is contract-checked (token stats present); `ContractViolation` is first-class; infrastructure failure is never recorded as model failure.
 - **Law 5:** unmeasured ≠ failed: `Option`/named-reason for unmeasured values, never a defaulted number that looks like a measurement.
 - **Law 6:** no inference without an explicit budget; spent-vs-granted accounted per agent.
@@ -26,7 +26,7 @@
 
 ---
 
-### Task 1: Phase 0 — prior-art verification and decision record
+### Task 1: Phase 0: prior-art verification and decision record
 
 **Files:**
 - Create: `docs/priorart/2026-08-14-phase0-priorart.md`
@@ -37,21 +37,21 @@
 
 This is a research task, not TDD. Its deliverable is a decision record that either **confirms or overturns** the following pre-registered defaults. Per the spec's reuse rule, an overturned D2 triggers a plan amendment before any pager code is written.
 
-- [ ] **Step 1: Verify D1 — llama.cpp bindings and state APIs.**
+- [ ] **Step 1: Verify D1, llama.cpp bindings and state APIs.**
 
 Default: the `llama-cpp-2` crate (feature `vulkan`) can (a) load a GGUF with `n_gpu_layers`, (b) create a context with per-context `n_ctx`, (c) decode and expose real token counts, and (d) save/restore full context state. Check the crate docs/source (`docs.rs/llama-cpp-2`, `github.com/utilityai/llama-cpp-rs`) and llama.cpp's C API (`llama.h`) for the exact symbols: expected `llama_state_get_size`, `llama_state_get_data`, `llama_state_set_data` (and the `_seq_` variants). Record: the crate wrapper names if safe wrappers exist, else the `llama-cpp-sys-2` raw symbols Task 11 will call through `unsafe`. Also record whether the crate exposes the model's chat template (`llama_model_chat_template` / apply helpers) for Task 15's D4.
 
-- [ ] **Step 2: Verify D2 — nobody already ships the pager.**
+- [ ] **Step 2: Verify D2, nobody already ships the pager.**
 
-Default: no existing OSS system provides priority-driven paging of **weights + KV images across multiple agents on one consumer GPU**. Survey (gh search + docs, ~30 min, breadth not depth): vLLM PagedAttention (expected: VRAM-internal paging for serving farms), SGLang radix/prefix cache, LMCache, Ollama's scheduler/`keep_alive`, llama.cpp `llama-server` slot save/restore, exo, AIOS. For each: one paragraph — what it pages, for whom, and why it does or doesn't cover the bloomery pager. Verdict: if something covers ≥80% of Tasks 12–13, STOP and amend the plan to wrap it instead (spec §9 last risk).
+Default: no existing OSS system provides priority-driven paging of **weights + KV images across multiple agents on one consumer GPU**. Survey (gh search + docs, ~30 min, breadth not depth): vLLM PagedAttention (expected: VRAM-internal paging for serving farms), SGLang radix/prefix cache, LMCache, Ollama's scheduler/`keep_alive`, llama.cpp `llama-server` slot save/restore, exo, AIOS. For each: one paragraph, what it pages, for whom, and why it does or doesn't cover the bloomery pager. Verdict: if something covers ≥80% of Tasks 12–13, STOP and amend the plan to wrap it instead (spec §9 last risk).
 
-- [ ] **Step 3: Verify D3 and D4 — HTTP and chat templating.**
+- [ ] **Step 3: Verify D3 and D4: HTTP and chat templating.**
 
 D3 default: `tiny_http` supports chunked responses adequate for SSE streaming (Task 15); else fall back to `hyper` (allowed but must be recorded as an allowlist change). D4 default: chat templating uses the model's embedded template via llama.cpp if the binding exposes it; else the documented fallback is the plain concatenation `"{role}: {content}\n"` + `"assistant: "` (record which one Task 15 gets).
 
 - [ ] **Step 4: Write the decision record and commit.**
 
-`docs/priorart/2026-08-14-phase0-priorart.md` sections: D1 (with exact symbol names), D2 (survey table + verdict), D3, D4, and "Overturned defaults" (empty section if none — the section must exist so silence is distinguishable from omission).
+`docs/priorart/2026-08-14-phase0-priorart.md` sections: D1 (with exact symbol names), D2 (survey table + verdict), D3, D4, and "Overturned defaults" (empty section if none: the section must exist so silence is distinguishable from omission).
 
 ```bash
 git add docs/priorart/2026-08-14-phase0-priorart.md
@@ -60,7 +60,7 @@ git commit -m "docs: phase 0 prior-art verification (D1-D4)"
 
 ---
 
-### Task 2: Phase 0 — pin the gates
+### Task 2: Phase 0: pin the gates
 
 **Files:**
 - Create: `docs/gates.md`
@@ -71,7 +71,7 @@ git commit -m "docs: phase 0 prior-art verification (D1-D4)"
 
 - [ ] **Step 1: Write `docs/gates.md` pinning all four gates.**
 
-Copy spec §6 and pin final values (adopt the provisional numbers unless Task 1 found a feasibility reason to change one — if changed, state the reason in the doc). Must include, verbatim commitments:
+Copy spec §6 and pin final values (adopt the provisional numbers unless Task 1 found a feasibility reason to change one, if changed, state the reason in the doc). Must include, verbatim commitments:
 
 - **G1 (runs Phase 2, pinned now):** tiny-model policy beats the deterministic heuristic on useful-work-per-GPU-second by ≥10%, contract-violation rate ≤5%, per-decision latency ≤500 ms. Pinned metric: `useful_work = Σ over completed infer calls of completion_tokens × (priority + 1) / 256`, divided by wall-clock GPU-seconds of the run; computable from `InferCompleted` + `AgentCreated` journal events alone.
 - **G2 (this plan):** p95 **warm** agent switch (KV image in RAM, weights resident) ≤ 2000 ms; p95 **cold** switch (weights not resident, image on NVMe) ≤ 5000 ms. Protocol: ≥50 switches per class on the enthusiast-16GB tier (declared `--real-hardware`), model qwen2.5-coder:7b-instruct-q8_0, computed by `bloomery-bench report` from `PagerOp` journal events only. Page-cache caveat for cold switches must be stated in the evidence doc.
@@ -94,7 +94,7 @@ git commit -m "docs: pin gates G1-G4 (pre-registered before instruments exist)"
 - Test: `crates/bloomery-core/tests/gguf_test.rs`
 
 **Interfaces:**
-- Produces: `pub struct GgufMeta { pub arch: String, pub layers: u32, pub kv_heads: u32, pub head_dim: u32, pub training_ctx: u32, pub weights_bytes: u64 }`, `pub fn parse_gguf_meta(path: &Path) -> Result<GgufMeta, GgufError>`, `pub enum GgufError { BadMagic, UnsupportedVersion(u32), MissingKey(String), Io(std::io::Error) }` — consumed by Tasks 4, 12.
+- Produces: `pub struct GgufMeta { pub arch: String, pub layers: u32, pub kv_heads: u32, pub head_dim: u32, pub training_ctx: u32, pub weights_bytes: u64 }`, `pub fn parse_gguf_meta(path: &Path) -> Result<GgufMeta, GgufError>`, `pub enum GgufError { BadMagic, UnsupportedVersion(u32), MissingKey(String), Io(std::io::Error) }`, consumed by Tasks 4, 12.
 
 - [ ] **Step 1: Scaffold the workspace.**
 
@@ -199,7 +199,7 @@ Expected: compile error, `gguf` unresolved.
 
 - [ ] **Step 4: Implement `gguf.rs`.**
 
-Reader over `BufReader<File>`: check magic; version must be 3 (else `UnsupportedVersion`); skip tensor_count; loop kv_count times reading key + typed value into a `HashMap<String, GgufValue>` where `enum GgufValue { U8(u8), I8(i8), U16(u16), I16(i16), U32(u32), I32(i32), F32(f32), Bool(bool), Str(String), U64(u64), I64(i64), F64(f64), Array }` — arrays (tag 9) are read as `u32` elem-type + `u64` len and **skipped element-by-element** (strings need per-element length reads), stored as `Array`. Then resolve: `arch` from `general.architecture` (string, else `MissingKey`); `layers` = `{arch}.block_count`; `kv_heads` = `{arch}.attention.head_count_kv`; `head_dim` = `{arch}.attention.key_length` if present, else `{arch}.embedding_length / {arch}.attention.head_count` (both required in that branch, `MissingKey` names whichever is absent); `training_ctx` = `{arch}.context_length`. Integer lookups accept `U32` or `U64` tags (real blobs vary). `weights_bytes` from `std::fs::metadata(path)?.len()`.
+Reader over `BufReader<File>`: check magic; version must be 3 (else `UnsupportedVersion`); skip tensor_count; loop kv_count times reading key + typed value into a `HashMap<String, GgufValue>` where `enum GgufValue { U8(u8), I8(i8), U16(u16), I16(i16), U32(u32), I32(i32), F32(f32), Bool(bool), Str(String), U64(u64), I64(i64), F64(f64), Array }`. Arrays (tag 9) are read as `u32` elem-type + `u64` len and **skipped element-by-element** (strings need per-element length reads), stored as `Array`. Then resolve: `arch` from `general.architecture` (string, else `MissingKey`); `layers` = `{arch}.block_count`; `kv_heads` = `{arch}.attention.head_count_kv`; `head_dim` = `{arch}.attention.key_length` if present, else `{arch}.embedding_length / {arch}.attention.head_count` (both required in that branch, `MissingKey` names whichever is absent); `training_ctx` = `{arch}.context_length`. Integer lookups accept `U32` or `U64` tags (real blobs vary). `weights_bytes` from `std::fs::metadata(path)?.len()`.
 
 - [ ] **Step 5: Run tests, verify pass; commit.**
 
@@ -212,7 +212,7 @@ git commit -m "feat: workspace scaffold + GGUF metadata parser"
 
 ---
 
-### Task 4: Geometry — the window law
+### Task 4: Geometry: the window law
 
 **Files:**
 - Create: `crates/bloomery-core/src/geometry.rs`
@@ -318,7 +318,7 @@ fn kv_arithmetic_matches_measured_qwen() {
 
 - [ ] **Step 3: Implement.**
 
-`kv_bytes_per_token`: `2 * layers * kv_heads * head_dim * 2` as u64 math. `usable_window`: build candidate list of `(tokens, BoundBy)`: always `(training_ctx, TrainingCtx)`; if `free_vram_bytes` is `Some(v)` push `((v.saturating_sub(weights).saturating_sub(overhead) / kv_per_token) as u32, Vram)`; if `user_cap` push; if `measured_ceiling` push. Take the minimum by tokens — **ties resolve in declaration order** (TrainingCtx < Vram < UserCap < MeasuredCeiling wins only when strictly smaller; on equal tokens the earlier term is reported). `vram_unmeasured = free_vram_bytes.is_none()`.
+`kv_bytes_per_token`: `2 * layers * kv_heads * head_dim * 2` as u64 math. `usable_window`: build candidate list of `(tokens, BoundBy)`: always `(training_ctx, TrainingCtx)`; if `free_vram_bytes` is `Some(v)` push `((v.saturating_sub(weights).saturating_sub(overhead) / kv_per_token) as u32, Vram)`; if `user_cap` push; if `measured_ceiling` push. Take the minimum by tokens, **ties resolve in declaration order** (TrainingCtx < Vram < UserCap < MeasuredCeiling wins only when strictly smaller; on equal tokens the earlier term is reported). `vram_unmeasured = free_vram_bytes.is_none()`.
 
 - [ ] **Step 4: Run tests → pass; clippy + fmt clean.**
 
@@ -339,7 +339,7 @@ git commit -m "feat: window law - usable_window with binding-term report"
 - Test: `crates/bloomery-core/tests/vram_test.rs`
 
 **Interfaces:**
-- Produces: `pub fn free_vram_bytes<R: Fn(&str, &[&str]) -> std::io::Result<String>>(run: R) -> Option<u64>` — the injectable runner keeps tests process-free; the daemon (Task 12) passes a real `std::process::Command` runner calling `nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits`.
+- Produces: `pub fn free_vram_bytes<R: Fn(&str, &[&str]) -> std::io::Result<String>>(run: R) -> Option<u64>`: the injectable runner keeps tests process-free; the daemon (Task 12) passes a real `std::process::Command` runner calling `nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits`.
 
 - [ ] **Step 1: Failing tests.**
 
@@ -374,7 +374,7 @@ fn garbage_output_is_none() {
 - [ ] **Step 2: Run → compile failure.**
 - [ ] **Step 3: Implement** (call runner with `"nvidia-smi"` + the query args; first line, trim, `parse::<u64>().ok()? * 1024 * 1024`).
 - [ ] **Step 4: Run → pass; clippy/fmt.**
-- [ ] **Step 5: Commit** — `feat: VRAM probe with honest None on failure`.
+- [ ] **Step 5: Commit**: `feat: VRAM probe with honest None on failure`.
 
 ---
 
@@ -426,7 +426,7 @@ fn charge_records_actuals_even_past_granted() {
 }
 ```
 
-- [ ] **Step 2: Run → failure. Step 3: Implement (remaining = `granted.saturating_sub(spent)`). Step 4: Run → pass. Step 5: Commit** — `feat: per-agent token budgets (check/charge, spent-vs-granted)`.
+- [ ] **Step 2: Run → failure. Step 3: Implement (remaining = `granted.saturating_sub(spent)`). Step 4: Run → pass. Step 5: Commit**: `feat: per-agent token budgets (check/charge, spent-vs-granted)`.
 
 ---
 
@@ -471,9 +471,9 @@ pub fn replay(path: &std::path::Path) -> std::io::Result<Vec<Event>>;
 pub fn sha256_hex(s: &str) -> String;
 ```
 
-`image_tier` on `PagerOp` is `"ram"` or `"nvme"` — this is what lets `bloomery-bench` classify warm vs cold switches from the journal alone (gate law: journal-computable).
+`image_tier` on `PagerOp` is `"ram"` or `"nvme"`. This is what lets `bloomery-bench` classify warm vs cold switches from the journal alone (gate law: journal-computable).
 
-- [ ] **Step 1: Failing test — append/replay round-trip.**
+- [ ] **Step 1: Failing test, append/replay round-trip.**
 
 ```rust
 use bloomery_core::journal::*;
@@ -500,8 +500,8 @@ fn prompt_hash_is_stable() {
 }
 ```
 
-- [ ] **Step 2: Run → failure. Step 3: Implement** (`BufWriter` + `serde_json::to_string` + `\n` + `flush()` per append; `replay` = per-line `from_str`, error on any unparseable line — a corrupt journal must fail loudly, not skip silently). `sha256_hex` via `sha2`.
-- [ ] **Step 4: Run → pass. Step 5: Commit** — `feat: replayable JSONL journal (events for infer/pager/scheduler)`.
+- [ ] **Step 2: Run → failure. Step 3: Implement** (`BufWriter` + `serde_json::to_string` + `\n` + `flush()` per append; `replay` = per-line `from_str`, error on any unparseable line, a corrupt journal must fail loudly, not skip silently). `sha256_hex` via `sha2`.
+- [ ] **Step 4: Run → pass. Step 5: Commit**: `feat: replayable JSONL journal (events for infer/pager/scheduler)`.
 
 ---
 
@@ -572,11 +572,11 @@ fn old_schema_rejected_by_name() {
 }
 ```
 
-- [ ] **Step 2: Run → failure. Step 3: Implement** (serde with `Option` everywhere; verdict strings map `"ready"→Ready` etc., anything else or absent → `Unmeasured`). **Step 4: Run → pass. Step 5: Commit** — `feat: assay profile ingestion (schema v2+, verdicts, measured ceiling)`.
+- [ ] **Step 2: Run → failure. Step 3: Implement** (serde with `Option` everywhere; verdict strings map `"ready"→Ready` etc., anything else or absent → `Unmeasured`). **Step 4: Run → pass. Step 5: Commit**: `feat: assay profile ingestion (schema v2+, verdicts, measured ceiling)`.
 
 ---
 
-### Task 9: Scheduler — the residency planner
+### Task 9: Scheduler: the residency planner
 
 **Files:**
 - Create: `crates/bloomery-core/src/scheduler.rs`
@@ -601,7 +601,7 @@ pub enum Placement {
 pub fn plan_residency(residents: &[Resident], req: &ResidencyRequest, free_vram_bytes: u64) -> Placement;
 ```
 
-Deterministic mechanism only (law 8 — no LLM policy in Phase 1). Rules: fits in free VRAM → `Fits`. Else evict **idle** residents with **strictly lower** priority, lowest priority first (ties: larger `kv_bytes` first, then lexical id for determinism), until the freed sum + free covers `req.kv_bytes`. Never evict `busy` residents or priority ≥ `req.priority`. If unreachable → `Refuse` with `reclaimable` = total evictable bytes.
+Deterministic mechanism only (law 8, no LLM policy in Phase 1). Rules: fits in free VRAM → `Fits`. Else evict **idle** residents with **strictly lower** priority, lowest priority first (ties: larger `kv_bytes` first, then lexical id for determinism), until the freed sum + free covers `req.kv_bytes`. Never evict `busy` residents or priority ≥ `req.priority`. If unreachable → `Refuse` with `reclaimable` = total evictable bytes.
 
 - [ ] **Step 1: Failing tests.**
 
@@ -653,7 +653,7 @@ fn tie_break_is_deterministic() {
 }
 ```
 
-- [ ] **Step 2: Run → failure. Step 3: Implement** (collect evictable, sort by `(priority, Reverse(kv_bytes), id)`, accumulate until covered). **Step 4: Run → pass. Step 5: Commit** — `feat: deterministic residency planner (priority eviction, refusal arithmetic)`.
+- [ ] **Step 2: Run → failure. Step 3: Implement** (collect evictable, sort by `(priority, Reverse(kv_bytes), id)`, accumulate until covered). **Step 4: Run → pass. Step 5: Commit**: `feat: deterministic residency planner (priority eviction, refusal arithmetic)`.
 
 ---
 
@@ -752,7 +752,7 @@ fn contract_rejects_missing_stats() {
 ```
 
 - [ ] **Step 2: Run → failure. Step 3: Implement.** FakeSubstrate: `HashMap<CtxHandle, String>` history; `save_state` = history bytes; `load_state` = restore; handles from a counter; scripted replies popped FIFO (empty queue → `SubstrateError::Infer("script exhausted")`). `enforce_contract`: both stats present or `MissingStats`.
-- [ ] **Step 4: Run → pass. Step 5: Commit** — `feat: substrate trait + scripted fake + stats contract enforcement`.
+- [ ] **Step 4: Run → pass. Step 5: Commit**: `feat: substrate trait + scripted fake + stats contract enforcement`.
 
 ---
 
@@ -764,7 +764,7 @@ fn contract_rejects_missing_stats() {
 - Test: `crates/bloomery-substrate/tests/llama_live_test.rs`
 
 **Interfaces:**
-- Consumes: exact symbol names recorded in Task 1's decision record (D1) — those supersede the sketch below if they differ.
+- Consumes: exact symbol names recorded in Task 1's decision record (D1). Those supersede the sketch below if they differ.
 - Produces: `pub struct LlamaSubstrate;` with `pub fn new() -> Result<LlamaSubstrate, SubstrateError>`, implementing `Substrate`.
 
 - [ ] **Step 1: Write the live test (fails for the right reason first: type absent).**
@@ -795,7 +795,7 @@ fn live_infer_reports_stats_and_state_round_trips() {
 
 - [ ] **Step 2: Implement `LlamaSubstrate`.**
 
-Sketch (adjust names to Task 1's D1 record): hold `LlamaBackend` + maps `ModelHandle → LlamaModel`, `CtxHandle → LlamaContext`. `load_model`: `LlamaModel::load_from_file(&backend, path, &LlamaModelParams::default().with_n_gpu_layers(n))`, timed (Task 13 journals `ModelLoaded`). `create_context`: `model.new_context(&backend, LlamaContextParams::default().with_n_ctx(NonZeroU32::new(n_ctx)))`. `infer`: tokenize prompt (`model.str_to_token(prompt, AddBos::Always)` on a fresh context, `AddBos::Never` on a restored one — track per-ctx whether state was loaded), decode via `LlamaBatch`, sample greedily up to `max_tokens` or EOG; `prompt_tokens` = tokenized length, `completion_tokens` = decoded count — **real counts by construction** (we counted them; no path constructs a `Reply` with `None` here). `save_state`/`load_state`: safe wrappers if the crate has them, else `unsafe` through `llama_cpp_sys_2::{llama_state_get_size, llama_state_get_data, llama_state_set_data}` on the raw context pointer, per D1. Borrow-check note: `LlamaContext` borrows its model in `llama-cpp-2` — if the map-of-contexts fights the borrow checker, store contexts in a self-referential-free design: keep `(ModelHandle, LlamaContext<'static>)` via `Box::leak` of models is NOT acceptable; instead scope contexts inside an arena struct that owns models and contexts together, and expose only handles (implementer's choice; the trait surface is what's fixed).
+Sketch (adjust names to Task 1's D1 record): hold `LlamaBackend` + maps `ModelHandle → LlamaModel`, `CtxHandle → LlamaContext`. `load_model`: `LlamaModel::load_from_file(&backend, path, &LlamaModelParams::default().with_n_gpu_layers(n))`, timed (Task 13 journals `ModelLoaded`). `create_context`: `model.new_context(&backend, LlamaContextParams::default().with_n_ctx(NonZeroU32::new(n_ctx)))`. `infer`: tokenize prompt (`model.str_to_token(prompt, AddBos::Always)` on a fresh context, `AddBos::Never` on a restored one (track per-ctx whether state was loaded), decode via `LlamaBatch`, sample greedily up to `max_tokens` or EOG; `prompt_tokens` = tokenized length, `completion_tokens` = decoded count), **real counts by construction** (we counted them; no path constructs a `Reply` with `None` here). `save_state`/`load_state`: safe wrappers if the crate has them, else `unsafe` through `llama_cpp_sys_2::{llama_state_get_size, llama_state_get_data, llama_state_set_data}` on the raw context pointer, per D1. Borrow-check note: `LlamaContext` borrows its model in `llama-cpp-2`, if the map-of-contexts fights the borrow checker, store contexts in a self-referential-free design: keep `(ModelHandle, LlamaContext<'static>)` via `Box::leak` of models is NOT acceptable; instead scope contexts inside an arena struct that owns models and contexts together, and expose only handles (implementer's choice; the trait surface is what's fixed).
 
 - [ ] **Step 3: Verify GPU-free suite is untouched.**
 
@@ -806,11 +806,11 @@ Run: `cargo test --workspace` (no `--features llama`) → all pass, llama code n
 Run: `BLOOMERY_LIVE=1 BLOOMERY_TEST_GGUF=$HOME/.ollama/models/blobs/<qwen-q8-blob> cargo test -p bloomery-substrate --features llama,vulkan -- --ignored live_infer`
 Expected: PASS. (Blob path: resolve via `ollama show qwen2.5-coder:7b-instruct-q8_0 --modelfile` FROM line, or any standalone GGUF on disk.)
 
-- [ ] **Step 5: Commit** — `feat: llama.cpp substrate (vulkan) with state save/restore`.
+- [ ] **Step 5: Commit**: `feat: llama.cpp substrate (vulkan) with state save/restore`.
 
 ---
 
-### Task 12: Daemon skeleton — config, agent table, KV image store
+### Task 12: Daemon skeleton: config, agent table, KV image store
 
 **Files:**
 - Create: `crates/bloomery-daemon/Cargo.toml` (deps: `bloomery-core`, `bloomery-substrate`, `tiny_http`, `serde`, `serde_json`, `toml`, `sha2`; feature `llama` forwarding to substrate), `crates/bloomery-daemon/src/main.rs`, `crates/bloomery-daemon/src/config.rs`, `crates/bloomery-daemon/src/agents.rs`
@@ -905,7 +905,7 @@ fn digest_changes_with_content() {
 Config test: write a minimal TOML to a tempfile (`port`, one model, `tier = { name = "enthusiast-16gb", emulated = false }`, `assay = { enabled = false, python = "python3" }`), assert defaults fill (`overhead_mib == 1024`, `allow_unprofiled == false`), and a missing `models` table yields a named error containing `"models"`.
 
 - [ ] **Step 2: Run → failure. Step 3: Implement.** `main.rs` for now: parse `--config path`, `load_config`, open journal at `data_dir/journal/boot-<unix_ts>.jsonl`, append `Event::Boot`, print listening message, exit 0 (server loop lands in Task 14).
-- [ ] **Step 4: Run → pass; clippy/fmt. Step 5: Commit** — `feat: daemon config, agent table, digest-tagged KV image store`.
+- [ ] **Step 4: Run → pass; clippy/fmt. Step 5: Commit**: `feat: daemon config, agent table, digest-tagged KV image store`.
 
 ---
 
@@ -952,11 +952,11 @@ pub enum PagerError {
 Behavior contract (this is the heart of Phase 1):
 
 1. `create_agent`: window from `usable_window` (GeometryInput from meta + live `free_vram()` + overhead + cap + profile's `measured_ceiling`) → journal `AgentCreated`. No VRAM committed yet (`Fresh`).
-2. `infer`: budget `check(max_tokens)` (refuse → journal `BudgetRefused`); prompt-size gate: `estimate ≤ window` where estimate = `prompt.len()/3 + max_tokens` chars→tokens floor — conservative, and the *substrate's* real tokenization refusal in Task 11 is the backstop (law 2: refuse, never truncate) → journal `Refusal`; ensure resident: `plan_residency` over `AgentTable::residents()` → on `Evict(victims)`: for each victim `save_state` → `put_ram` + journal `PagerOp{EvictSave, image_tier:"ram"}` → `destroy_context`; on `Refuse` → `PagerError::Refused` + journal; then create context (loading model first if needed, journal `ModelLoaded`), and if an image exists `take(id, digest)`: `Ram`→`load_state` + journal `PagerOp{ResumeLoad, image_tier:"ram"}`; `Nvme`→ same with `"nvme"`; `StaleDigest`→ journal `Degraded{reason:"stale image digest, cold start"}` and proceed fresh; run `substrate.infer` → `enforce_contract` (violation → journal `ContractViolation`, return `PagerError::Contract` — infrastructure, never model failure) → `budget.charge(prompt+completion)` → journal `InferStarted`/`InferCompleted` around the call.
+2. `infer`: budget `check(max_tokens)` (refuse → journal `BudgetRefused`); prompt-size gate: `estimate ≤ window` where estimate = `prompt.len()/3 + max_tokens` chars→tokens floor, conservative, and the *substrate's* real tokenization refusal in Task 11 is the backstop (law 2: refuse, never truncate) → journal `Refusal`; ensure resident: `plan_residency` over `AgentTable::residents()` → on `Evict(victims)`: for each victim `save_state` → `put_ram` + journal `PagerOp{EvictSave, image_tier:"ram"}` → `destroy_context`; on `Refuse` → `PagerError::Refused` + journal; then create context (loading model first if needed, journal `ModelLoaded`), and if an image exists `take(id, digest)`: `Ram`→`load_state` + journal `PagerOp{ResumeLoad, image_tier:"ram"}`; `Nvme`→ same with `"nvme"`; `StaleDigest`→ journal `Degraded{reason:"stale image digest, cold start"}` and proceed fresh; run `substrate.infer` → `enforce_contract` (violation → journal `ContractViolation`, return `PagerError::Contract`, infrastructure, never model failure) → `budget.charge(prompt+completion)` → journal `InferStarted`/`InferCompleted` around the call.
 3. `suspend`: save_state → `put_ram` → `spill()` → journal `PagerOp{SuspendSave, image_tier:"nvme"}` → destroy context.
 4. VRAM accounting for `plan_residency`: `free = free_vram() − Σ resident kv_bytes` conservative model; `free_vram() == None` → journal `Degraded{reason:"vram unmeasured"}` once and fall back to residency-count cap of 1 (the most conservative honest behavior).
 
-- [ ] **Step 1: Write the failing test — the journaled eviction story.**
+- [ ] **Step 1: Write the failing test: the journaled eviction story.**
 
 ```rust
 use bloomery_daemon::pager::*;
@@ -1043,7 +1043,7 @@ fn budget_exhaustion_refuses_before_the_call() {
 ```
 
 - [ ] **Step 2: Run → failure. Step 3: Implement `pager.rs`** per the behavior contract above (keep it under 400 lines; if it grows, split journaling helpers into `pager_journal.rs`).
-- [ ] **Step 4: Run → pass; clippy/fmt. Step 5: Commit** — `feat: pager - priority eviction, KV image round-trip, refusals, journaled`.
+- [ ] **Step 4: Run → pass; clippy/fmt. Step 5: Commit**: `feat: pager - priority eviction, KV image round-trip, refusals, journaled`.
 
 ---
 
@@ -1062,7 +1062,7 @@ fn budget_exhaustion_refuses_before_the_call() {
   - `POST /agents/{id}/suspend` → `204`; `POST /agents/{id}/resume` → `204`
   - `POST /models/{name}/unload` → `204` (cold-switch bench support)
   - `GET /status` → `200` `StatusReport` JSON (residents, windows, budgets, vram, tier)
-- Produces for tests + bench: `pub fn serve<S: Substrate + Send + 'static>(pager: Pager<S>, port: u16) -> (u16, ServerHandle)` — binds `127.0.0.1:port` (0 = ephemeral, returns actual), `ServerHandle::shutdown()`.
+- Produces for tests + bench: `pub fn serve<S: Substrate + Send + 'static>(pager: Pager<S>, port: u16) -> (u16, ServerHandle)`, binds `127.0.0.1:port` (0 = ephemeral, returns actual), `ServerHandle::shutdown()`.
 
 Error-code mapping is part of the contract: refusals are structured JSON with the arithmetic (law 2), never a truncated success.
 
@@ -1100,10 +1100,10 @@ fn create_infer_and_refusal_over_http() {
 }
 ```
 
-`test_support` (in `bloomery-daemon/src/test_support.rs`, `#[cfg(any(test, feature = "test-support"))]` — the integration tests and bench enable feature `test-support`): builds a `Pager<FakeSubstrate>` with one registered fake model (qwen-like meta, small window), 32 scripted ok-replies, tempdir journal/images, `free_vram` = 1 GiB, and calls `serve(pager, 0)`.
+`test_support` (in `bloomery-daemon/src/test_support.rs`, `#[cfg(any(test, feature = "test-support"))]`: the integration tests and bench enable feature `test-support`): builds a `Pager<FakeSubstrate>` with one registered fake model (qwen-like meta, small window), 32 scripted ok-replies, tempdir journal/images, `free_vram` = 1 GiB, and calls `serve(pager, 0)`.
 
 - [ ] **Step 2: Run → failure. Step 3: Implement** `http.rs` (parse method/path/segments, read body, `respond_json(status, value)`) + `api_native.rs` (match routes → pager calls → error mapping table above) + `main.rs`: after boot, `serve(pager, config.port)` and block. Threading: `tiny_http` server on its own thread pool of 4, pager behind `Arc<Mutex<_>>` (coarse lock is Phase 1-correct: one GPU, serialized inference is reality, and G2 measures switches not concurrency).
-- [ ] **Step 4: Run → pass; clippy/fmt. Step 5: Commit** — `feat: native HTTP API with structured refusals`.
+- [ ] **Step 4: Run → pass; clippy/fmt. Step 5: Commit**: `feat: native HTTP API with structured refusals`.
 
 ---
 
@@ -1111,7 +1111,7 @@ fn create_infer_and_refusal_over_http() {
 
 **Files:**
 - Create: `crates/bloomery-daemon/src/api_v1.rs`
-- Modify: `crates/bloomery-daemon/src/http.rs` (route dispatch), `crates/bloomery-daemon/src/api_native.rs` (none — shared serve loop dispatches on path prefix)
+- Modify: `crates/bloomery-daemon/src/http.rs` (route dispatch), `crates/bloomery-daemon/src/api_native.rs` (none, shared serve loop dispatches on path prefix)
 - Test: `crates/bloomery-daemon/tests/api_v1_test.rs`
 
 **Interfaces:**
@@ -1120,9 +1120,9 @@ fn create_infer_and_refusal_over_http() {
   - `GET /v1/models` → `{object:"list", data:[{id:"<model-name>", object:"model", owned_by:"bloomery"}]}`
   - `POST /v1/chat/completions` `{model, messages, max_tokens?, stream?}`:
     - Non-stream: `200` OpenAI-shaped response; **`usage` always populated with real counts** (`prompt_tokens`, `completion_tokens`, `total_tokens`).
-    - Oversize: `400 {"error":{"type":"invalid_request_error","code":"prompt_too_large","message":"prompt needs <N> tokens; window is <W> (bound by <term>); refusing rather than truncating","param":"messages"}}` — the honest-refusal contract, never silent truncation.
-    - `stream:true`: SSE per D3 — `data: {chunk with delta}` lines, final chunk carries `usage`, then `data: [DONE]`.
-  - Prompt assembly per D4 (model chat template if exposed, else the documented `"{role}: {content}\n"` + `"assistant: "` fallback — record which in the response header `X-Bloomery-Template: model|fallback`).
+    - Oversize: `400 {"error":{"type":"invalid_request_error","code":"prompt_too_large","message":"prompt needs <N> tokens; window is <W> (bound by <term>); refusing rather than truncating","param":"messages"}}`: the honest-refusal contract, never silent truncation.
+    - `stream:true`: SSE per D3: `data: {chunk with delta}` lines, final chunk carries `usage`, then `data: [DONE]`.
+  - Prompt assembly per D4 (model chat template if exposed, else the documented `"{role}: {content}\n"` + `"assistant: "` fallback, record which in the response header `X-Bloomery-Template: model|fallback`).
   - Session binding: header `X-Bloomery-Agent: <id>` routes to an existing agent (KV/prefix reuse across calls); absent → ephemeral agent at `default_priority`/`default_budget_tokens`, removed after the response.
 
 - [ ] **Step 1: Failing tests.**
@@ -1165,8 +1165,8 @@ fn models_lists_configured_models() {
 
 (Reuse the `http` helper by moving it into `tests/common/mod.rs`; both integration test files `mod common;` it.)
 
-- [ ] **Step 2: Run → failure. Step 3: Implement** non-stream + `/v1/models` first; then SSE streaming (Phase 1 streaming may buffer whole-reply and emit it as one delta chunk + usage + `[DONE]` — honest note in the code: chunked *token* streaming needs a streaming `Substrate::infer` and is recorded in the README as a known Phase 1 limit; the wire format is already SSE-correct so clients work today).
-- [ ] **Step 4: Run → pass; clippy/fmt. Step 5: Commit** — `feat: /v1 shim - real usage, honest prompt_too_large refusal, SSE`.
+- [ ] **Step 2: Run → failure. Step 3: Implement** non-stream + `/v1/models` first; then SSE streaming (Phase 1 streaming may buffer whole-reply and emit it as one delta chunk + usage + `[DONE]`, honest note in the code: chunked *token* streaming needs a streaming `Substrate::infer` and is recorded in the README as a known Phase 1 limit; the wire format is already SSE-correct so clients work today).
+- [ ] **Step 4: Run → pass; clippy/fmt. Step 5: Commit**: `feat: /v1 shim - real usage, honest prompt_too_large refusal, SSE`.
 
 ---
 
@@ -1197,9 +1197,9 @@ impl PostRunner {
 pub enum PostError { Spawn(String), NonZeroExit { code: i32, stderr: String }, BadProfile(String) }
 ```
 
-Boot sequence in `main.rs` (the chicken-and-egg resolution from the spec discussion): load config → open journal → `Event::Boot` → register models **unprofiled** (POST-only provisional admission: the daemon marks itself `posting` and `/v1` accepts calls while `posting` regardless of profiles) → start server → if `assay.enabled`: for each model run `PostRunner::probe` against `127.0.0.1:{port}`, attach the returned `Profile` to the model, journal `Event::Post{outcome:"ok"}`; on `PostError`: journal `Post{outcome:"failed: …"}` + `Degraded{reason}` — the model stays unprofiled, and after POST completes the `posting` flag drops so normal admission (law 5) applies. `assay.enabled=false` → journal `Degraded{reason:"POST disabled by config"}`.
+Boot sequence in `main.rs` (the chicken-and-egg resolution from the spec discussion): load config → open journal → `Event::Boot` → register models **unprofiled** (POST-only provisional admission: the daemon marks itself `posting` and `/v1` accepts calls while `posting` regardless of profiles) → start server → if `assay.enabled`: for each model run `PostRunner::probe` against `127.0.0.1:{port}`, attach the returned `Profile` to the model, journal `Event::Post{outcome:"ok"}`; on `PostError`: journal `Post{outcome:"failed: …"}` + `Degraded{reason}`. The model stays unprofiled, and after POST completes the `posting` flag drops so normal admission (law 5) applies. `assay.enabled=false` → journal `Degraded{reason:"POST disabled by config"}`.
 
-- [ ] **Step 1: Failing tests (fake runner — no python, no GPU).**
+- [ ] **Step 1: Failing tests (fake runner, no python, no GPU).**
 
 ```rust
 use bloomery_daemon::post::{PostRunner, PostError};
@@ -1267,7 +1267,7 @@ fn command_line_is_exactly_the_documented_invocation() {
 Plus a pager-level test: `create_agent` on an unprofiled model with `allow_unprofiled=false` → `PagerError::Unprofiled`; with `true` → succeeds and the journal contains `Degraded{reason}` mentioning the model.
 
 - [ ] **Step 2: Run → failure. Step 3: Implement** (`std::process::Command` real runner; profile read back from the `--json` path, not stdout). Wire boot sequence + `posting` flag + `allow_unprofiled` into pager admission.
-- [ ] **Step 4: Run → pass; clippy/fmt. Step 5: Commit** — `feat: assay POST at boot, profile-gated admission, degraded boot`.
+- [ ] **Step 4: Run → pass; clippy/fmt. Step 5: Commit**: `feat: assay POST at boot, profile-gated admission, degraded boot`.
 
 ---
 
@@ -1282,11 +1282,11 @@ Plus a pager-level test: `create_agent` on an unprofiled model with `allow_unpro
 **Interfaces:**
 - Consumes: journal `Event`/`PagerOpKind` (Task 7), native API (Task 14).
 - Produces:
-  - `bloomery-bench switch --daemon http://127.0.0.1:8181 --model qwen --agents 4 --rounds 30 --window 2048` — creates N agents, round-robins one short infer each per round (N chosen so residency cap forces eviction every switch), prints nothing but progress; all measurement lives in the daemon journal.
-  - `bloomery-bench report --journal <path>` — prints JSON: `{"warm": {"n": _, "p50_ms": _, "p95_ms": _}, "cold": {...}}`. Classification: a switch sample = the sum of `duration_ms` over the contiguous pager-op sequence serving one resume (`EvictSave` of the victim + `ResumeLoad` of the target, plus `ModelLoaded` if present); **warm** = `ResumeLoad` with `image_tier=="ram"` and no `ModelLoaded` in the sequence; **cold** = `image_tier=="nvme"` or a `ModelLoaded` present. p95 = value at index `ceil(0.95 * n) - 1` of the sorted sample (pin the formula in code comment — the gate is judged on it).
+  - `bloomery-bench switch --daemon http://127.0.0.1:8181 --model qwen --agents 4 --rounds 30 --window 2048`, creates N agents, round-robins one short infer each per round (N chosen so residency cap forces eviction every switch), prints nothing but progress; all measurement lives in the daemon journal.
+  - `bloomery-bench report --journal <path>`, prints JSON: `{"warm": {"n": _, "p50_ms": _, "p95_ms": _}, "cold": {...}}`. Classification: a switch sample = the sum of `duration_ms` over the contiguous pager-op sequence serving one resume (`EvictSave` of the victim + `ResumeLoad` of the target, plus `ModelLoaded` if present); **warm** = `ResumeLoad` with `image_tier=="ram"` and no `ModelLoaded` in the sequence; **cold** = `image_tier=="nvme"` or a `ModelLoaded` present. p95 = value at index `ceil(0.95 * n) - 1` of the sorted sample (pin the formula in code comment. The gate is judged on it).
   - `pub fn compute_report(events: &[Event]) -> SwitchReport` (pure; the CLI wraps it).
 
-- [ ] **Step 1: Failing report test (synthetic journal — the gate math is pinned by test).**
+- [ ] **Step 1: Failing report test (synthetic journal. The gate math is pinned by test).**
 
 ```rust
 use bloomery_core::journal::{Event, PagerOpKind};
@@ -1340,7 +1340,7 @@ Expected: ≥50 warm and ≥50 cold samples; p95 warm ≤ 2000 ms, p95 cold ≤ 
 
 - [ ] **Step 5: Write the evidence doc and README; commit.**
 
-`docs/superpowers/evidence/<date>-g2-agent-switch.md`: box (tier declared, GPU, driver), model + digest, daemon commit, bench invocation verbatim, the report JSON verbatim, verdict vs the pinned gate, **the page-cache caveat for cold switches stated**, and the journal file committed or referenced. If G2 **fails**: the evidence doc still ships with the numbers, and the plan stops for redesign per the gate — do not tune-and-rerun without a recorded protocol change.
+`docs/superpowers/evidence/<date>-g2-agent-switch.md`: box (tier declared, GPU, driver), model + digest, daemon commit, bench invocation verbatim, the report JSON verbatim, verdict vs the pinned gate, **the page-cache caveat for cold switches stated**, and the journal file committed or referenced. If G2 **fails**: the evidence doc still ships with the numbers, and the plan stops for redesign per the gate, do not tune-and-rerun without a recorded protocol change.
 
 `README.md`: what bloomery is (2 paragraphs from the spec), Phase 1 status (what works, what's honest-but-limited: buffered SSE, coarse lock, NVIDIA-only VRAM probe), quick start (config example, daemon, bench), links to spec/gates/evidence. Honest-status section mirrors the house style (robigo/assay READMEs).
 
@@ -1353,6 +1353,6 @@ git commit -m "feat: G2 bench instrument + live evidence + README"
 
 ## Self-review (performed at plan-writing time)
 
-- **Spec coverage:** Phase 1 scope from spec §5 — pager (Tasks 9, 12, 13), embedded assay POST (Task 16), journal (Task 7, exercised in 13), `/v1` shim (Task 15), G2 (Tasks 2, 17). Phase 0 (Task 1, 2). Laws 1–7 each land in a named task; law 8 is satisfied by the deterministic-only planner (no LLM policy in Phase 1); law 9 by Task 2. Capabilities/codec/policy plane are Phase 2 — correctly absent.
+- **Spec coverage:** Phase 1 scope from spec §5, pager (Tasks 9, 12, 13), embedded assay POST (Task 16), journal (Task 7, exercised in 13), `/v1` shim (Task 15), G2 (Tasks 2, 17). Phase 0 (Task 1, 2). Laws 1–7 each land in a named task; law 8 is satisfied by the deterministic-only planner (no LLM policy in Phase 1); law 9 by Task 2. Capabilities/codec/policy plane are Phase 2, correctly absent.
 - **Placeholder scan:** no TBDs. Two deliberate deferred-decision points are *named and bounded*: Task 11's exact binding symbols (resolved by Task 1's D1 record, which is a hard prerequisite) and Task 15's streaming granularity (buffered SSE with the limit recorded in README).
 - **Type consistency:** `Event`/`PagerOpKind` (Task 7) used by 13 and 17 match; `Placement` (9) consumed in 13; `Reply`/`VerifiedReply` (10) in 11/13/14; `ImageFetch` (12) in 13; `Profile` (8) in 12/16; `serve`/`test_support::serve_fake` (14) in 15.

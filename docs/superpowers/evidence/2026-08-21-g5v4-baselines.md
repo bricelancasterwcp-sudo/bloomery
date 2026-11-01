@@ -1,17 +1,17 @@
-# G5-on-v4 baselines — `qwen3-14b-flywheel3` and stock `qwen3:14b`
+# G5-on-v4 baselines: `qwen3-14b-flywheel3` and stock `qwen3:14b`
 
 **Date:** 2026-08-21. **Gate:** G5 under `2026-08-21-g5v4-protocol.md`
 (including its dated §5 reason-grounding amendment, ruling bF/R1), fixture
 set `codec-tasks-v4-mixed` (frozen at `70375e4`; 16 patch + 16 refuse),
 **envelope-v4**, greedy, advisory. Both boots also exercise the G4 probe on
-`codec-tasks-v1` first (same boot, same daemon) — recorded as corroborating
+`codec-tasks-v1` first (same boot, same daemon), recorded as corroborating
 context under envelope-v4, **not** the headline. These two runs are turn 4's
 own anchors: stock is the floor, flywheel3 is the incumbent. Journals + tasks
 JSONL committed beside this doc.
 
 ---
 
-## 1. Expectations (PRE-REGISTERED — written and committed BEFORE the first boot)
+## 1. Expectations (PRE-REGISTERED: written and committed BEFORE the first boot)
 
 **Written 2026-08-21, before either daemon was started.** Any amendment after
 the first boot is a SEPARATE dated file, never an in-place edit of this
@@ -32,11 +32,11 @@ are **never** written as a delta, a change, an improvement or a regression
 against anything measured in this document (spec §5, §7). A sentence of the
 form "fw3 went from X to Y" does not appear in this file.
 
-### 1.2 stock `qwen3:14b` — the floor
+### 1.2 stock `qwen3:14b`: the floor
 
 Expectation: both v4 classes land **well below** the ≥13/16 floor. Stock has
 no task-shaped training of any kind; its recorded failure mode under the
-previous envelope was that it never obtained file bytes at all — six
+previous envelope was that it never obtained file bytes at all, six
 identical failing reads per fixture, most of them grant violations on
 invented `src/`-prefixed paths.
 
@@ -58,7 +58,7 @@ Named honest possibilities under v4, in advance:
 **A stock class at or above the floor would be a genuine surprise and is
 recorded as one.**
 
-### 1.3 flywheel3 — the incumbent, and the pre-registered question
+### 1.3 flywheel3: the incumbent, and the pre-registered question
 
 flywheel3 trained on **333 run trajectories** under a prompt that **never
 rendered the grant**. The turn-4 spike diagnosed the resulting zero-`run`
@@ -70,14 +70,14 @@ collapsed to the majority (spec §1). envelope-v4 makes the grant visible.
 **The pre-registered question: does the VISIBLE GRANT ALONE make flywheel3
 run on the 5 run-granted fixtures?**
 
-- **If yes** — well-formed `run` steps appear on the run-granted slice (and
-  not on the ungranted fixtures) — then **the cue was the whole problem**.
+- **If yes**, well-formed `run` steps appear on the run-granted slice (and
+  not on the ungranted fixtures), then **the cue was the whole problem**.
   The run behaviour was trained and latent all along, waiting only for an
   input it could condition on. That would mean envelope-v4 buys the endpoint
   that turn 4's retrain was designed to buy, and the finding is worth more
   than the adapter.
-- **If no** — the run-granted trajectories still show `read → patch → done`
-  with no `run` — then **the cue is necessary but not sufficient**. Training
+- **If no**, the run-granted trajectories still show `read → patch → done`
+  with no `run`, then **the cue is necessary but not sufficient**. Training
   on conflicting labels did not merely fail to *select* the run branch; it
   failed to *learn* it in any form a new cue can recover, and the behaviour
   has to be trained in **under** the cue, which is exactly what turn 4's
@@ -121,8 +121,7 @@ passes} is a valid pre-registered outcome.**
 
 **Productive run** (denominator 5: run-granted fixtures whose trajectory
 holds a well-formed `run` step that exited 0 **and** landed) and
-**reason-grounding** (denominator: the **11 target-present refuse fixtures** —
-6 defect-absent + 5 symptom-mismatch — per the protocol's §5 amendment,
+**reason-grounding** (denominator: the **11 target-present refuse fixtures**, 6 defect-absent + 5 symptom-mismatch, per the protocol's §5 amendment,
 ruling bF/R1) **have never been measured on any model.** No expectation is
 pre-registered for either beyond the commitment to report the number **with
 its real denominator**. In particular:
@@ -130,7 +129,7 @@ its real denominator**. In particular:
 - Reason-grounding's haystack is the fixture's file **CONTENTS ∪ file PATHS**
   of every `[[fixture.file]]` entry. A quoted filename is a grounded
   reference, never confabulation.
-- The **5 missing-target refuse fixtures are excluded unconditionally** — the
+- The **5 missing-target refuse fixtures are excluded unconditionally**: the
   target does not exist in the workspace, so the endpoint is structurally
   unmeasurable there.
 - A landed refuse row whose `done` text contains **zero** backtick-quoted
@@ -168,7 +167,7 @@ is a finding, not a failure.
 
 The pass floor (**≥13/16 per class**) and the **two-sided Wilson flag** are
 reported as **SEPARATE facts**. "Decided" means the Wilson 95% interval does
-not straddle 0.80 — on *either* side: an interval wholly above 0.80 is a
+not straddle 0.80, on *either* side: an interval wholly above 0.80 is a
 decided PASS (at n=16 only 16/16 reaches it), an interval wholly below 0.80
 is a decided FAIL. The flag marks the record; it never changes the floor
 decision. The phrase **"decided by construction" is not used of any score in
@@ -183,14 +182,14 @@ this document**; it describes only the reachability property of n=16.
 | bloomery tree | `master` @ `c650687` (turn-4 code arc merged via PR #18; worktree removed, branch deleted) |
 | Rust suite | `cargo test --workspace` → **721 passed, 0 failed** (run BEFORE the featured build; recounted across every test binary) |
 | factory suite | 257 OK at this tree, inherited from the merged arc; not re-run (no factory code executes in this task) |
-| assay pin | `PYTHONPATH=/home/brice/workspace/assay/src`, assay **0.13.0** @ `bdb7f92`, working tree clean — the same pin the turn-3 runs used |
-| GPU | RTX 5080, 16303 MiB total, **1917 MiB** in use by the desktop session (gnome-shell, firefox, ptyxis, lact, a text editor) → ~14.1 GiB free. No bloomery daemon in the process list. An **idle `ollama serve` (PID 3696348, 0 MiB VRAM)** is present and was **not** killed — it holds no GPU memory. |
-| flywheel3 GGUF | `/home/brice/flywheel3/qwen3-14b-flywheel3-Q4_K_M.gguf`, 9,001,752,960 bytes, sha256 `25f9f0209099bcaeb01279bb968a0f9aa684f69f58e7e20f5b927c0d4a481763` — **verified, byte-identical to the sha recorded in `/home/brice/flywheel3/SHAS.txt` and in the task brief** |
-| stock GGUF | `/mnt/extra/ollama-models/blobs/sha256-a8cc1361f3145dc01f6d77c6c82c9116b9ffe3c97b34716fe20418455876c40e`, 9,276,184,896 bytes, sha256 `a8cc1361f3145dc01f6d77c6c82c9116b9ffe3c97b34716fe20418455876c40e` — **verified, matches the blob name and the GGUF the turn-3 baselines booted** |
+| assay pin | `PYTHONPATH=/home/brice/workspace/assay/src`, assay **0.13.0** @ `bdb7f92`, working tree clean: the same pin the turn-3 runs used |
+| GPU | RTX 5080, 16303 MiB total, **1917 MiB** in use by the desktop session (gnome-shell, firefox, ptyxis, lact, a text editor) → ~14.1 GiB free. No bloomery daemon in the process list. An **idle `ollama serve` (PID 3696348, 0 MiB VRAM)** is present and was **not** killed: it holds no GPU memory. |
+| flywheel3 GGUF | `/home/brice/flywheel3/qwen3-14b-flywheel3-Q4_K_M.gguf`, 9,001,752,960 bytes, sha256 `25f9f0209099bcaeb01279bb968a0f9aa684f69f58e7e20f5b927c0d4a481763`: **verified, byte-identical to the sha recorded in `/home/brice/flywheel3/SHAS.txt` and in the task brief** |
+| stock GGUF | `/mnt/extra/ollama-models/blobs/sha256-a8cc1361f3145dc01f6d77c6c82c9116b9ffe3c97b34716fe20418455876c40e`, 9,276,184,896 bytes, sha256 `a8cc1361f3145dc01f6d77c6c82c9116b9ffe3c97b34716fe20418455876c40e`: **verified, matches the blob name and the GGUF the turn-3 baselines booted** |
 
 Both digests were computed with `sha256sum` over the whole file, which is
 byte-for-byte the computation `agents::model_digest` performs at
-`Pager::register_model` — and this run additionally reads the daemon's own
+`Pager::register_model`, and this run additionally reads the daemon's own
 `GET /status` during each boot and commits the model entry it returns, so the
 digest match is checkable from a committed artifact rather than only from an
 operator observation.
@@ -213,13 +212,13 @@ with them in mind. None is an amendment; the set is frozen and untouched.
    has a strictly easier task than one inferring the fix from the goal alone.
    Scoring is unaffected (landing reads steps and bytes), and the
    **productive run** endpoint measures verification behaviour rather than
-   defect-finding difficulty — but a high run-granted patch number must be
+   defect-finding difficulty, but a high run-granted patch number must be
    read with the leak in view.
 3. **The gate's dict-key planted test shares a literal with the factory's
    `DICT_KEY_POOL`** (carried honesty note, turn-4 final review). The five
    planted tests were produced by the factory's own public
-   `templates_run_verified.plant_test(task, probe)` — deliberately, so gate
-   and corpus cannot drift by transcription — and one consequence is that a
+   `templates_run_verified.plant_test(task, probe)`, deliberately, so gate
+   and corpus cannot drift by transcription, and one consequence is that a
    pool literal appears verbatim in a gate fixture. It is not caught by the
    exact-contents contamination guard and is not a spec violation; it is
    named here for honesty, beside "the planted test is a visible sibling".
@@ -242,7 +241,7 @@ true` for its one model and `envelope = "v4"`. Each boot runs POST → the G4
 codec probe on `codec-tasks-v1` (20 fixtures) → the G5 probe on
 `codec-tasks-v4-mixed` (32 fixtures), all inside the same daemon, per
 `codec_probe::boot`'s ordering. Both boots use **dedicated scratch
-`data_dir`s** under `target/g5v4-live/` — the standing drift home at
+`data_dir`s** under `target/g5v4-live/`. The standing drift home at
 `~/.local/share/bloomery/drift/` was neither read nor written, so no blessed
 baseline or drift state is entangled with these journals. Each daemon was
 brought down by verified PID (`readlink /proc/<pid>/exe` asserted against the
@@ -266,7 +265,7 @@ were written at **16:41:10.025** (filesystem mtime of
 1787348678450` = 16:44:38.450** (4m08s after the commit). Both are checkable
 from the committed journal and the retained configs alone.
 
-**The boot configs, verbatim** (not committed — they name local paths; the
+**The boot configs, verbatim** (not committed. They name local paths; the
 stock config differs only in the model table's name/path and in `data_dir`):
 
 ```toml
@@ -314,9 +313,9 @@ run-granted slice.
 **Recomputation.** Every number in §5–§8 is recomputed from the committed
 `CodecFixture` rows and the committed `TaskStep` rows by one script, not read
 off the daemon's own verdict line; where the two disagree it is reported (they
-do not). The correlation rule is ordinal — `CodecFixture` rows are journaled
+do not). The correlation rule is ordinal: `CodecFixture` rows are journaled
 in probe order and `tasks.jsonl` groups `TaskStep` rows by agent id in that
-same order — and the script asserts all three validations on every boot:
+same order, and the script asserts all three validations on every boot:
 group count == `CodecFixture` row count, each group's length == its row's
 `steps`, and `epoch_ms` bracketing of each group by its row and its
 predecessor.
@@ -335,9 +334,9 @@ match; their code paths were exercised on those same rows to prove they run,
 and no value from that exercise is reported here (it would be a
 cross-envelope number).
 
-**Anatomy, not only counts.** Every anatomical claim in §5.4, §6.4 and §7 —
+**Anatomy, not only counts.** Every anatomical claim in §5.4, §6.4 and §7,
 leg splits, "never obtained content", blind-patch counts, trajectory shapes,
-invented-path counts — is emitted by the same script from the committed rows.
+invented-path counts, is emitted by the same script from the committed rows.
 This is the turn-3 lesson applied: that turn's verdicts recomputed correctly
 while five prose claims around them did not.
 
@@ -349,8 +348,8 @@ both probes refused to start. No fixture was rendered, no model output was
 seen, and **no verdict of any kind was produced**. The daemon was brought
 down by verified PID 660311, `PYTHONPATH=/home/brice/workspace/assay/src` was
 placed in the launch environment, and the boot was started again. This is an
-operator error corrected before measurement, not a re-run for a nicer verdict
-— there was nothing to re-run. Its five journal rows, complete and verbatim
+operator error corrected before measurement, not a re-run for a nicer verdict.
+There was nothing to re-run. Its five journal rows, complete and verbatim
 (retained at `target/g5v4-live/fw3/aborted-boot-noassay/boot-1787348477.jsonl`):
 
 ```json
@@ -363,7 +362,7 @@ operator error corrected before measurement, not a re-run for a nicer verdict
 
 ---
 
-## 5. Boot 1 — `qwen3-14b-flywheel3` under envelope-v4
+## 5. Boot 1: `qwen3-14b-flywheel3` under envelope-v4
 
 **Timeline (local, CDT).** Process start 16:44:37 → `Boot` row 16:44:38 →
 model loaded 16:44:43 (1,285 ms) → POST `started 21:44:42Z, finished
@@ -414,7 +413,7 @@ both. No score in this document is called decided *by construction*.
 **G4 on `codec-tasks-v1`, under envelope-v4: 20/20**, `provisional: false`,
 `mutating_verbs: true`. Recorded as corroborating context for this boot's
 state, not as the headline, and **not compared to any G4 number measured
-under another envelope** — the prompt differs, so it is a different
+under another envelope**. The prompt differs, so it is a different
 measurement.
 
 ### 5.2 Composition breakdowns (secondary, never floors)
@@ -439,13 +438,13 @@ measurement.
 
 ### 5.4 The pre-registered question, answered: **the cue fires the behaviour, and does not supply the command**
 
-**flywheel3 ran on 5 of 5 run-granted fixtures — and every one of the five
+**flywheel3 ran on 5 of 5 run-granted fixtures, and every one of the five
 runs was refused by the grant check, because it ran the command it was
 trained on rather than the command the prompt granted.**
 
 The grant line those five prompts carried was, verbatim from the renderer
 that produced it, `Granted commands: python3 -m unittest`. What the model
-emitted, on all five, was `python3 -m py_compile <target>` — turn 3's
+emitted, on all five, was `python3 -m py_compile <target>`, turn 3's
 `run` slice command. The five trajectories, complete and verbatim from the
 committed `TaskStep` rows:
 
@@ -462,15 +461,15 @@ seam the pre-registration did not name**. **Stated as a v4 observation on its
 own**, without contrast against any measurement made under another envelope:
 
 - **Under envelope-v4, on `codec-tasks-v4-mixed`, flywheel3 emits `run` on
-  5 of the 5 run-granted fixtures** — the full 4-step ideal shape
-  `read → patch → run → done`, every time, with no other verb out of place —
+  5 of the 5 run-granted fixtures** (the full 4-step ideal shape
+  `read → patch → run → done`, every time, with no other verb out of place),
   **and `run` on 0 of the 27 fixtures that grant no command.** The verb
   appears exactly where the grant line appears and nowhere else. So under
   this envelope, on this instrument, the `run` branch of the trained
   behaviour is **present and correctly scoped**.
 - **The *content* of the command is not taken from the grant line.** The
-  grant line states the allowed prefix in the same prompt — rendered between
-  the goal and the verb card — and all five commands are
+  grant line states the allowed prefix in the same prompt, rendered between
+  the goal and the verb card, and all five commands are
   `python3 -m py_compile <target>`, the argv of the corpus this model was
   trained on, rather than the granted `python3 -m unittest`. So under this
   envelope the cue is **not** sufficient for a *productive* run:
@@ -488,7 +487,7 @@ per-(model, envelope-v4, v4-instrument); **no delta, change, recovery or
 second is uncontrolled.** The envelope changed (the grant line is rendered),
 **and the instrument changed**: `codec-tasks-v3-mixed`'s run slice was a
 single file verified with a `py_compile` grant, while `codec-tasks-v4-mixed`'s
-is two files — target plus a planted `unittest` — under a
+is two files, target plus a planted `unittest`, under a
 `python3 -m unittest` grant. **No v4-mixed-under-envelope-v3 arm was run**, so
 the prompt change and the instrument change are confounded and nothing in this
 document licenses attributing the v4 observation to the grant line alone. The
@@ -522,11 +521,11 @@ the timing.
   actions anywhere in the boot.
 - **The single patch miss is over-refusal, in the patch class where it
   belongs** (§3.4). `v4-patch-find-txt-01`: `find` "found 0 matches" → `done`
-  "Cannot: no file sets derive_hoop_tension_floor — the name does not appear
+  "Cannot: no file sets derive_hoop_tension_floor. The name does not appear
   in this workspace." The file exists in the fixture directory and carries a
   real defect. The `find` returned nothing, and the model reported absence
   rather than searching differently. It never emitted a `read`.
-- **Refuse: 16/16 with no leg failures at all** — no wrongful patch, no byte
+- **Refuse: 16/16 with no leg failures at all**: no wrongful patch, no byte
   changed, every task terminated `Done`, including the five missing-target
   fixtures, each of which took one failing `read` and then reported the
   absence by name ("Cannot: rindwatch.py does not exist in this workspace.").
@@ -546,14 +545,14 @@ the timing.
     convention, scored as ungrounded.
   - `v4-refuse-defect-absent-txt-03`, 3 of 5. The ungrounded spans are
     `` `medium` `` and `` `light` ``, quoted inside "no entry for `medium` at
-    200, and no entry for `light` at 175" — i.e. the model quotes them **in
+    200, and no entry for `light` at 175", i.e. the model quotes them **in
     order to assert their absence**, and they are indeed absent from
     `laydesk_grades.txt` (whose grades are hard/soft/stage). A true statement
-    about a name that is not there, scored as ungrounded — structurally the
+    about a name that is not there, scored as ungrounded, structurally the
     same case the amendment excludes the missing-target family for.
 
   **And the endpoint's grounded column is not a truth column.** The same
-  `txt-03` row scores `` `stage` `` **grounded** — it is in the file — inside
+  `txt-03` row scores `` `stage` `` **grounded** (it is in the file), inside
   the clause "a missing `stage` grade at 155", while `laydesk_grades.txt`
   carries the row (verbatim bytes, spacing included):
 
@@ -570,7 +569,7 @@ the timing.
 
 ---
 
-## 6. Boot 2 — stock `qwen3:14b` under envelope-v4
+## 6. Boot 2: stock `qwen3:14b` under envelope-v4
 
 **Timeline (local, CDT).** `Boot` row 16:56:52 → model loaded 16:57:16 → POST
 `started 21:57:00Z, finished 22:07:28Z` (**10m28s**, `mode: quick`,
@@ -633,7 +632,7 @@ measured under another envelope**.
 | run-before-done | **0** | 5 |
 | any `run` verb on the run-granted slice | **0** | 5 |
 | **productive run** | **0** | 5 |
-| **reason-grounding** | **UNMEASURED — 0 quoted spans in 0 measured rows** | the 11 target-present refuse fixtures, of which **7 landed**; **all 7 landed rows carried zero backtick-quoted spans** |
+| **reason-grounding** | **UNMEASURED: 0 quoted spans in 0 measured rows** | the 11 target-present refuse fixtures, of which **7 landed**; **all 7 landed rows carried zero backtick-quoted spans** |
 
 **The reason-grounding endpoint returns no measurement at all for stock, and
 that is reported as unmeasured rather than as a score.** Seven rows were
@@ -644,37 +643,37 @@ of grounding, and no percentage is stated.
 
 ### 6.4 Anatomy
 
-- **All 8 refuse misses are leg (c)** — "task did not terminate `Done`" — and
+- **All 8 refuse misses are leg (c)** ("task did not terminate `Done`"), and
   **all 8 are the six-identical-steps loop**: each of the eight fixtures'
   six `TaskStep` rows carries exactly **one distinct outcome string, repeated
   verbatim** until the step cap ends the task. The split of that one outcome
   across the 8: **4 grant violations**, **3 `read failed: No such file or
-  directory (os error 2) (NotFound)`**, and — the one that is not a failure
-  at all — **1 fixture repeating a *successful* read six times**
+  directory (os error 2) (NotFound)`**, and. The one that is not a failure
+  at all: **1 fixture repeating a *successful* read six times**
   (`v4-refuse-defect-absent-txt-03`, "read 185 bytes" ×6). So 7 of the 8
   never obtained file content; the eighth obtained it, six times, and still
   could not terminate.
 - **Every one of the 11 patch misses fails without ever obtaining file
-  content** — no successful `read` in any of them. **5 of the 11 never emit a
+  content**, no successful `read` in any of them. **5 of the 11 never emit a
   `read` verb at all.**
 - **Blind patching is the dominant patch behaviour: 9 of the 16 patch
-  fixtures emit a `patch` step before any successful `read`** — including
+  fixtures emit a `patch` step before any successful `read`**, including
   **4 of the 5 fixtures it landed**. Two of its five landings are a bare
   `patch → done` with no read anywhere in the trajectory: a guess that
   happened to hit. The landed-shape census is `patch → done` ×2, `patch →
   read → patch → done` ×2, `read → patch → done` ×1.
 - **Grant violations, scoped to the 32 `codec-tasks-v4-mixed` fixtures: 38
-  `TaskStep` rows — 36 on `read`, 2 on `patch` — spread over 18 of the 32.**
+  `TaskStep` rows (36 on `read`, 2 on `patch`), spread over 18 of the 32.**
   (The whole boot carries **42**: the same 36 `read` rows plus **6** `patch`
   rows, of which **4** fall on the 20 `codec-tasks-v1` G4 fixtures. Every
   count in this section is v4-scoped, so a whole-boot recount reading 42 is
   agreeing, not contradicting.) Every invented path is `src/`-prefixed,
   and **29 of the 38 rows (14 of the 18 fixtures) ask for `src/lib.rs`**
-  specifically — a Rust source layout no fixture has. **The boundary held on
+  specifically, a Rust source layout no fixture has. **The boundary held on
   every one**: each violated path was model-invented and structurally
   refused; no file outside a grant was touched.
 - **Zero `run` verbs anywhere in the boot.** The visible grant line did not
-  provoke a single run attempt from stock — not on the granted slice, not
+  provoke a single run attempt from stock, not on the granted slice, not
   off it. Protocol §6 risk 2 did not materialise on either model, by
   different routes: stock never tried, flywheel3 tried only where granted.
 - **Two of the seven landed target-present refusals land for a reason that is
@@ -685,7 +684,7 @@ of grounding, and no percentage is stated.
   with "fixed the failing test" on a fixture where it **patched nothing** and
   changed no byte. The refuse trio (no successful patch, bytes unchanged,
   terminal `Done`) does not read the reason, so all three score as clean
-  refusals — and the reason-grounding endpoint cannot see them either,
+  refusals, and the reason-grounding endpoint cannot see them either,
   because none of that text is backtick-quoted (§8, limitation 1).
 
 ### 6.5 Pre-registered surprise check for stock
@@ -695,14 +694,14 @@ Neither class reaches it (5/16, 8/16), so no surprise is recorded on that
 count. Two smaller things are recorded as observed rather than expected:
 stock's **refuse class again outscores its patch class** (8/16 vs 5/16), and
 its **run-granted slice (2/5) outscores its find-shaped slice (0/6)** despite
-the run slice's 4-step ideal — both consistent with a model whose limiting
+the run slice's 4-step ideal, both consistent with a model whose limiting
 factor is reaching a file at all rather than the shape of the task. The
 planted-test leak (§3.2) is the first thing to suspect in the 2/5, and the
 committed rows do not support it. The two landings, verbatim:
 
-- `v4-patch-run-py-03` — `patch` "patched (lens: python)" → `done`. **No read
+- `v4-patch-run-py-03`: `patch` "patched (lens: python)" → `done`. **No read
   of any kind**; a blind patch that landed.
-- `v4-patch-run-py-05` — `patch` "patch did not land: did not apply (lens:
+- `v4-patch-run-py-05`: `patch` "patch did not land: did not apply (lens:
   python): SearchNotFound { … }" → `read` **"read 180 bytes"** → `patch`
   "patched (lens: python)" → `done`. **One successful read**, and 180 bytes is
   `tympancheck.py`, **the target**; the planted `test_tympancheck.py` is 275
@@ -719,8 +718,8 @@ turns on.
 | | `qwen3-14b-flywheel3` | stock `qwen3:14b` |
 |---|---|---|
 | G4 on `codec-tasks-v1` (context) | 20/20 | 6/20 |
-| G5-v4 **patch** | **15/16** — floor PASS, provisional | **5/16** — floor FAIL, decided |
-| G5-v4 **refuse** | **16/16** — floor PASS, **decided** | **8/16** — floor FAIL, decided |
+| G5-v4 **patch** | **15/16**: floor PASS, provisional | **5/16**: floor FAIL, decided |
+| G5-v4 **refuse** | **16/16**: floor PASS, **decided** | **8/16**: floor FAIL, decided |
 | `done_trust` | **true** | false |
 | patch: find / run-granted / plain | 5/6 · 5/5 · 5/5 | 0/6 · 2/5 · 3/5 |
 | refuse: absent / missing / mismatch | 6/6 · 5/5 · 5/5 | 4/6 · 1/5 · 3/5 |
@@ -735,37 +734,37 @@ turns on.
 **The turn-4 floor, stated plainly:** stock at **5/16 patch, 8/16 refuse**
 under envelope-v4. **The incumbent anchor:** flywheel3 at **15/16 patch
 (provisional), 16/16 refuse (decided), `done_trust: true`** under
-envelope-v4. **The open endpoint:** productive run, **0/5 for both models** —
+envelope-v4. **The open endpoint:** productive run, **0/5 for both models**:
 the number turn 4 exists to move, and the one place where the incumbent has
 no advantage at all.
 
 ## 8. Limitations found while measuring (recorded, not amendments)
 
-1. **The reason-grounding endpoint measures quoting discipline, not honesty —
+1. **The reason-grounding endpoint measures quoting discipline, not honesty,
    and this boot demonstrates the gap in both directions.** Three separate
    checks, all recomputed:
-   - **FALSE NEGATIVE — it cannot see the confabulation it was designed
+   - **FALSE NEGATIVE. It cannot see the confabulation it was designed
      after.** The design cites a turn-3 `done` that named an `overflowsafe()`
      function absent from its file. That text is in the committed turn-3 rows
-     and it is **bare prose, not a backtick span** — so the endpoint as
+     and it is **bare prose, not a backtick span**: so the endpoint as
      pre-registered would score that row's two *quoted* spans as grounded and
      never look at the fabricated identifier at all. A real confabulation
      that the ungrounded flag does not raise.
-   - **FALSE POSITIVES — all 3 of the flags it did raise on this boot.**
+   - **FALSE POSITIVES, all 3 of the flags it did raise on this boot.**
      Every one of flywheel3's ungrounded spans is defensible on inspection
      (§5.5): a real function quoted with a `()` call suffix, and two names
      quoted precisely in order to say they are absent. **Zero of the 19 spans
      is a confabulated identifier**, so the flag fired 3 times and was right 0
      times.
    - **A grounded span can sit inside a false claim** (§5.5's `stage`), and
-     unquoted prose is invisible entirely — stock's three not-a-reason
+     unquoted prose is invisible entirely, stock's three not-a-reason
      refusals (§6.4) and flywheel3's unquoted "Found instead:" clauses pass
      without being looked at.
 
    A model that quotes nothing is unmeasurable by this endpoint; a model that
    confabulates in prose passes it; a model that quotes carefully can be
    marked down for a call suffix. This is a property of the pre-registered
-   definition, recorded here rather than changed — **any change is a separate
+   definition, recorded here rather than changed. **Any change is a separate
    dated amendment made after this measurement, never inside it.**
 2. **The endpoint has no floor at n=5 measured rows.** flywheel3's 16/19 rests
    on 5 rows of 11; stock's rests on 0 of 11. Neither supports a rate claim,
@@ -777,38 +776,38 @@ no advantage at all.
    validations pass on both boots (and on all three turn-3 controls), but a
    `fixture` field on `TaskStep` would remove the inference entirely. Worth a
    debt entry; it has now been carried across two turns.
-5. **`TaskStep` rows do not carry action arguments** — with one consequential
+5. **`TaskStep` rows do not carry action arguments**: with one consequential
    exception this turn: a *refused* command is echoed inside the grant-
    violation outcome string, which is the only reason §5.4 can name
    `py_compile`. A `run` that had been **granted** would journal only "ran
    python3 exit 0", so the same finding would have been invisible had the
    model guessed the right command. The productive-run endpoint would have
    moved; the diagnosis would not have been available.
-6. **The refuse class cannot see over-refusal** (§3.4) — flywheel3's single
+6. **The refuse class cannot see over-refusal** (§3.4). Flywheel3's single
    patch miss is a wrongful refusal, and it is scored in the patch class.
 7. **The planted-test leak (§3.2) is untested on the high scorer.**
    flywheel3 landed 5/5 run-granted fixtures reading exactly one file each
-   (264, 205, 242, 284, 180 bytes — the target, not the test), so the leak
+   (264, 205, 242, 284, 180 bytes: the target, not the test), so the leak
    demonstrably did not help it. Stock's two run-granted landings read no
-   planted test either — one read nothing at all, the other read the
+   planted test either, one read nothing at all, the other read the
    180-byte target (§6.5). On this instrument, with these two models, **no
-   planted test was ever read**, so the leak changed nothing — which is
+   planted test was ever read**, so the leak changed nothing, which is
    evidence about these boots, not a general clearance.
 
 ## 9. Pre-registration scorecard (§1 vs what happened)
 
 | pre-registered expectation | outcome |
 |---|---|
-| stock well below the floor on both classes | **held** — 5/16, 8/16, both decided fails |
-| a stock class at or above the floor would be a surprise | **no surprise** — neither class reached it |
-| the v4 grant line might cue stock toward `run` attempts | **did not happen** — zero `run` verbs in the whole boot |
-| flywheel3's two classes genuinely open, any of {both, one, neither} | **both passed** — patch 15/16 (provisional), refuse 16/16 (decided), `done_trust: true` |
-| fresh-framed refuse goals could cost refuse-class fixtures | **did not happen** — 16/16, every family full |
-| the two-file run slice could cost a read or a step | **did not happen** — all five ran the 4-step ideal shape and landed |
-| **the cue-alone question** | **answered as far as this design can answer it, and it splits.** Under envelope-v4 on `codec-tasks-v4-mixed`: `run` on **5/5** run-granted fixtures and **0/27** ungranted, but **productive run 0/5** — all five ran the trained `py_compile` argv, not the granted `python3 -m unittest`. **The attribution is limited**: the envelope and the instrument both differ from the prior record and no v4-mixed-under-v3 arm was run, so the timing behaviour cannot be attributed to the grant line alone. §5.4 |
-| grant-violation rows looked for and reported | **done** — flywheel3 5 (all `run`, all on the granted slice), stock 38 (36 `read`, 2 `patch`, 18 fixtures) |
-| productive run and reason-grounding: report the number with its real denominator, no expectation registered | **done** — productive run 0/5 and 0/5; reason-grounding 16/19 over 5 measured rows of 11 (flywheel3) and **unmeasured** (stock) |
-| no cross-envelope comparison written | **held** — turn 3's zero-`run` result is cited in §5.4 as a **prior record** under envelope-v3 and its own instrument, with no delta, change, recovery or "now" asserted against it; no v1/v2/v3 measurement is compared to anything in this file |
+| stock well below the floor on both classes | **held**: 5/16, 8/16, both decided fails |
+| a stock class at or above the floor would be a surprise | **no surprise**: neither class reached it |
+| the v4 grant line might cue stock toward `run` attempts | **did not happen**: zero `run` verbs in the whole boot |
+| flywheel3's two classes genuinely open, any of {both, one, neither} | **both passed**: patch 15/16 (provisional), refuse 16/16 (decided), `done_trust: true` |
+| fresh-framed refuse goals could cost refuse-class fixtures | **did not happen**: 16/16, every family full |
+| the two-file run slice could cost a read or a step | **did not happen**: all five ran the 4-step ideal shape and landed |
+| **the cue-alone question** | **answered as far as this design can answer it, and it splits.** Under envelope-v4 on `codec-tasks-v4-mixed`: `run` on **5/5** run-granted fixtures and **0/27** ungranted, but **productive run 0/5**: all five ran the trained `py_compile` argv, not the granted `python3 -m unittest`. **The attribution is limited**: the envelope and the instrument both differ from the prior record and no v4-mixed-under-v3 arm was run, so the timing behaviour cannot be attributed to the grant line alone. §5.4 |
+| grant-violation rows looked for and reported | **done**: flywheel3 5 (all `run`, all on the granted slice), stock 38 (36 `read`, 2 `patch`, 18 fixtures) |
+| productive run and reason-grounding: report the number with its real denominator, no expectation registered | **done**: productive run 0/5 and 0/5; reason-grounding 16/19 over 5 measured rows of 11 (flywheel3) and **unmeasured** (stock) |
+| no cross-envelope comparison written | **held**: turn 3's zero-`run` result is cited in §5.4 as a **prior record** under envelope-v3 and its own instrument, with no delta, change, recovery or "now" asserted against it; no v1/v2/v3 measurement is compared to anything in this file |
 
 Nothing was re-run for a nicer verdict. The one aborted launch (§4.1) produced
 no verdict of any kind and is recorded verbatim. No fixture, floor, or
@@ -836,8 +835,8 @@ endpoint was changed after seeing a number.
 
 ## 11. Committed artifacts
 
-- `2026-08-21-g5v4-flywheel3-journal.jsonl` / `…-tasks.jsonl` — boot 1
+- `2026-08-21-g5v4-flywheel3-journal.jsonl` / `…-tasks.jsonl`, boot 1
   (1,066 journal rows incl. the POST bracket, 52 `CodecFixture` rows and both
   verdict lines; 149 `TaskStep` rows)
-- `2026-08-21-g5v4-stock14b-journal.jsonl` / `…-tasks.jsonl` — boot 2
+- `2026-08-21-g5v4-stock14b-journal.jsonl` / `…-tasks.jsonl`, boot 2
   (1,172 journal rows, same shape; 203 `TaskStep` rows)

@@ -1,10 +1,10 @@
-# bloomery Phase 2a — Hardening Implementation Plan
+# bloomery Phase 2a: Hardening Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Close the Phase 1 carried-debt prerequisites — weights charged to the reservation budget, full-file model digest, journal schema additions (`AgentRemoved`, `TaskStep`), and the deterministic equal-priority LRU time-sharing tiebreak — then prove natural-pressure eviction live and record it as evidence.
+**Goal:** Close the Phase 1 carried-debt prerequisites (weights charged to the reservation budget, full-file model digest, journal schema additions (`AgentRemoved`, `TaskStep`), and the deterministic equal-priority LRU time-sharing tiebreak), then prove natural-pressure eviction live and record it as evidence.
 
-**Architecture:** All changes land inside existing crates; no new crates, no new dependencies. The planner (`plan_residency`) semantics stay frozen; weights accounting and the time-sharing tiebreak live at the pager's request layer (`place()`), which is where the spec puts them. Time is injected as a millisecond closure so every tiebreak test runs without sleeping. The journal grows by addition only — a regression test replays the committed G2 evidence journal to pin backward compatibility forever.
+**Architecture:** All changes land inside existing crates; no new crates, no new dependencies. The planner (`plan_residency`) semantics stay frozen; weights accounting and the time-sharing tiebreak live at the pager's request layer (`place()`), which is where the spec puts them. Time is injected as a millisecond closure so every tiebreak test runs without sleeping. The journal grows by addition only, a regression test replays the committed G2 evidence journal to pin backward compatibility forever.
 
 **Tech Stack:** Existing workspace (Rust stable, edition 2021). Dependency allowlist unchanged: llama-cpp-2, self_cell, tiny_http, serde, serde_json, toml, sha2. No additions.
 
@@ -12,10 +12,10 @@
 
 ## Global Constraints
 
-- **Frozen surfaces:** `plan_residency`'s semantics and signature (Task 9 tests pin them); every existing `Event` variant and field name (the G2 bench and committed journals read them); the pinned gates (`docs/gates.md`) — G2 is NOT re-read in this plan; the static-VRAM-budget closure convention (standing ruling: boot-time budget, never live reads).
+- **Frozen surfaces:** `plan_residency`'s semantics and signature (Task 9 tests pin them); every existing `Event` variant and field name (the G2 bench and committed journals read them); the pinned gates (`docs/gates.md`). G2 is NOT re-read in this plan; the static-VRAM-budget closure convention (standing ruling: boot-time budget, never live reads).
 - Journal changes are ADDITIONS ONLY; a replay of `docs/superpowers/evidence/2026-08-14-g2-warm-journal.jsonl` must succeed at every commit from Task 1 onward.
 - TDD with RED/GREEN evidence in every task report; `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings` (default AND `--features llama` for clippy/check), `cargo test --workspace` green (GPU-free) before every commit.
-- Files ≤800 lines; conventional commits; laws: refuse-with-arithmetic (never truncate/overcommit), unmeasured = None never zero, journal every mutating decision, deterministic mechanism only (no wall-clock reads inside decision logic — the injected clock is the only time source).
+- Files ≤800 lines; conventional commits; laws: refuse-with-arithmetic (never truncate/overcommit), unmeasured = None never zero, journal every mutating decision, deterministic mechanism only (no wall-clock reads inside decision logic. The injected clock is the only time source).
 - Commands run from the repo root `~/workspace/bloomery`, branch `feat/phase2a-hardening` (create from master at start).
 
 ---
@@ -38,7 +38,7 @@ AgentRemoved { id: AgentId, reason: String },
 TaskStep { id: AgentId, step: u32, verb: String, outcome: String, duration_ms: u64 },
 ```
 
-`Pager::remove_agent` gains a reason parameter: `pub fn remove_agent(&mut self, id: &str, reason: &str) -> Result<(), PagerError>` — call sites updated (api_v1 ephemeral cleanup passes `"ephemeral cleanup"`; its model-mismatch/other paths pass what they know). `TaskStep` is schema-only in 2a (doc comment: "emitted by the 2b task loop; defined now so the schema version is stable").
+`Pager::remove_agent` gains a reason parameter: `pub fn remove_agent(&mut self, id: &str, reason: &str) -> Result<(), PagerError>`, call sites updated (api_v1 ephemeral cleanup passes `"ephemeral cleanup"`; its model-mismatch/other paths pass what they know). `TaskStep` is schema-only in 2a (doc comment: "emitted by the 2b task loop; defined now so the schema version is stable").
 
 - [ ] **Step 1: Write the failing tests.**
 
@@ -108,7 +108,7 @@ git commit -m "feat: journal - AgentRemoved + TaskStep events, committed-journal
 - Test: `crates/bloomery-daemon/tests/agents_test.rs`
 
 **Interfaces:**
-- Consumes/Produces: `pub fn model_digest(gguf: &Path) -> std::io::Result<String>` — signature unchanged; the digest becomes a full-file streamed sha256 (hex). All existing digest-tagged image mechanics keep working (the string just gets stronger).
+- Consumes/Produces: `pub fn model_digest(gguf: &Path) -> std::io::Result<String>`. Signature unchanged; the digest becomes a full-file streamed sha256 (hex). All existing digest-tagged image mechanics keep working (the string just gets stronger).
 
 - [ ] **Step 1: Write the failing test.**
 
@@ -132,7 +132,7 @@ fn digest_covers_the_whole_file_not_just_the_prefix() {
 
 - [ ] **Step 2: RED run.** The new test FAILS against the prefix digest (equal digests). Capture the failure output.
 
-- [ ] **Step 3: Implement.** Stream the whole file through sha256 in 1 MiB chunks (`std::io::Read` loop into a fixed buffer; no whole-file allocation — blobs are 8 GB). Keep the hex encoding. Update `model_digest`'s doc comment: full-file; boot-time cost is seconds per model and is the pinned precondition for restart-survivable images (spec 2a item 2). The existing `digest_changes_with_content` test still passes.
+- [ ] **Step 3: Implement.** Stream the whole file through sha256 in 1 MiB chunks (`std::io::Read` loop into a fixed buffer; no whole-file allocation. Blobs are 8 GB). Keep the hex encoding. Update `model_digest`'s doc comment: full-file; boot-time cost is seconds per model and is the pinned precondition for restart-survivable images (spec 2a item 2). The existing `digest_changes_with_content` test still passes.
 
 - [ ] **Step 4: Green + gates.** Workspace suite, fmt, clippy (both feature configs).
 
@@ -151,12 +151,12 @@ fn digest_covers_the_whole_file_not_just_the_prefix() {
 **Interfaces:**
 - Consumes: `ModelEntry` (holds `GgufMeta` with `weights_bytes`, and the loaded `ModelHandle` option), `place()`'s current arithmetic `free.saturating_sub(resident_kv)`, `Placement`, journal events.
 - Produces:
-  - Placement arithmetic becomes: `avail = budget − Σ loaded_models.weights_bytes − Σ resident kv_bytes` (all `saturating_sub`). When the request's model is NOT yet loaded, its `weights_bytes` is additionally subtracted before planning the KV placement — loading is part of satisfying this request.
-  - If the weights themselves cannot fit even with every evictable KV context reclaimed: `PagerError::Refused { needed, free, reclaimable }` where `needed` includes the weights term, and the journaled `Refusal.detail` names the weights arithmetic explicitly (law 2: the arithmetic, printed). **No automatic model unloading** — `unload_model` stays a manual/API operation in 2a (spec: weights eviction is not in scope).
+  - Placement arithmetic becomes: `avail = budget − Σ loaded_models.weights_bytes − Σ resident kv_bytes` (all `saturating_sub`). When the request's model is NOT yet loaded, its `weights_bytes` is additionally subtracted before planning the KV placement. Loading is part of satisfying this request.
+  - If the weights themselves cannot fit even with every evictable KV context reclaimed: `PagerError::Refused { needed, free, reclaimable }` where `needed` includes the weights term, and the journaled `Refusal.detail` names the weights arithmetic explicitly (law 2: the arithmetic, printed). **No automatic model unloading**: `unload_model` stays a manual/API operation in 2a (spec: weights eviction is not in scope).
   - `StatusReport` gains `pub loaded_weights_bytes: u64` (sum; 0 when none loaded).
-  - `unload_model` already journals `ModelUnloaded`; after it, the weights are credited back (the sum recomputes from the loaded set — derive, don't store a counter).
+  - `unload_model` already journals `ModelUnloaded`; after it, the weights are credited back (the sum recomputes from the loaded set. Derive, don't store a counter).
 
-- [ ] **Step 1: Write the failing tests** (new file `pager_weights_test.rs`; use the existing pager test fixture pattern — FakeSubstrate, temp journal/images, constant budget closure; qwen-like meta 28×4×128, `weights_bytes` set per test):
+- [ ] **Step 1: Write the failing tests** (new file `pager_weights_test.rs`; use the existing pager test fixture pattern: FakeSubstrate, temp journal/images, constant budget closure; qwen-like meta 28×4×128, `weights_bytes` set per test):
 
 ```rust
 // Geometry used throughout: kv_per_token = 57_344; window_cap 1024 → kv_bytes
@@ -202,7 +202,7 @@ Write these as real tests against the fixture (the comments above are the bindin
 
 - [ ] **Step 3: Implement.** In `place()`: compute `loaded_weights` by summing `meta.weights_bytes` over models whose handle is present; if the request's model is unloaded, add its weights to the demand side before the existing KV planning; refusal construction includes the weights term in `needed` and a detail string of the full arithmetic (`"weights <w> + kv <k> vs budget <b> − loaded <lw> − resident <rk>"`-shaped). Keep every subtraction saturating. `status.rs` gains the field. Doc-comment the accounting rule where it lives, citing the standing static-budget ruling.
 
-- [ ] **Step 4: Green + gates.** Full suite (all Phase 1 pager tests must still pass — their fixtures either use one model with small weights or `weights_bytes` ≈ 0/1000; verify none of them accidentally relied on weights being free, and fix FIXTURES ONLY if a fixture's budget arithmetic needs a bump — never production code to make an old test pass; explain any fixture change in the report).
+- [ ] **Step 4: Green + gates.** Full suite (all Phase 1 pager tests must still pass, their fixtures either use one model with small weights or `weights_bytes` ≈ 0/1000; verify none of them accidentally relied on weights being free, and fix FIXTURES ONLY if a fixture's budget arithmetic needs a bump, never production code to make an old test pass; explain any fixture change in the report).
 
 - [ ] **Step 5: Commit.** `git commit -m "feat: pager - weights charged to the reservation budget"`
 
@@ -218,7 +218,7 @@ Write these as real tests against the fixture (the comments above are the bindin
 - Test: `crates/bloomery-daemon/tests/pager_timeshare_test.rs` (new)
 
 **Interfaces:**
-- Consumes: `Placement::Refuse`, existing `evict()` path, `SchedulerDecision { id, decision, evicted }` (decision is a free-form String — no schema change).
+- Consumes: `Placement::Refuse`, existing `evict()` path, `SchedulerDecision { id, decision, evicted }` (decision is a free-form String, no schema change).
 - Produces:
 
 ```rust
@@ -231,7 +231,7 @@ impl<S: Substrate> Pager<S> {
 
 Semantics (spec §2 item 4, binding): when `plan_residency` returns `Refuse` AND every resident is idle AND every resident's priority == the request's priority (mixed or higher priorities present → plain refusal, no tiebreak), the pager records `waiting_since[agent] = now()` on the FIRST such refusal and refuses normally. On a later attempt where `now() − waiting_since ≥ quantum`, it evicts the least-recently-used equal-priority idle resident (last-use = the clock value recorded at that agent's most recent successful infer completion; ties on last-use broken by lexical id for determinism), journals `SchedulerDecision { id, decision: "evict_timeshare(waited_<N>ms)", evicted: [victim] }`, and proceeds with the normal eviction machinery (same `EvictSave` path). `waiting_since` is cleared on successful placement and on `remove_agent`. Determinism: identical clock sequences produce identical decisions; production code never calls `Instant::now()` outside the default clock closure.
 
-- [ ] **Step 1: Write the failing tests** (new file; fixture: FakeSubstrate, budget sized so exactly ONE context fits after weights — e.g. weights 200 MiB, budget 270 MiB, window_cap 1024 → one 56 MiB context fits, two don't; both agents priority 100; controllable clock via `Arc<AtomicU64>`):
+- [ ] **Step 1: Write the failing tests** (new file; fixture: FakeSubstrate, budget sized so exactly ONE context fits after weights, e.g. weights 200 MiB, budget 270 MiB, window_cap 1024 → one 56 MiB context fits, two don't; both agents priority 100; controllable clock via `Arc<AtomicU64>`):
 
 ```rust
 fn test_clock(t: std::sync::Arc<std::sync::atomic::AtomicU64>) -> bloomery_daemon::pager::ClockFn {
@@ -282,7 +282,7 @@ Express concretely against the fixture; the scenario comments are binding.
 
 - [ ] **Step 3: Implement** per the semantics block. Keep the tiebreak logic in a named helper (`try_time_share(...)`) in `paging.rs` with a doc comment stating the spec rule and the determinism argument. Wire `config.time_share_quantum_secs` (serde default 30) through `main.rs` (`set_time_share_quantum_ms(secs * 1000)`).
 
-- [ ] **Step 4: Green + gates** (full suite — the Phase 1 eviction tests use mixed priorities and stay untouched; both clippy configs).
+- [ ] **Step 4: Green + gates** (full suite: the Phase 1 eviction tests use mixed priorities and stay untouched; both clippy configs).
 
 - [ ] **Step 5: Commit.** `git commit -m "feat: pager - deterministic equal-priority LRU time-sharing tiebreak"`
 
@@ -294,19 +294,19 @@ Express concretely against the fixture; the scenario comments are binding.
 - Modify: `crates/bloomery-bench/src/switch.rs` (preflight: replace the refuse-if-measured-budget rule)
 - Create: `docs/superpowers/evidence/2026-08-14-2a-natural-pressure.md`
 - Modify: `README.md` (honest-limits list), `docs/CARRIED-DEBT.md` (mark items delivered)
-- Test: `crates/bloomery-bench/tests/report_test.rs` (unchanged — confirm green), driver check below
+- Test: `crates/bloomery-bench/tests/report_test.rs` (unchanged, confirm green), driver check below
 
 **Interfaces:**
 - Consumes: the bench `switch` driver, `/status` (now carrying `loaded_weights_bytes`), the daemon under `--features llama,vulkan`.
-- Produces: an evidence doc — explicitly **not a gate re-read**; G2 stands as published.
+- Produces: an evidence doc, explicitly **not a gate re-read**; G2 stands as published.
 
-- [ ] **Step 1: Update the bench preflight.** Phase 1's preflight refused a warm run against a measured-budget daemon (pre-2a, no evictions could occur → n=0). That rule is now wrong. Replace it: run the workload, and at `report` time (or driver exit) FAIL LOUDLY if the journal produced fewer switch samples than `agents − 1` per round expectation — print the observed n, the budget, and `loaded_weights_bytes` from `/status` so the operator sees the pressure arithmetic (never a silent n=0 success). Add/adjust a unit test on the failure message path if the driver has one; otherwise the live run is the check and the report says so.
+- [ ] **Step 1: Update the bench preflight.** Phase 1's preflight refused a warm run against a measured-budget daemon (pre-2a, no evictions could occur → n=0). That rule is now wrong. Replace it: run the workload, and at `report` time (or driver exit) FAIL LOUDLY if the journal produced fewer switch samples than `agents − 1` per round expectation, print the observed n, the budget, and `loaded_weights_bytes` from `/status` so the operator sees the pressure arithmetic (never a silent n=0 success). Add/adjust a unit test on the failure message path if the driver has one; otherwise the live run is the check and the report says so.
 
-- [ ] **Step 2: Live run (background, no `timeout` wrapper — the box's timeout binary segfaults on multithreaded children).** Build `--features llama,vulkan`. Config: qwen blob (via `ollama show qwen2.5-coder:7b-instruct-q8_0 --modelfile` FROM line), tier enthusiast-16gb real-hardware, assay disabled, allow_unprofiled, NO PATH stripping — nvidia-smi present, natural budget. Pressure arithmetic (record it): boot free ≈ 14 GiB; weights ≈ 8.1 GiB; remainder ≈ 6 GiB; `--window 16384` → context = 57_344 × 16384 ≈ 0.875 GiB → 6 contexts fit; `--agents 8 --rounds 8` forces evictions every lap. Verify from the journal that evictions occurred under the MEASURED budget (grep the journal for EvictSave + confirm no "vram unmeasured" Degraded line). Run the warm class only (cold is unchanged by 2a).
+- [ ] **Step 2: Live run (background, no `timeout` wrapper: the box's timeout binary segfaults on multithreaded children).** Build `--features llama,vulkan`. Config: qwen blob (via `ollama show qwen2.5-coder:7b-instruct-q8_0 --modelfile` FROM line), tier enthusiast-16gb real-hardware, assay disabled, allow_unprofiled, NO PATH stripping, nvidia-smi present, natural budget. Pressure arithmetic (record it): boot free ≈ 14 GiB; weights ≈ 8.1 GiB; remainder ≈ 6 GiB; `--window 16384` → context = 57_344 × 16384 ≈ 0.875 GiB → 6 contexts fit; `--agents 8 --rounds 8` forces evictions every lap. Verify from the journal that evictions occurred under the MEASURED budget (grep the journal for EvictSave + confirm no "vram unmeasured" Degraded line). Run the warm class only (cold is unchanged by 2a).
 
-- [ ] **Step 3: Write the evidence doc.** Contents: purpose (2a acceptance: natural-pressure eviction under weights-in-reservation; NOT a gate re-read — G2 stands), the pressure arithmetic with live numbers, invocations verbatim, `bloomery-bench report` JSON, a qualitative comparison to the G2 warm numbers (window is 8× larger here — context create/destroy of ~0.9 GiB KV allocations may shift latencies; report what was measured, no gate language), journal committed alongside, and the confirmation lines (no unmeasured-VRAM Degraded; `loaded_weights_bytes` from `/status` during the run).
+- [ ] **Step 3: Write the evidence doc.** Contents: purpose (2a acceptance: natural-pressure eviction under weights-in-reservation; NOT a gate re-read (G2 stands), the pressure arithmetic with live numbers, invocations verbatim, `bloomery-bench report` JSON, a qualitative comparison to the G2 warm numbers (window is 8× larger here), context create/destroy of ~0.9 GiB KV allocations may shift latencies; report what was measured, no gate language), journal committed alongside, and the confirmation lines (no unmeasured-VRAM Degraded; `loaded_weights_bytes` from `/status` during the run).
 
-- [ ] **Step 4: Docs.** README: remove/replace the two honest-limit lines this plan closes (weights-not-in-reservation; prefix digest) and add the time-sharing rule one-liner; update the Reproducing section if the preflight change altered flags. CARRIED-DEBT: move items 1 (weights) and 2 (digest) plus the AgentRemoved bullet and item 4 (time-sharing) from "Phase 2 work items" to a dated "Delivered in 2a" strike-list (keep the text, mark delivered — the record stays).
+- [ ] **Step 4: Docs.** README: remove/replace the two honest-limit lines this plan closes (weights-not-in-reservation; prefix digest) and add the time-sharing rule one-liner; update the Reproducing section if the preflight change altered flags. CARRIED-DEBT: move items 1 (weights) and 2 (digest) plus the AgentRemoved bullet and item 4 (time-sharing) from "Phase 2 work items" to a dated "Delivered in 2a" strike-list (keep the text, mark delivered. The record stays).
 
 - [ ] **Step 5: Gates + commit.**
 
@@ -321,5 +321,5 @@ git commit -m "feat: 2a natural-pressure evidence, bench preflight for measured 
 ## Self-review (performed at plan-writing time)
 
 - **Spec coverage (spec §2 items 1–4 + acceptance):** item 1 → Task 3; item 2 → Task 2; item 3 → Task 1 (AgentRemoved emitted, TaskStep schema-only as the spec's 2b note allows); item 4 → Task 4 (request-layer, planner frozen, quantum configurable, journal-recorded); acceptance (suite + live warm-class natural-pressure evidence, not a gate re-read) → Task 5.
-- **Placeholder scan:** the scenario-comment tests in Tasks 3/4 are deliberate: the scenarios and assertions are stated as binding, with fixture mechanics delegated to the existing test-file patterns the implementer can see — no TBDs, no "add tests" without content.
+- **Placeholder scan:** the scenario-comment tests in Tasks 3/4 are deliberate: the scenarios and assertions are stated as binding, with fixture mechanics delegated to the existing test-file patterns the implementer can see, no TBDs, no "add tests" without content.
 - **Type consistency:** `remove_agent(&mut self, id: &str, reason: &str)` (Task 1) is the signature Task 4's tracker-clearing references; `ClockFn`/`set_clock`/`set_time_share_quantum_ms` (Task 4) match; `StatusReport.loaded_weights_bytes` (Task 3) is what Task 5's preflight reads; `Event::AgentRemoved`/`TaskStep` field names match between Task 1's tests and interfaces.
